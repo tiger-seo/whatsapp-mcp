@@ -21,10 +21,14 @@ tools themselves (005, 006): this feature provides the operations they call.
 
 - **Two schema histories in one file.** whatsmeow keeps its own schema version for its device store tables. The
   message tables get their own, separate version history, so that a whatsmeow upgrade and one of our migrations
-  never interfere. Both are brought up to date when the database is opened.
-- **A database newer than the binary is refused.** If the message schema is at a version the binary does not know
-  (an older binary started after a newer one), opening fails with a message naming both versions, and the file is
-  not changed. There is no downgrade path (Principle IX).
+  do not share version records. Compatibility of both is checked before either is changed; supported device
+  upgrades run before message migrations. The store is usable only after both finish. A committed earlier step
+  remains committed if a later step fails; startup as a whole is not one transaction.
+- **A database newer than the binary is refused.** If either schema is newer than the bundled implementation
+  supports, opening fails during read-only preflight, naming the schema and both versions. The main file and
+  existing sidecars are not changed, and no sidecars are created or removed. There is no downgrade path
+  (Principle IX). Migration rollback instead preserves logical schema, data and version at that step's boundary;
+  it does not promise byte-for-byte unchanged SQLite files.
 - **Chat names have a quality.** "Never gets worse" (S4) needs a rule: a name is either a *real name* (a group
   subject, a contact's full, push, first or business name, a history-sync display name) or a *fallback* derived from
   the JID (a phone number, `Group <id>`, the JID's user part). A stored name is replaced only by a non-empty name of
@@ -42,10 +46,34 @@ tools themselves (005, 006): this feature provides the operations they call.
 - **Last interaction** with a contact is the newest message that is either in the direct chat with that contact
   (sent by either side) or sent by that contact in any group.
 - **Text search ignores case in every script**, not only ASCII, so Cyrillic, Greek and accented Latin match
-  regardless of case. Wildcard characters typed by the caller (`%`, `_`) are matched literally.
+  regardless of case. Both sides are normalised to one Unicode form (NFC) first, so a composed `é` matches `e` plus
+  a combining accent. Accents still count: `ete` does not match `été`. Wildcard characters typed by the caller
+  (`%`, `_`) are matched literally.
 - **The long-running commands open the store.** `stdio`, `serve` and `pair` open (and if needed create and migrate)
-  the database right after taking the lock, so a broken or too-new database is reported at startup and the file
-  exists before features 003–006 use it. `status` and `version` do not open it in this feature.
+  the database after taking the lock and validating storage permissions and paths, so a broken, unsafe or too-new
+  database is reported at startup before features 003–006 use it. `status` and `version` do not open it in this feature.
+- **Private storage is not encryption.** Directory access and sensitive SQLite artifacts are checked on every open,
+  including Windows ACLs. The operator owns disk/backup encryption and protection against a compromised host or
+  the same unrestricted OS identity.
+- **Store limits are defensive, not tool defaults.** Direct store callers are subject to bounded inputs, batches,
+  results, context expansion, concurrency and waits. Their values are the approved storage acceptance profile
+  below, fixed in code; performance targets are not resource ceilings.
+
+## Clarifications
+
+### Session 2026-10-28
+
+- Q: Do you approve the proposed storage acceptance profile as fixed constants in code? → A: Yes, approved as
+  proposed (fixed constants, not settings); recorded in the storage acceptance profile.
+- Q: Should the spec get its own Security section, as constitution Principle X requires? → A: Yes, with
+  FR-040–FR-050 and the storage acceptance profile moved into it, plus assets and trust boundaries, each
+  finding taken up or deferred to a named feature, and abuse cases.
+- Q: Should case-insensitive search also treat different Unicode spellings of the same letter as equal? → A:
+  Ignore case and normalise both sides to NFC; accents still count (`ete` does not match `été`).
+- Q: Where should the operator guide (backup/restore, retention, decommissioning) be written? → A: A new tracked
+  `OPERATIONS.md` at the repository root with a "Storage" section; later features extend it and the README links to it.
+- Q: How should the 200 ms query target be checked? → A: A Go benchmark over a seeded 100k-message database on the
+  maintainer's machine, with results and machine recorded in `verification.md`; not a CI gate.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -68,8 +96,8 @@ Start again and check that nothing is recreated.
 **Acceptance Scenarios**:
 
 1. **Given** an empty data directory, **When** `stdio`, `serve` or `pair` starts, **Then** `<data dir>/whatsapp.db`
-   is created, holds the device store schema and the message schema at their latest versions, and is readable and
-   writable only by the current user where the OS supports that.
+   is created, holds both schemas at their latest supported versions, and the directory, database, sidecars and
+   sensitive temporary files meet FR-004 and FR-040 on that platform, including Windows ACLs.
 2. **Given** an existing, up-to-date database, **When** a long-running command starts again, **Then** it opens the
    same file without changing the schema, and all stored chats and messages are still there.
 3. **Given** a file at `<data dir>/whatsapp.db` that is not a database (for example truncated or random bytes),
@@ -77,6 +105,9 @@ Start again and check that nothing is recreated.
    usable database, and the file is left untouched.
 4. **Given** a data directory with old `store/whatsapp.db` or `store/messages.db` files from the previous bridge,
    **When** a command starts, **Then** they are ignored (D16).
+5. **Given** an existing directory, database or sidecar with unsafe ownership/access or a substituted path,
+   **When** a command starts, **Then** startup fails before database writes, names the unsafe artifact safely, and
+   does not silently repair permissions, truncate a target or replace the database.
 
 ---
 
@@ -84,14 +115,15 @@ Start again and check that nothing is recreated.
 
 A developer adds a schema change in a later feature as a new numbered migration that ships inside the binary. An
 operator upgrades the binary, and the database is brought up to date on the next start without any manual step.
-If something goes wrong, the database is left as it was.
+If a migration fails, that step is rolled back and startup stops. Earlier successful steps may remain committed;
+the operator is told which steps completed and how to follow the recovery procedure.
 
 **Why this priority**: S2 and Principle III. Without a migration history, every schema change after the first
 release would be a manual upgrade or a data loss.
 
 **Independent Test**: Open a database at each earlier version (built by applying only the first migrations) and check
-that opening it applies the rest; inject a failing migration and check the database is unchanged; open a database
-marked with a future version and check the refusal.
+that opening it applies the rest; inject failures in both schema histories and check their transaction boundaries;
+mark either schema with a future version and check read-only refusal, including the main file and sidecars.
 
 **Acceptance Scenarios**:
 
@@ -101,11 +133,16 @@ marked with a future version and check the refusal.
    applied, in order, and existing data is kept.
 3. **Given** a migration that fails part-way, **When** the database is opened, **Then** opening fails with a message
    naming the migration, and the schema and data are exactly as before that migration.
-4. **Given** a database whose message schema is at a version newer than the binary knows, **When** it is opened,
-   **Then** opening fails with a message naming the database's version and the binary's latest version, and the
-   file is not modified.
+4. **Given** a database whose message or device schema is at a version newer than the binary supports, **When** it
+   is opened, **Then** preflight fails naming the schema and both versions, neither schema is upgraded, and the main
+   file and sidecars remain unchanged as defined in FR-010.
 5. **Given** the device store's own schema is behind the whatsmeow version in the binary, **When** the database is
    opened, **Then** the device store schema is upgraded as well.
+6. **Given** a supported device upgrade that succeeds followed by a failing message migration, **When** opening
+   fails, **Then** the device upgrade and any earlier committed message migrations remain, the failing step leaves
+   no partial schema/data/version, no usable store is returned, and an offline retry follows the documented rules.
+7. **Given** a failing device upgrade, **When** opening fails, **Then** no message migration runs, the failed device
+   step meets its documented atomicity guarantee, and neither ingest nor WhatsApp connection starts.
 
 ---
 
@@ -233,11 +270,45 @@ the result; run the merge again and check nothing changes.
 
 ---
 
+### User Story 7 - Storage remains private, bounded and recoverable (Priority: P1)
+
+The operator can keep the linked-device credentials and history private, diagnose failures without exposing
+secrets, and recover a consistent database without connecting a copied device store to WhatsApp.
+
+**Why this priority**: the file contains credentials as well as conversations. Resource exhaustion, unsafe paths
+and incomplete recovery procedures must be addressed before later features depend on this store.
+
+**Independent Test**: Use synthetic device/message data, isolated temporary directories, injected failures and
+separate OS test identities. No real WhatsApp account or network connection is needed.
+
+**Acceptance Scenarios**:
+
+1. **Given** newly created and preexisting storage, including WAL/SHM and temporary files, **When** an unrelated
+   identity attempts access on Unix and Windows, **Then** it cannot read or modify sensitive artifacts. Link swaps,
+   junctions/reparse points, hard links and non-regular files are rejected according to FR-040.
+2. **Given** an input, batch, result/context request or concurrent workload at and beyond each approved bound,
+   **When** the store is called directly, **Then** boundary values work and excess work fails predictably without
+   partial writes, unbounded allocation, silent truncation or an unbounded queue. Cancellation releases resources
+   within the approved allowance, including while waiting for a database lock.
+3. **Given** SQL-like search text, an unsupported sort, malformed identifiers/media metadata or overflowing
+   numeric arguments, **When** a store operation runs, **Then** values cannot change query structure, invalid
+   arguments are rejected without mutation, and valid literal search text still matches literally.
+4. **Given** disk-low, disk-full, read-only storage or a migration failure, **When** an operation fails, **Then**
+   committed state remains usable for documented recovery, no keys/history are deleted to make space, and logs
+   contain the required safe event fields but no secret material or message bodies at any log level.
+5. **Given** a write workload stopped using the documented quiesced-backup procedure, **When** its protected backup
+   is restored to an isolated directory and opened offline, **Then** integrity checks pass and both schemas and all
+   writes committed before quiescence are preserved. The original and restored device stores never connect.
+6. **Given** the operator guide, **When** the operator reviews retention and decommissioning, **Then** indefinite
+   growth, encryption/backup responsibilities, remaining copies and secure-deletion limitations are explicit.
+
+---
+
 ### Edge Cases
 
-- **Database locked by a long write elsewhere in the process:** writers and readers wait (up to a few seconds) rather
-  than failing at once; ingest and tool queries running together never fail with "database is locked" under normal
-  load.
+- **Database locked by a long write elsewhere in the process:** admitted work waits only within the configured
+  busy/operation deadline and is cancellable. Normal-load concurrency meets SC-005; overload returns a distinct
+  bounded busy/resource-limit result rather than retrying forever.
 - **Process killed mid-write:** on the next start every committed write is there and no partial write is visible.
 - **Disk full or read-only file:** the write fails with an error naming the file and the reason; nothing is half
   written.
@@ -249,10 +320,13 @@ the result; run the merge again and check nothing changes.
   never skips or repeats a message.
 - **Search text with `%`, `_`, quotes or a backslash:** matched literally.
 - **Search text in another script or case** ("ПРИВІТ" vs "привіт", "ÉTÉ" vs "été"): matches.
+- **Search text in another Unicode form** (composed `é` vs `e` plus a combining accent, in either the search text or
+  the stored text): matches. **Search text without accents** (`ete` vs `été`): does not match.
 - **Phone number given as `+49 151 1234567`, `49-151-1234567` or `491511234567@s.whatsapp.net`:** all normalise to
   `491511234567` for phone-number filters and lookups.
-- **Page beyond the end:** an empty result, not an error.
-- **Page size of zero or negative, negative offset:** rejected; caps and defaults are applied by the tools (005, 006).
+- **Page beyond the end:** an empty result for a valid request within the approved offset/work limits.
+- **Page size of zero or negative, negative/overflowing offset or context counts:** rejected; the store also
+  enforces FR-043 limits independently of the tools (005, 006).
 - **Chat with no messages** (a history-sync conversation without stored messages): listed with no latest message;
   chats with no last activity time sort after all others by last activity.
 - **Chats without a name** sort after named chats when sorted by name.
@@ -261,6 +335,14 @@ the result; run the merge again and check nothing changes.
 - **Merging a chat into itself, or merging a chat that is not `@lid`:** rejected with an error.
 - **Device store after logout:** whatsmeow removes the device; the message tables are kept, and searching contacts
   returns no contacts until a device is paired again.
+- **Oversized history batch:** rejected atomically; the caller must submit bounded batches. Splitting policy belongs
+  to ingest (004), not an unbounded internal buffer in this feature.
+- **Ambiguous ID with too many matching chats or a result exceeding the byte budget:** return a distinct
+  resource-limit error asking for a narrower lookup, not a silently incomplete list of matching chats.
+- **Unsafe or unverifiable storage protection:** fail closed before opening for writes; an unsupported filesystem's
+  permission behavior is not a reason to continue with weaker protection.
+- **Cancellation near commit:** report success only for a confirmed commit; if the outcome cannot be established,
+  return an explicit indeterminate outcome, not a claim of rollback. A retry uses the existing idempotent identity.
 
 ## Requirements *(mandatory)*
 
@@ -274,11 +356,17 @@ the result; run the merge again and check nothing changes.
   least 5 seconds, and write transactions that take the write lock at their start, so that concurrent writers wait
   instead of failing.
 - **FR-003**: The database driver MUST be pure Go and build for all five targets with CGO disabled.
-- **FR-004**: When the file is created, it MUST be readable and writable only by the current user where the OS
-  supports that, because it holds the device's private keys.
-- **FR-005**: `stdio`, `serve` and `pair` MUST open the database right after taking the data-directory lock and MUST
-  close it during graceful shutdown. A database that cannot be opened MUST fail startup with a message naming the
-  file and the reason.
+- **FR-004**: Creation and every subsequent open MUST verify private ownership/access for the data directory,
+  database, WAL/SHM, rollback journals and any sensitive SQLite temporary files. On Unix the intended process
+  identity owns directories with mode `0700` and files with mode `0600`, with no additional ACL grants to unrelated
+  identities. On Windows a verified DACL MUST restrict access to the intended user/service identity and explicitly
+  documented required system/administrative principals; inherited broad grants MUST NOT expose the data. Go mode
+  bits alone are not Windows access control. New artifacts MUST be protected from first creation; unsafe existing
+  artifacts or unverifiable protection MUST fail startup without silent permission changes or deletion.
+- **FR-005**: `stdio`, `serve` and `pair` MUST open the database after taking the data-directory lock and validating
+  FR-004/FR-040, and MUST close it during graceful shutdown. A database that cannot be opened MUST fail
+  startup with a message naming the file and a safe reason under FR-048. No store, ingest or WhatsApp connection
+  becomes available until opening and both schema upgrades succeed.
 - **FR-006**: Files of the previous bridge (`store/*.db`) and its PostgreSQL database MUST NOT be read.
 
 **Migrations (S2)**
@@ -288,11 +376,18 @@ the result; run the merge again and check nothing changes.
 - **FR-008**: Migration 1 MUST create the complete message schema in an empty database. There is no older schema to
   detect or adopt.
 - **FR-009**: Each migration MUST be applied atomically together with its version record: on failure, the schema,
-  the data and the recorded version are as before that migration, and opening fails naming the migration.
-- **FR-010**: Opening a database whose message schema version is newer than the binary's latest MUST fail without
-  modifying the file, naming both versions.
+  the data and the recorded version are as before that migration, and opening fails naming the migration. This is
+  logical rollback of that step, not a promise that SQLite's main file or journal bytes never changed. Previously
+  committed steps remain committed as specified in FR-041.
+- **FR-010**: Before enabling write-affecting pragmas, recovering/checkpointing WAL or upgrading either schema,
+  existing storage MUST undergo read-only compatibility preflight for both schema versions, including committed
+  state in an existing WAL. Unsupported newer versions, invalid/unrecognised version metadata or corruption MUST
+  stop opening without modifying the main file or existing sidecars, or creating/deleting sidecars. Errors MUST
+  identify the schema and supported/observed versions when readable, without sensitive contents. A genuinely
+  uninitialised schema is version zero; missing version metadata for already-present tables is not a fresh schema.
 - **FR-011**: The device store's schema MUST be created or upgraded by whatsmeow's own mechanism when the database is
-  opened.
+  opened, only after both compatibility checks pass and before message migrations (FR-041). Its version support
+  and failure guarantees MUST be verified for the pinned dependency rather than inferred from message migrations.
 
 **Chats and messages (S3, S4, D18, §3.2)**
 
@@ -313,7 +408,8 @@ the result; run the merge again and check nothing changes.
   MUST NOT clear it.
 - **FR-018**: A chat's name MUST be replaced only by a non-empty name of the same or a higher quality. Real names rank
   above fallbacks.
-- **FR-019**: A batch of messages (a history-sync conversation) MUST be storable in one transaction.
+- **FR-019**: A batch of messages within FR-043 count/byte limits MUST be storable in one transaction. Invalid or
+  oversized batches MUST be rejected as a whole without storing a prefix; callers split larger conversations.
 - **FR-020**: The schema MUST support fast lookup by chat and time, by sender phone number, and by time.
 
 **Single-message lookup (S6)**
@@ -332,7 +428,8 @@ the result; run the merge again and check nothing changes.
   contact's full, push, first or business name from the device store (in that order), else the real name of the
   direct chat with the sender, else empty.
 - **FR-025**: Every list query MUST take a page size and an offset, MUST return results in a deterministic order with
-  ties broken by a unique key, and MUST reject a non-positive page size or a negative offset.
+  ties broken by a unique key, and MUST reject a non-positive page size, a negative offset, overflow or a request
+  above FR-043 bounds. A direct store caller MUST NOT bypass those bounds.
 - **FR-026**: List chats: filter by a text contained in the name or the JID; sort by last activity (newest first) or
   by name (ascending); optionally include each chat's latest message by time.
 - **FR-027**: Get chat: by JID, with its latest message; "not found" if absent.
@@ -347,11 +444,14 @@ the result; run the merge again and check nothing changes.
 - **FR-031**: List messages: filter by strictly-after time, strictly-before time, chat JID, sender phone number and
   search text, all optional and combined; newest first. The search text matches the text or the caption.
 - **FR-032**: Message context: given a message, up to N earlier and M later messages from the same chat, both oldest
-  first. The same expansion MUST be available for every hit of a message listing.
+  first. The same expansion MUST be available for every hit of a message listing, subject to per-side, aggregate
+  row and result-byte limits in FR-043; checked arithmetic MUST precede expansion/allocation.
 - **FR-033**: Last interaction: the newest message in the direct chat with a contact (from either side) or sent by
   that contact in any group, or none.
-- **FR-034**: Text matching in every query MUST ignore case across scripts (not only ASCII) and MUST treat wildcard
-  and escape characters in the caller's text literally.
+- **FR-034**: Text matching in every query MUST ignore case across scripts (not only ASCII), MUST compare the search
+  text and the stored text after normalising both to Unicode NFC, MUST NOT ignore accents or other diacritics, and
+  MUST treat wildcard and escape characters in the caller's text literally. Stored text is returned as originally
+  received; normalisation applies only to matching.
 - **FR-035**: The store MUST provide one phone-number normalisation used by every query and by storing: it accepts
   digits with an optional `+`, spaces, dashes, dots and parentheses, or a phone-number JID, and yields the digits.
   Resolving a LID to a phone number is the caller's job.
@@ -371,7 +471,15 @@ the result; run the merge again and check nothing changes.
   media features call; no other package issues database queries.
 - **FR-039**: Automated tests MUST cover, against a database in a temporary directory: the migrations (fresh,
   incremental, failing and too-new), upserts, the last activity time never going back, name quality, the LID merge,
-  every query in FR-021–FR-034, and opening a database that holds both schemas.
+  every query in FR-021–FR-034, and opening a database that holds both schemas. Tests MUST also cover FR-040–FR-050:
+  Unix permissions and Windows ACLs (new/existing files, sidecars and sensitive temporary files), separate-identity
+  access, path substitutions, combined schema failures, every approved resource boundary, cancellation/contention,
+  disk-low/full failures, parameterized/literal queries, validation fuzz cases, secret-free diagnostics at all log
+  levels, and protected offline backup/restore. Fixtures MUST be synthetic and tests MUST NOT connect to WhatsApp.
+  Cross-identity/platform checks needing special privileges MUST have a documented isolated test procedure and
+  recorded evidence before acceptance; an unavailable CI capability MUST NOT be reported as a passed test.
+
+**Storage security and recovery**: FR-040–FR-050 are listed in the Security section below.
 
 ### Key Entities
 
@@ -389,6 +497,181 @@ the result; run the merge again and check nothing changes.
 - **Contact**: a person as known to the device store (names and JID, with the LID-to-phone map). Read by the store,
   written only by whatsmeow.
 
+## Security *(constitution Principle X)*
+
+The threat model is the [security review](../../docs/security-review.md) (F01–F16). This section takes up the
+storage portions of F03, F05, F09–F13 and F16 as requirements and defers every other finding to a named later
+feature. These are requirements, not claims of implemented controls or confirmed vulnerabilities. D1–D18 remain
+unchanged.
+
+### Assets and trust boundaries
+
+**Assets**: the linked device's keys and session (whatsmeow device store); message history (text, captions,
+senders, times); contacts and the LID-to-phone mapping; media keys, hashes and download URLs; the database's
+sidecars, temporary files and backups, which carry the same data.
+
+**Trust boundaries**:
+
+- **WhatsApp content → store.** Messages, names and media metadata originate from anyone who can message the
+  account. Ingest (004) passes them in; the store treats them as untrusted data (FR-042, FR-046).
+- **Store callers → store.** Ingest and the MCP tools (005–008) call the store directly. Tool arguments come from
+  an LLM that can be misled, so the store enforces its own limits independently of the tools (FR-043, FR-044).
+- **Filesystem and other OS identities.** Other local users, link substitutions and copied files must not reach
+  the database or its sidecars (FR-004, FR-040).
+- **Logs and errors → operator and log collectors.** Diagnostics must not become a second copy of secrets or
+  conversations (FR-048).
+- **Backups and decommissioned copies.** These leave the process's control; the operator owns their protection
+  (FR-047, FR-049, FR-050).
+
+### Findings taken up or deferred
+
+| Finding | In this feature | Deferred to |
+| --- | --- | --- |
+| F01 Authorization/consent policy | — | 005–007, after the owner's decision is recorded in `docs/specification.md` |
+| F02 Remote HTTP/proxy transport | — | 009 |
+| F03 Sensitive storage protection | Database, sidecars, temporary files: FR-004, FR-040 | Media downloads 008; secret files 009/010 |
+| F04 Secret lifecycle | — | 009, 010 |
+| F05 Filesystem containment | Storage paths and objects: FR-040 | Outbox 007; download naming and cache 008 |
+| F06 Media processing / ffmpeg | — | 007, 008 |
+| F07 Webhook confidentiality/destination | — | 010 |
+| F08 Webhook replay/delivery | — | 010 |
+| F09 Resource bounds | Store inputs, results, work, waits, disk: FR-043–FR-045, storage acceptance profile | Tool requests 005/006; media 007/008; HTTP sessions 009; webhook queue 010 |
+| F10 Input validation | Store inputs and queries: FR-042, FR-046 | Tool argument schemas 005/006; URLs 009/010 |
+| F11 Security events in logs | Storage events: FR-048 | Pairing/QR 003; message-body logging 004; tool, send, HTTP and webhook events 005–010 |
+| F12 Retention and privacy | Stored history disclosure: FR-049, FR-050 | Media retention 008; webhook recipients 010; overall data-flow inventory 011 |
+| F13 Backup/migration recovery | FR-009–FR-011, FR-041, FR-047 | — |
+| F14 Incident response | — | 011 (operator runbook) |
+| F15 Supply chain | New pure-Go dependencies pass the existing CI module verification and govulncheck | Release provenance and signing 011 |
+| F16 Boundary/control ownership | Operator responsibilities for storage: FR-049 | Deployment profiles and control matrix 011, with the owner's decision |
+
+Traceability is limited to this feature: private artifacts/paths address F03/F05 (`AC-3`, `SC-28`); bounded work
+and query/input rules address F09/F10 (`SC-5`, `SI-10`); safe events address the storage portion of F11 (`AU-12`);
+recovery addresses F13 (`CP-9`, `CP-10`); retention/operator responsibilities address F12/F16 (`SI-12`, `CM-6`).
+These mappings do not establish satisfaction of a NIST baseline or close the wider review findings.
+
+The data-directory privacy and lock safety of the [001 hardening](../../docs/backlog/001-binary-skeleton-security-hardening.md)
+(`001-SEC-01`, `001-SEC-02`) are merged into `main` (#2) and provide `internal/private`; feature 002 creates its
+sensitive files through it and still owns verification of its database, sidecars and temporary artifacts. A check
+after config loading or lock acquisition does not retroactively protect earlier operations.
+
+### Security requirements
+
+- **FR-040**: Filesystem checks MUST protect the actual objects opened/created, not only a pathname checked earlier.
+  The data-directory path and database/sidecar/temp entries MUST resist replacement by unrelated identities;
+  unsupported symlinks, junctions/reparse points, hard-linked database/sidecar files, non-regular files and unsafe
+  path aliases MUST be rejected before mutation. The platform contract MUST state supported local filesystems and
+  handling of UNC/device paths and alternate data streams; unsupported forms fail closed. SQLite-created artifacts
+  MUST stay in protected locations. Rechecking names alone is not sufficient for a check/open race.
+- **FR-041**: Startup MUST check both schema histories, upgrade the device schema, then apply message migrations,
+  stopping at the first error and closing all opened resources. Each device-upgrade step and its version record
+  MUST likewise have a verified atomic failure boundary; if the pinned upstream mechanism cannot provide it,
+  resolve that incompatibility before implementation rather than promising unsupported rollback or hand-editing
+  its schema. Earlier successful steps remain committed, no whole-startup rollback is promised, and the safe error
+  MUST identify completed/failed steps. Retry MUST resume from committed versions without downgrade or automatic
+  restore. A failed or indeterminate upgrade MUST never yield a partially usable store.
+- **FR-042**: Store operations MUST validate types, required fields, syntax and approved byte/range limits before
+  issuing mutations. Chat JIDs use `s.whatsapp.net`, `g.us` or `lid`; sender JIDs use `s.whatsapp.net` or `lid`, with
+  device components normalised as in story 3. Empty/malformed identifiers and unsupported domains are rejected;
+  phone numbers follow FR-035. Message IDs are opaque values, never paths or SQL. Media types are empty or the
+  supported image/video/audio/document types; present keys/hashes, lengths, URLs and MIME metadata MUST meet the
+  approved storage contract, including nonnegative, representable file lengths. Missing optional media metadata
+  may be stored for later download validation; metadata is never fetched or executed by the store. Required message
+  times and supplied filters MUST fit the documented timestamp range; absent chat activity remains allowed, and
+  reversed filters retain the empty-result behavior above. Original message/name text is preserved, not executed
+  or silently sanitised; diagnostics encode it safely under FR-048.
+- **FR-043**: All direct store calls MUST enforce the approved storage acceptance profile: field/search byte lengths,
+  batch count/aggregate bytes, list size/offset, per-side and total expanded context, aggregate result bytes
+  (including ambiguous-ID results), active/waiting work, database connections and wait/operation deadlines. Base
+  list sizes MUST NOT exceed 200; tools still own their existing defaults and page-to-offset conversion (D9).
+  Context rows have a separate aggregate bound, not an implicit exemption. Arithmetic for offsets, sizes and
+  expansion MUST be checked before SQL/allocation. Reject oversized requests before expensive work where possible;
+  bound materialisation of existing/upstream data too, without silent truncation or partial successful results.
+  Excess work returns distinct validation/resource-limit/busy errors. No unbounded queue or retry loop is allowed.
+- **FR-044**: Every blocking operation MUST accept cancellation and use the earlier of its caller deadline and its
+  configured operation budget, including admission, SQL, lock waits and iteration. The configured busy timeout
+  remains at least 5 seconds (FR-002), but MUST NOT override an earlier deadline/cancellation. Transactions MUST
+  release resources on cancellation/failure and report confirmed versus indeterminate commit outcomes honestly.
+  Startup upgrades and maintenance have separately approved finite budgets rather than unlimited waits.
+- **FR-045**: Disk-low admission and disk-full/write errors MUST preserve committed state and fail without automatic
+  deletion of device keys, messages, journals or backups. The acceptance profile MUST define the free-space reserve,
+  measurement interval and safe write-resumption rule. Already admitted/device-store writes may still encounter
+  full storage and MUST fail safely; a free-space check is not a guarantee of available disk. Bounded WAL/checkpoint
+  behavior and long-reader handling MUST be documented and tested. No finite total-history retention is implied.
+- **FR-046**: All SQL values, including search patterns, identifiers used as values and pagination, MUST be bound
+  parameters. Any dynamic SQL identifiers, sort columns or directions MUST come only from fixed allow-lists;
+  unsupported sort values are errors. Literal wildcard escaping and Unicode matching (FR-034) remain required;
+  injection-like but valid search strings MUST NOT be rejected merely to avoid safe parameterization.
+- **FR-047**: Feature acceptance MUST include an operator guide: a "Storage" section in a tracked `OPERATIONS.md` at
+  the repository root, which later features extend and the README (011) links to. It MUST give a procedure for a
+  coherent, quiesced SQLite backup: stop the
+  owner and all connections, verify successful checkpoint/clean closure, and protect the resulting backup like
+  live credentials. Copying only the main file while writes/WAL are active is explicitly unsupported. If clean
+  checkpoint/closure cannot be verified, preserve the coherent stopped file set for documented recovery rather
+  than discarding sidecars. Restore into a protected, isolated directory, offline, and validate SQLite integrity,
+  foreign keys, both schema versions and expected data before replacing live storage. Keep the original protected
+  until validation succeeds. An online method may be documented only if actually supported and tested. The guide
+  MUST warn that directory locks do not coordinate copies and that a restored device store MUST NOT connect beside
+  its original. Live account checks/re-pairing require separate explicit permission; no new backup command is added.
+- **FR-048**: Storage startup/shutdown, permission/path refusal, schema preflight/upgrade success/failure and storage
+  resource/I/O failures MUST produce structured events with UTC time, operation/correlation, schema/version where
+  relevant, outcome and a safe reason. Logs/errors MUST exclude device/media keys, tokens, QR data, sensitive SQL
+  parameters and message/caption bodies at every level in this feature. Do not forward raw driver/upstream errors
+  that can contain these values. Paths and untrusted diagnostic fields MUST be bounded and control-character-safe.
+  Retain useful safe operation/version/error codes and stderr in stdio mode; no new audit service is required.
+- **FR-049**: The operator guide MUST disclose indefinite message/metadata retention and resulting database,
+  WAL and backup growth; data classes include device credentials, contacts/LID mappings, text/captions and media
+  keys. The operator selects protected backup destinations, retention, recovery-point/recovery-time objectives,
+  disk/backup encryption and restore rehearsals. Owner-only access is not encryption at rest, and this feature
+  neither adds SQLite encryption nor establishes a NIST/FIPS assurance claim.
+- **FR-050**: The operator guide MUST document offline decommissioning: stop the owner, inventory only this installation's database,
+  sidecars, temporary artifacts and related caches/logs/backups, and explicitly identify responsibility for copies
+  held elsewhere. Explain that unlinking files does not guarantee erasure on SSDs, snapshots or backups, and that
+  encryption/key destruction depends on the operator's storage system. Do not delete unrelated files or add
+  WhatsApp-message deletion/automatic retention as part of this feature.
+
+### Storage acceptance profile (approved 2026-10-28)
+
+Approved by the owner on 2026-10-28. The values are fixed constants in code, not configuration settings, and do
+not change tool defaults. Every value is enforced on what is actually consumed and has a boundary test and an
+excess/overflow test (SC-009). Zero or unset never means unlimited. Sizes are UTF-8 bytes; KiB/MiB/GiB are powers
+of 1024.
+
+| Parameter group | Approved values |
+| --- | --- |
+| Fields and metadata | JID ≤ 256 B; message ID ≤ 256 B; chat and contact names ≤ 1 KiB; text ≤ 256 KiB; caption ≤ 256 KiB; search text ≤ 1 KiB; URL ≤ 4 KiB; direct path ≤ 4 KiB; MIME type ≤ 255 B; original file name ≤ 1 KiB; media key, file hash and encrypted file hash exactly 32 B when present; file length 0 to 4 GiB; message times and time filters from 2000-01-01T00:00:00Z (inclusive) to 2100-01-01T00:00:00Z (exclusive). A value outside these is a validation error naming the field, with nothing stored |
+| Batch and results | Batch ≤ 1,000 messages and ≤ 16 MiB aggregate field bytes; list size 1–200; offset 0–100,000; context ≤ 20 rows per side and ≤ 2,000 context rows per call in total; ≤ 32 MiB of result bytes per call; an ambiguous-ID error lists ≤ 100 chats. Existing or upstream data that would exceed a result bound returns a resource-limit error, never a truncated or partial result |
+| Work and waits | 1 write connection and 4 read connections; ≤ 16 active and ≤ 64 waiting operations (beyond that: immediate busy error); admission wait ≤ 5 s; busy timeout 5 s; each query or write ≤ 10 s; resources released within 1 s of cancellation; startup schema upgrades ≤ 10 min in total; closing the store fits within the existing 10-second shutdown limit |
+| Disk and WAL | Free-space reserve 256 MiB, checked before each write transaction from a measurement at most 30 s old; once refused, writes resume when ≥ 512 MiB is free. The write-ahead log is truncated to ≤ 64 MiB after checkpoints; a long reader is bounded by the 10 s query deadline. Nothing (keys, messages, journals, backups) is deleted automatically |
+| Platform and recovery | Local filesystems only (NTFS on Windows; ext4 and other local POSIX filesystems; APFS). UNC/network paths, `\\?\` and `\\.\` device paths and alternate data streams are rejected. On Windows the access list is limited to the user, SYSTEM and Administrators (constitution Principle V). Upstream device-migration guarantees, backup/restore steps and the isolated cross-identity test procedure are verified and documented under FR-011, FR-041, FR-047 and FR-039 |
+
+### Abuse cases
+
+Each is a negative test with synthetic data. It shows the rejected action has no side effect: nothing is written,
+created, repaired or deleted, and a sentinel file outside the data directory stays unchanged. A platform-specific
+case is tested on each platform it covers; one that cannot be run there is recorded as not verified.
+
+1. An unrelated OS identity tries to read or write the database, WAL/SHM or a temporary file (Unix and Windows):
+   denied.
+2. The database or a sidecar is replaced by a symlink, junction/reparse point, hard link or non-regular file, also
+   between check and open: startup refuses before any write, and the link target is untouched.
+3. A preexisting data directory, database or sidecar is readable by others: startup refuses with the fix, and the
+   permissions are not changed.
+4. Search text contains SQL fragments, quotes, `%`, `_` or a backslash: it matches literally and returns only
+   literal matches.
+5. An unsupported sort value, a malformed JID or message ID, malformed media metadata, an oversized field, or an
+   overflowing offset or context count is passed: validation error, nothing stored.
+6. An oversized history batch is stored: rejected as a whole, with no prefix stored.
+7. Calls exceed 16 active and 64 waiting operations: the excess gets a busy error at once; memory and goroutines
+   stay bounded.
+8. Context expansion or results exceed the row or byte limits: resource-limit error, not a truncated result.
+9. Free space falls below the reserve, or the disk is full: writes are refused, and no key, message, journal or
+   backup is deleted.
+10. A database with a newer schema version is opened: refused, and the main file and sidecars are byte-for-byte
+    unchanged, with none created or removed.
+11. Success and failure paths run over seeded device keys, media keys, message bodies and names containing
+    terminal control sequences: none of them appear in logs or errors at any level.
+12. A restored backup is validated offline only: neither it nor the original device store connects to WhatsApp.
+
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
@@ -400,14 +683,30 @@ the result; run the merge again and check nothing changes.
   directory and no network.
 - **SC-003**: Storing the same set of chats and messages in at least 20 different random orders, with duplicates,
   produces identical chats (names and last activity times) and identical messages every time.
-- **SC-004**: On a database of 100,000 messages across 1,000 chats, every query in FR-021–FR-033 returns within 200 ms
-  on a typical developer laptop.
+- **SC-004**: On a database of 100,000 messages across 1,000 chats, every query in FR-021–FR-033 returns within 200 ms.
+  This is measured by a Go benchmark over a seeded database of that size, run on the maintainer's machine. The
+  results and the machine (CPU, memory, disk, OS) are recorded in the feature's `verification.md`. It is not a
+  CI gate.
 - **SC-005**: 16 concurrent writers making 100 writes each, while queries run, complete with 0 "database is locked"
   errors.
 - **SC-006**: Opening a database marked with a newer message-schema version fails every time, and the file is
-  byte-for-byte unchanged afterwards; a failing migration leaves the schema version and data unchanged.
+  byte-for-byte unchanged afterwards, as do existing sidecars, with none created or removed. The same holds for a
+  newer device schema and the other FR-010 preflight refusals. A failing migration instead leaves logical schema,
+  version and data unchanged at that step's boundary; combined failures obey FR-041, not whole-startup rollback.
 - **SC-007**: After the process is killed during a stream of writes, the next start opens the database without error
   and every write that had committed is present.
+- **SC-008**: Unix and Windows evidence demonstrates that unrelated identities cannot read/write any sensitive
+  artifact in FR-004. Every tested unsafe preexisting artifact/path substitution fails before mutation, including
+  WAL/SHM and temporary-file cases; unsupported/unverified platform guarantees are not counted as passed.
+- **SC-009**: For every approved profile parameter, tests cover its boundary and excess/overflow cases, record
+  elapsed time, memory/result bytes, active/waiting work and disk/WAL growth as applicable, and verify the approved
+  ceilings and cancellation allowance. SC-004/SC-005 remain normal-load targets, not substitutes for these bounds.
+- **SC-010**: An offline restore of synthetic device/message data backed up after a quiesced write workload passes
+  integrity/foreign-key checks, preserves both schema histories and every pre-quiescence committed write, and
+  satisfies private-access rules. Interrupted upgrades and disk-full failures follow the documented recovery path.
+- **SC-011**: Captured startup, success and failure diagnostics at every log level contain the required event fields
+  and none of the seeded secrets/message bodies or executable terminal control sequences. The "Storage" section of
+  `OPERATIONS.md` covers FR-047/FR-049/FR-050 and identifies the owner of encryption, backups, retention and recovery objectives.
 
 ## Assumptions
 
@@ -418,15 +717,19 @@ the result; run the merge again and check nothing changes.
   of the current device only.
 - **Who decides what is stored:** which WhatsApp messages are worth storing (text or a recognised media type), how
   names are resolved and how LIDs map to phone numbers are decided by ingest (004). The store enforces only identity,
-  ordering, name quality and integrity.
-- **Defaults and caps belong to the tools:** default page sizes, the 200 cap (D9), page numbers and RFC 3339
-  rendering are applied by 005 and 006; the store takes an explicit page size and offset and returns times as
-  time values.
+  ordering, name quality, integrity and its own validated resource/input contract. Ingest must handle store
+  rejection and bounded history batches without bypassing that contract.
+- **Tool defaults versus store bounds:** default page sizes, page numbers and RFC 3339 rendering are applied by
+  005 and 006; the store takes an explicit page size and offset and returns time values. Both layers enforce the
+  200 base-list cap (D9); the store independently enforces FR-042–FR-045, including context and result-byte limits.
 - **Generated media filenames** (S5) are built by feature 008 from the stored ID and media type; the store keeps only
   the original file name of documents.
 - **Messages are kept indefinitely.** There is no deletion other than the LID merge, and no message retention setting
-  (Principle IX).
+  (Principle IX). This is not a promise of bounded total disk use: growth, encryption, backup retention and offline
+  decommissioning responsibilities MUST be disclosed under FR-045/FR-049/FR-050.
 - **Sent messages:** whether messages sent through the tools are stored is decided by 007; the store treats them like
   any other message.
 - **Out of scope:** the WhatsApp client and pairing (003), ingest and LID resolution (004), the MCP tools (005, 006),
-  media download and its cache (008), backups and database maintenance commands.
+  media download and its cache (008), recipient/approval policy, HTTP/webhooks/converters, and backup/database
+  maintenance commands. Storage-compatible backup/restore and decommissioning guidance and offline acceptance
+  evidence are in scope; no new service, account action or maintenance command is implied.
