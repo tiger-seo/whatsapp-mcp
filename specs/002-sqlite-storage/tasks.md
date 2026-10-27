@@ -1,0 +1,848 @@
+---
+
+description: "Task list for feature 002: storage in one SQLite file with migrations"
+---
+
+# Tasks: Storage: one SQLite file and migrations
+
+**Input**: Design documents from `specs/002-sqlite-storage/`
+
+**Prerequisites**: [plan.md](plan.md), [spec.md](spec.md), [research.md](research.md), [data-model.md](data-model.md),
+[contracts/store-api.md](contracts/store-api.md), [contracts/startup-and-events.md](contracts/startup-and-events.md),
+[quickstart.md](quickstart.md)
+
+**Tests**: required. FR-039 and constitution Principles VI and X demand store tests against SQLite in a temporary
+directory, plus abuse cases as negative tests. Within each story, test tasks come first and must fail before the
+implementation tasks make them pass.
+
+**Organization**: tasks are grouped by user story. P1 stories come first in spec order (US1–US4, then US7, which
+hardens all of them); the P2 stories US5 and US6 follow.
+
+## Format: `[ID] [P?] [Story] Description`
+
+- **[P]**: can run in parallel (different files, no dependency on an unfinished task)
+- **[Story]**: the user story from spec.md (US1–US7)
+
+## Conventions for every task
+
+- All code is in the module root, the package is `internal/store` unless stated otherwise, and every build and
+  test runs with `CGO_ENABLED=0`.
+- Tests use `t.TempDir()` and synthetic data only. Never pair, connect or use a real account.
+- Code comments never cite FR-, SC-, US-, D- or F- identifiers (constitution).
+- Files are LF. After a scripted batch, `git ls-files --eol` must show no `w/crlf`.
+- Limits are the constants from T005; tests reference those constants, not literals.
+- Record evidence (command, date, result, platform) in `specs/002-sqlite-storage/verification.md` whenever a task
+  says "record".
+
+---
+
+## Phase 1: Setup (Shared Infrastructure)
+
+**Purpose**: dependencies, package skeleton, evidence file.
+
+- [ ] T001 Add the dependencies to `go.mod`/`go.sum`:
+  - `go get modernc.org/sqlite@v1.61.0 go.mau.fi/whatsmeow@v0.0.0-20261027104441-1eec1136a50b golang.org/x/text@latest`
+    (keep the resolved x/text version);
+  - check that `go.mau.fi/util` resolves to v0.11.0;
+  - `go mod verify`.
+
+  Never import `go.mau.fi/util/dbutil/litestream`. The requirements stay in `go.mod` once T005–T009 import them;
+  run `go mod tidy` after T009.
+- [ ] T002 [P] Create `internal/store/doc.go`. Its package comment states:
+  - the store owns `<data dir>/whatsapp.db`, and no other package issues database queries;
+  - `Device()` is the only shared handle;
+  - the store is safe for concurrent use.
+- [ ] T003 [P] Create `specs/002-sqlite-storage/verification.md` with sections:
+  - "Environment";
+  - "Gate results (readonly_shm, device upgrade transactions)";
+  - "Automated tests per OS";
+  - "Benchmark (SC-004)";
+  - "Cross-identity evidence (SC-008)";
+  - "Backup/restore rehearsal (SC-010)";
+  - "govulncheck and exceptions";
+  - "Limitations / not verified".
+- [ ] T004 [P] Read `.github/workflows/ci.yml`. Confirm that `go test ./...` runs with `CGO_ENABLED=0` on Linux,
+  Windows and macOS, that `govulncheck` runs, and that the five cross-builds are present. If `go test` has no
+  `-timeout`, add `-timeout 15m`, because the store tests include concurrency and crash tests.
+
+---
+
+## Phase 2: Foundational (Blocking Prerequisites)
+
+**Purpose**: the shared building blocks every story uses, and the two gates the design depends on.
+
+**⚠️ CRITICAL**: no user story work starts until this phase is complete. If T014 fails on any OS, implement the
+fallback described in it before Phase 3.
+
+- [ ] T005 [P] Create `internal/store/limits.go`: unexported constants for the approved profile, verbatim.
+  - **Field sizes:** "JID ≤ 256 B; message ID ≤ 256 B; chat and contact names ≤ 1 KiB; text ≤ 256 KiB; caption
+    ≤ 256 KiB; search text ≤ 1 KiB; URL ≤ 4 KiB; direct path ≤ 4 KiB; MIME type ≤ 255 B; original file name
+    ≤ 1 KiB".
+  - **Media and times:** media key and both hashes "exactly 32 B when present"; "file length 0 to 4 GiB"; times
+    "from 2000-01-01T00:00:00Z (inclusive) to 2100-01-01T00:00:00Z (exclusive)".
+  - **Batches and results:** "Batch ≤ 1,000 messages and ≤ 16 MiB aggregate field bytes; list size 1–200; offset
+    0–100,000; context ≤ 20 rows per side and ≤ 2,000 context rows per call in total; ≤ 32 MiB of result bytes
+    per call; an ambiguous-ID error lists ≤ 100 chats".
+  - **Work and waits:** "1 write connection and 4 read connections; ≤ 16 active and ≤ 64 waiting operations;
+    admission wait ≤ 5 s; busy timeout 5 s; each query or write ≤ 10 s; resources released within 1 s of
+    cancellation; startup schema upgrades ≤ 10 min".
+  - **Disk:** "Free-space reserve 256 MiB … measurement at most 30 s old; … writes resume when ≥ 512 MiB is free";
+    WAL limit 64 MiB.
+  - Every limit is defined in bytes, with KiB = 1024.
+- [ ] T006 [P] Create `internal/store/errors.go` with the error set of `contracts/store-api.md` § Errors:
+  - sentinels `ErrInvalid`, `ErrNotFound`, `ErrNotMedia`, `ErrResourceLimit`, `ErrBusy`, `ErrDiskLow`,
+    `ErrIndeterminate`, `ErrSchemaTooNew`, `ErrSchemaInvalid`, `ErrUnsafeStorage`, `ErrNotDatabase`, `ErrIO`;
+  - types `ValidationError{Field, Reason}`, `NotFoundError{ChatJID, ID}`, `AmbiguousIDError{ChatJIDs}`,
+    `SchemaError{Schema, Observed, Supported}`, `MigrationError{Schema, Step, Completed}`,
+    `StorageError{Artifact, Code, Fix}`, each with `Is`/`Unwrap` to its sentinel;
+  - `mapDriverError(err) error`, which converts modernc/SQLite errors to `ErrIO` with a code (`disk_full`,
+    `readonly`, `corrupt`, `busy`, `io`). It keeps the SQLite result code and never the driver's message text.
+
+  Test the `errors.Is`/`errors.As` mapping and that `Error()` never contains the inputs it was given beyond
+  identifiers, in `internal/store/errors_test.go`.
+- [ ] T007 [P] Create `internal/store/events.go`:
+  - a typed event logger over `*slog.Logger` with methods for the events in
+    `contracts/startup-and-events.md` (`open`, `refused`, `preflight`, `upgrade`, `migrate`, `ready`, `close`,
+    `ioError`, `limit`);
+  - each method accepts only typed fields: op ID, outcome, code, schema, versions, artifact, limit and the
+    `suppressed` count;
+  - `newOpID()` returns 8 random bytes as hex (crypto/rand);
+  - `safePath(s string) string` bounds a path to 512 bytes and escapes control characters and invalid UTF-8;
+  - `store.limit` is rate-limited to one event per limit per 10 s, with a suppressed counter.
+
+  Test in `internal/store/events_test.go`, with a capturing `slog.Handler` helper in
+  `internal/store/helpers_test.go`.
+- [ ] T008 [P] Create `internal/store/fold.go`:
+  - `fold(s string) string` = `cases.Fold().String(norm.NFC.String(s))`;
+  - `registerFold()` registers it once (`sync.Once`) as the deterministic SQL function `mcp_fold(text)` via
+    `sqlite.RegisterDeterministicScalarFunction`.
+
+  `internal/store/fold_test.go` adds a golden table: "ПРИВІТ"→"привіт", "ÉTÉ"→"été", composed é = decomposed é,
+  "ß"→"ss", Greek final sigma, "ete"≠fold("été"), `%`/`_` unchanged. A change in x/text that alters any row fails
+  the test.
+- [ ] T009 [P] Create `internal/store/validate.go`. It covers the rules from data-model.md § Validation and
+  research R11, using `types.ParseJID` from `go.mau.fi/whatsmeow/types`:
+  - `parseChatJID`: server `s.whatsapp.net`, `g.us` or `lid`; non-empty user; ≤ 256 B;
+  - `parseSenderJID`: server `s.whatsapp.net` or `lid`; the device part is stripped, so
+    `491511234567:12@s.whatsapp.net` becomes `491511234567@s.whatsapp.net`;
+  - `validateID`: 1–256 B, valid UTF-8, no control characters;
+  - `validateTime`: in [2000-01-01, 2100-01-01);
+  - `validateMedia`: type in `''`, `image`, `video`, `audio`, `document`; key and hashes exactly 32 B when
+    present; file length 0 to 4 GiB; URL and direct path ≤ 4 KiB; MIME type ≤ 255 B; file name ≤ 1 KiB;
+  - text and caption ≤ 256 KiB, names ≤ 1 KiB, search text ≤ 1 KiB;
+  - exported `NormalizePhone(s string) (string, error)`: accepts an optional `+`, spaces, dashes, dots and
+    parentheses around 1–20 digits, or an `@s.whatsapp.net` JID, and returns the digits.
+
+  Every rejection is a `*ValidationError` naming the field. In `internal/store/validate_test.go`:
+  - table tests at each limit and one byte over, for every rule above;
+  - "+49 151 1234567", "49-151-1234567" and "491511234567@s.whatsapp.net" → "491511234567";
+  - `FuzzNormalizePhone` and `FuzzValidateMessage` (no panic; accepted values round-trip; rejected values name a
+    field).
+- [ ] T010 [P] Add `CheckFile(path string) error` to `internal/private/private.go`, with implementations in
+  `private_unix.go` and `private_windows.go`:
+  - it opens the existing path without following links (as `OpenFile` does, read-only);
+  - it runs `checkFile` on the handle;
+  - on Unix it also requires no group or other permission bits (`perm&0o077 == 0`), with the fix
+    "run: chmod 600 <path>";
+  - on Windows the existing DACL rule applies.
+
+  `OpenFile` behaviour is unchanged. Tests in `internal/private/private_unix_test.go` and
+  `private_windows_test.go`: 0600 passes; 0640 and 0644 fail with the fix text; symlink, hard link, FIFO or
+  directory fail; on Windows an extra ACE for Everyone fails, and a junction or reparse point fails.
+- [ ] T011 [P] Create `internal/store/admit.go`: `gate.enter(ctx) (release func(), opCtx context.Context, err error)`.
+  - A semaphore of 16 active slots, with an atomic count of waiters.
+  - If 64 are already waiting, return `ErrBusy` immediately; otherwise wait at most 5 s or until the caller's
+    deadline, whichever is earlier.
+  - `opCtx` is the caller's context with a 10 s timeout.
+  - `commitOutcome(ctx, err) error` maps a commit error after cancellation, or `driver.ErrBadConn` during
+    commit, to `ErrIndeterminate`.
+
+  Tests in `internal/store/admit_test.go`:
+  - 16 run and the 17th waits;
+  - with 16 running and 64 waiting, the 81st gets `ErrBusy` at once;
+  - the wait gives up at 5 s (inject a clock) or at the caller's deadline;
+  - cancellation releases the slot within 1 s;
+  - no goroutine leaks (count before and after).
+- [ ] T012 [P] Create `internal/store/disk.go`, `disk_unix.go` (`unix.Statfs`, `Bavail*uint64(Bsize)`) and
+  `disk_windows.go` (`windows.GetDiskFreeSpaceEx`).
+  - `diskGuard{free func(dir string) (uint64, error); now func() time.Time}`: cached for at most 30 s.
+  - `check()` returns `ErrDiskLow` below 256 MiB. Once refused, writes stay refused until ≥ 512 MiB is free.
+
+  Tests in `internal/store/disk_test.go` with an injected `free` and clock: 256 MiB exactly passes and 1 byte less
+  fails; resumption needs 512 MiB; the cache is refreshed after 30 s. A smoke test calls the real `free` on
+  `t.TempDir()`.
+- [ ] T013 [P] In `cmd/whatsapp-mcp/commands.go` `startup`, add a `slog.HandlerOptions.ReplaceAttr` that renders
+  the `time` attribute in UTC, keeping the text handler and level. Test in `cmd/whatsapp-mcp/cli_test.go` that a
+  log line's time ends in `Z`.
+- [ ] T014 **Gate**: create `internal/store/gate_test.go` with `TestReadOnlyPreflightChangesNothing`.
+  1. Create a WAL database with modernc. Commit a row and keep the WAL un-checkpointed: hold a second connection
+     open, and use `PRAGMA wal_autocheckpoint=0`.
+  2. Close the writer cleanly enough that `-wal` remains (copy the three files while it is open into a fresh dir
+     to get a "crashed" set). Produce cases: main+wal+shm, main+wal without shm, and main only.
+  3. For each case, snapshot every file in the directory (name, size, mtime, SHA-256; helper `snapshotDir` in
+     `internal/store/helpers_test.go`).
+  4. Open `file:<path>?mode=ro&readonly_shm=1&_pragma=query_only(1)`, read the committed row, close, and
+     snapshot again.
+
+  Assert: the row is visible, the snapshots are identical, and no file was created or removed. Run it on
+  Windows, Linux and macOS (CI) and record the results. **If it fails on any OS:** implement the fallback from
+  research R4 in `internal/store/preflight.go` (read the main file and WAL into memory, open via modernc
+  deserialisation) and make this test pass with it.
+- [ ] T015 [P] **Gate**: create `internal/store/device_upgrade_test.go` with
+  `TestDeviceUpgradeStepsAreTransactional`:
+  - locate the pinned whatsmeow module directory with
+    `exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "go.mau.fi/whatsmeow")`, and skip with a clear message if
+    `go` is unavailable;
+  - assert that no `store/sqlstore/upgrades/*.sql` file has a `-- transaction:` header with a value other than
+    `on`;
+  - assert that the highest target version equals `len(upgrades.Table)` (16).
+
+  Record the result.
+- [ ] T016 Extend `internal/store/helpers_test.go` with:
+  - `newDataDir(t)`, a private directory via `private.MkdirAll`;
+  - `openTest(t, dir)`, which opens a store with a capturing logger;
+  - `seedDevice(t, st)`, which saves a synthetic `store.Device` with random keys and a made-up JID through
+    `st.Device().NewDevice()` + `Save`;
+  - `seedContacts(t, st, ...)`, which uses the device's `Contacts`/`LIDs` stores
+    (`PutContactName`, `PutPushName`, `PutBusinessName`, `LIDs.PutLIDMapping`). Note the upstream argument order
+    quirk from `docs/spikes.md`: `PutContactName` takes `(firstName, fullName)`;
+  - `msg(chat, id, sender, t, opts...)`, a builder for messages.
+
+**Checkpoint**: the foundation is ready and both gates are recorded. User stories can start.
+
+---
+
+## Phase 3: User Story 1 - One database file, created on first start (Priority: P1) 🎯 MVP
+
+**Goal**: `stdio`, `serve` and `pair` create or open exactly one private `<data dir>/whatsapp.db` holding both
+schemas, after the lock, and close it on shutdown.
+
+**Independent Test**: start a long-running command on an empty data directory and stop it. Exactly one database
+file (plus its sidecars) exists and holds both schemas, and all artifacts are private. A restart recreates nothing.
+
+### Tests for User Story 1 ⚠️
+
+- [ ] T017 [P] [US1] `internal/store/files_test.go`:
+  - **Path forms:** on Windows, `\\server\share\x`, `\\?\C:\x`, `\\.\C:\x` and `C:\x:stream` are rejected with
+    `ErrUnsafeStorage` before any file is touched.
+  - **Artifacts:** `whatsapp.db`, `-wal`, `-shm` or `-journal` as a symlink (and as a junction or reparse point
+    on Windows), a hard link, a directory or a FIFO (Unix) is refused before mutation, and a sentinel target
+    outside the directory is unchanged (SHA-256).
+  - **Orphans:** a `-wal`/`-shm`/`-journal` without `whatsapp.db` is refused ("orphaned journal file").
+  - **Permissions:** an existing `whatsapp.db` with mode 0644 is refused with the chmod fix and left at 0644.
+- [ ] T018 [P] [US1] `internal/store/open_test.go`:
+  - **Fresh directory:** opening creates `whatsapp.db`; `whatsmeow_version` = 16; `mcp_version` = latest; the
+    file is 0600 on Unix and passes `private.CheckFile` on all OSes; the same holds for `-wal` and `-shm` while
+    open.
+  - **Reopen:** reopening an up-to-date database changes no version and keeps seeded chats and messages.
+  - **Not a database:** a `whatsapp.db` of 4 KiB of random bytes, or a valid database truncated to 1,000 bytes,
+    gives `ErrNotDatabase`, and the file's SHA-256 is unchanged.
+  - **Old files:** `store/whatsapp.db` and `store/messages.db` files are ignored and unchanged.
+  - **Zero-length file:** an empty `whatsapp.db` (0 bytes) is treated as fresh.
+- [ ] T019 [P] [US1] `cmd/whatsapp-mcp/e2e_test.go`:
+  - `stdio` with closed stdin on an empty `--data-dir` exits 0, creates `whatsapp.db`, and logs `store.ready`;
+  - a second run logs no `store.migrate`;
+  - `pair` opens and closes the store, then still reports "not implemented" with its existing exit code;
+  - `status` and `version` never create `whatsapp.db`;
+  - a `whatsapp.db` of random bytes makes `stdio` exit 1 with "is not a usable SQLite database".
+
+### Implementation for User Story 1
+
+- [ ] T020 [US1] Create `internal/store/files.go`:
+  - `checkPathForm(dataDir)` (Windows: reject UNC, `\\?\`, `\\.\` and any `:` after the drive designator; Unix:
+    no-op);
+  - `artifactNames(db)` returns `db`, `db-wal`, `db-shm`, `db-journal`;
+  - `checkArtifacts(dir) (exists map[string]bool, err error)`: `Lstat` each name, refuse links, reparse points,
+    non-regular files, hard links and orphans, and call `private.CheckFile` on each existing one;
+  - `createDB(path)`: `private.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL)`, then close.
+
+  Errors are `*StorageError` with code `unsafe_artifact`, `orphan_sidecar`, `unsupported_path` or `not_private`,
+  plus the `private` fix text.
+- [ ] T021 [P] [US1] Create `internal/store/migrations/0001_init.sql` exactly as data-model.md specifies:
+  - `CREATE TABLE mcp_version (version INTEGER NOT NULL) STRICT`, and `INSERT INTO mcp_version VALUES (1)`.
+  - `chats` (STRICT) with:
+    - `jid TEXT PRIMARY KEY`;
+    - `phone TEXT NOT NULL DEFAULT ''`;
+    - `name TEXT NOT NULL DEFAULT ''` and `name_fold TEXT NOT NULL DEFAULT ''`;
+    - `name_quality INTEGER NOT NULL DEFAULT 0 CHECK (name_quality IN (0,1,2))`;
+    - `name_time INTEGER`;
+    - `last_message_time INTEGER`.
+  - `messages` (STRICT) with:
+    - `chat_jid TEXT NOT NULL REFERENCES chats(jid)` and `id TEXT NOT NULL`;
+    - `sender_jid TEXT NOT NULL` and `sender_phone TEXT NOT NULL DEFAULT ''`;
+    - `time INTEGER NOT NULL`;
+    - `from_me INTEGER NOT NULL CHECK (from_me IN (0,1))`;
+    - `text`, `text_fold`, `caption` and `caption_fold`, each `TEXT NOT NULL DEFAULT ''`;
+    - `media_type TEXT NOT NULL DEFAULT '' CHECK (media_type IN ('','image','video','audio','document'))`;
+    - `media_url TEXT`, `media_direct_path TEXT`;
+    - `media_key BLOB`, `file_sha256 BLOB`, `file_enc_sha256 BLOB`;
+    - `file_length INTEGER`, `mime_type TEXT`, `file_name TEXT`;
+    - `PRIMARY KEY (chat_jid, id)`.
+  - Indexes:
+    - `chats_last_activity (last_message_time DESC, jid)`;
+    - `chats_name (name_fold, jid)`;
+    - `chats_phone (phone) WHERE phone <> ''`;
+    - `messages_chat_time (chat_jid, time DESC, id DESC)`;
+    - `messages_sender_time (sender_phone, time DESC) WHERE sender_phone <> ''`;
+    - `messages_sender_jid (sender_jid, chat_jid)`;
+    - `messages_time (time DESC, chat_jid, id)`.
+- [ ] T022 [US1] Create `internal/store/migrate.go`:
+  - `type migration struct{ version int; name string; sql string }`;
+  - `loadMigrations(fs.FS)` parses `NNNN_<name>.sql` from `//go:embed migrations/*.sql`, requiring a contiguous
+    1..N with no gaps;
+  - `migrate(ctx, writer *sql.DB, current int, list []migration, ev *events) (completed int, err error)`: each
+    pending migration plus `UPDATE mcp_version SET version = ?` (migration 1 inserts it) runs in one transaction
+    on the writer (`_txlock=immediate`);
+  - logs `store.migrate` per step;
+  - on failure returns `*MigrationError{Schema: "messages", Step: "NNNN (<name>)", Completed: ...}`.
+- [ ] T023 [US1] Create `internal/store/preflight.go`:
+  - `checkHeader(path)` reads 100 bytes and requires `"SQLite format 3\x00"` and a power-of-two page size from 512
+    to 65536 (stored value 1 = 65536); otherwise `ErrNotDatabase`;
+  - `preflight(ctx, path) (pf preflightResult, err error)` opens `file:<path>?mode=ro&readonly_shm=1&_pragma=query_only(1)`,
+    or uses the T014 fallback;
+  - it reads `sqlite_master` for the presence of `mcp_version`, `chats`, `messages`, `whatsmeow_version` and any
+    other `whatsmeow_%` table;
+  - it reads `SELECT count(*), max(version) FROM mcp_version` and `SELECT version, compat FROM whatsmeow_version`;
+  - it returns `fresh` when none of these tables exists.
+
+  Refusal rules (US2 tests them in depth):
+  - messages version > latest bundled → `ErrSchemaTooNew`;
+  - device `compat` (or `version` when `compat` is NULL or 0) > `len(upgrades.Table)` → `ErrSchemaTooNew`;
+  - `mcp_version` row count ≠ 1 → `ErrSchemaInvalid`;
+  - `chats`/`messages` without `mcp_version`, or `whatsmeow_*` tables without `whatsmeow_version` →
+    `ErrSchemaInvalid`.
+- [ ] T024 [US1] Create `internal/store/store.go` with `type Store`, `Open`, `Close` and `Device`, following
+  contracts/store-api.md § Lifecycle in this order:
+  1. `checkPathForm`;
+  2. `checkArtifacts`;
+  3. `createDB` if missing, or `checkHeader` + `preflight` if non-empty;
+  4. open the writer `*sql.DB` with the DSN from research R1, verbatim:
+     `file:<path>?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)&_pragma=journal_size_limit(67108864)&_txlock=immediate`,
+     with `SetMaxOpenConns(1)`;
+  5. `PingContext`, then re-run `checkArtifacts` (now `-wal`/`-shm` exist);
+  6. the device upgrade: `dbutil.NewWithDB(writer, "sqlite")`, set `VersionTable="whatsmeow_version"`,
+     `UpgradeTable=upgrades.Table`, `ReadOnlyDB=reader`, then
+     `sqlstore.NewWithWrappedDB(wrapped, waLog.Noop).Upgrade(ctx)`, logging `store.upgrade`; a failure is a
+     `*MigrationError{Schema: "device"}`;
+  7. `migrate`;
+  8. open the reader with the same DSN plus `&_pragma=query_only(1)` and `SetMaxOpenConns(4)`;
+  9. `registerFold()`; log `store.ready`.
+
+  On any error, close everything opened and return the mapped error. `Close` waits for the admission gate to
+  drain (bounded by ctx), closes the reader then the writer, logs `store.close` and is idempotent. Log
+  `store.open`/`store.refused`/`store.preflight` at the matching points.
+- [ ] T025 [US1] Wire the store into `cmd/whatsapp-mcp/commands.go`:
+  - **`runUntilStopped`:** after `acquireLock`, call `store.Open(ctx, cfg.DataDir, logger)` with a 10-minute
+    timeout derived from `lc.ctx`. On error, print `whatsapp-mcp: ` + the error to stderr, release the lock and
+    exit 1. On success, `lc.addStop("store", st.Close)`, which is registered after the lock so it runs before the
+    lock is released. Pass `st` to `body` (change its signature to
+    `func(context.Context, *lifecycle, *slog.Logger, *store.Store)` and update `runServe`/`runStdio`).
+  - **`runPair`:** open the store after the lock, `defer st.Close(ctx)`, then keep the current not-implemented
+    result.
+  - **Unchanged:** `status` and `version`.
+
+**Checkpoint**: US1 works on its own. Run T017–T019 on all three OSes in CI.
+
+---
+
+## Phase 4: User Story 2 - The schema evolves safely (Priority: P1)
+
+**Goal**: missing migrations are applied in order, failures stop at a clean step boundary, newer databases are
+refused without changing any file, and the device schema is upgraded first.
+
+**Independent Test**: databases at each earlier version upgrade to the latest; injected failures in each
+history roll back their step only; a too-new schema in either history is refused with a byte-identical
+directory.
+
+### Tests for User Story 2 ⚠️
+
+- [ ] T026 [P] [US2] `internal/store/migrate_test.go`. Use an injected list of three test migrations
+  (`0001` = real init, `0002` adds a test table, `0003` adds a column):
+  - fresh → version 3, in order;
+  - a database at version 1 or 2 applies only the rest and keeps seeded rows;
+  - a failing `0003` (invalid SQL after a valid statement) leaves version 2, no partial table or column, and
+    seeded data intact; the error is a `*MigrationError` naming `0003` and "completed: messages 2";
+  - a retry with a fixed `0003` resumes from 2;
+  - `loadMigrations` rejects gaps and duplicates.
+- [ ] T027 [P] [US2] `internal/store/preflight_test.go` (SC-006). For each refusal, snapshot the directory with
+  `snapshotDir` before and after `Open` and require identical snapshots with no file created or removed. Cover
+  each case with and without an un-checkpointed WAL holding committed data:
+  - `mcp_version` = latest+1 (`ErrSchemaTooNew`, error text names "message schema", 1+latest and latest);
+  - `whatsmeow_version` compat = 17 (`ErrSchemaTooNew`, "device schema");
+  - `mcp_version` with 0 rows and with 2 rows (`ErrSchemaInvalid`);
+  - `chats` present without `mcp_version`;
+  - `whatsmeow_device` present without `whatsmeow_version`.
+- [ ] T028 [P] [US2] `internal/store/device_test.go`:
+  - **Upgrade:** create a store, close it, simulate device v15 by
+    `ALTER TABLE whatsmeow_chat_settings DROP COLUMN wasa_root_secret_id` and
+    `UPDATE whatsmeow_version SET version=15`, then reopen: version 16, the column is back, seeded device data is
+    kept.
+  - **Failing device step:** set version 15 *without* dropping the column, so the v16 `ALTER` fails, and reopen.
+    `Open` fails with `*MigrationError{Schema: "device"}`; `whatsmeow_version` is still 15; no message migration
+    ran (`mcp_version` unchanged); no store is returned.
+  - **Device succeeds, message migration fails:** device v15 → 16 is committed; the injected failing message
+    migration leaves messages at its previous version; the error lists "completed: device 16, messages N".
+- [ ] T029 [P] [US2] `cmd/whatsapp-mcp/e2e_test.go`:
+  - a too-new message schema makes `stdio` exit 1 with the schema and both versions in stderr;
+  - the lock is released afterwards (a second run gets the same error, not "lock held").
+
+### Implementation for User Story 2
+
+- [ ] T030 [US2] Complete the refusal and error paths in `internal/store/preflight.go` and
+  `internal/store/store.go` until T026–T029 pass:
+  - `*SchemaError` carries `Schema` (`messages`/`device`), `Observed` and `Supported`;
+  - `*MigrationError.Completed` reports both histories' versions after the failure;
+  - `store.refused` and `store.upgrade`/`store.migrate` events carry `outcome` `refused` or `failed` and stable
+    codes `schema_too_new`, `schema_invalid`, `migration_failed`, `device_upgrade_failed`.
+- [ ] T031 [US2] Make `Open` take a migration list through an unexported option, used only by tests, so T026/T028
+  inject migrations without changing the embedded files. Production `Open` uses `loadMigrations(embedded)`.
+
+**Checkpoint**: US1 and US2 pass on their own. Record the SC-006 results per OS.
+
+---
+
+## Phase 5: User Story 3 - Ingest stores chats and messages correctly in any order (Priority: P1)
+
+**Goal**: `StoreMessages` and `UpdateChats` give the same chats and messages whatever the order of arrival, with
+duplicates, under concurrency and crashes.
+
+**Independent Test**: the same fixed set stored in 20 random orders, with duplicates, gives identical tables
+every time.
+
+### Tests for User Story 3 ⚠️
+
+- [ ] T032 [P] [US3] `internal/store/messages_test.go` (the scenarios of US3):
+  1. re-storing `(C, X)` with new text replaces it, and there is still exactly one row;
+  2. the same `X` in two chats gives two rows;
+  3. a 09:00 message after a 12:00 one keeps last activity at 12:00;
+  4. a 12:00 message after 09:00 moves it to 12:00;
+  5. a message for an unknown chat creates the chat with that time, atomically (inject a failure after the chat
+     insert; neither row remains);
+  6. a stored URL and direct path survive a re-store whose copy lacks them, while the other fields come from the
+     new copy. This holds for each of the eight media fields: "an empty media metadata field … MUST NOT overwrite
+     a stored non-empty one";
+  7. a caption is stored in its own field;
+  8. sender `491511234567:12@s.whatsapp.net` is stored as `491511234567@s.whatsapp.net` with phone
+     `491511234567`;
+  9. an unresolved LID sender keeps its full LID JID and an empty phone.
+
+  Also: a batch of 1,000 messages is accepted, while 1,001 messages or one byte over 16 MiB is rejected with
+  nothing stored; one invalid message in a batch rejects the whole batch.
+- [ ] T033 [P] [US3] `internal/store/chats_test.go`:
+  - **Fallback vs real:** real "Alice" vs an offered fallback "491511234567" → stays "Alice"; fallback →
+    replaced by real.
+  - **Time:** real at 10:00 then a different real at 11:00 → new name; then one at 09:00 → unchanged; equal
+    quality and time → the byte-wise greater name, in both orders.
+  - **Empty and bad offers:** an empty name never replaces; a name without a time, or with a time outside the
+    range, is a `*ValidationError`.
+  - **Activity:** a zero `LastActivity` never clears; activity only moves forward.
+  - **Ordering edge cases:** chats with no messages list with no latest message; chats with no activity sort
+    last.
+- [ ] T034 [P] [US3] `internal/store/order_test.go` (SC-003): a fixed fixture of 50 chats and 2,000 messages
+  with duplicates (same and different content), name offers of both qualities and several times, and history
+  chats without messages. Store it in 20 seeded random orders and permutations of batch splits, each into a fresh
+  store. Dump `chats` and `messages` ordered by key; all 20 dumps are identical. Re-store duplicates use
+  identical content so that the outcome does not depend on order; the "different content" cases are covered by
+  T032.
+- [ ] T035 [P] [US3] `internal/store/concurrency_test.go` (SC-005): 16 goroutines × 100 `StoreMessage` calls
+  while 4 goroutines run `ListMessages` and `ListChats` in a loop. Expect 0 errors (in particular none matching
+  "database is locked"), and all 1,600 messages present.
+- [ ] T036 [P] [US3] `internal/store/crash_test.go` (SC-007). The test re-executes its own binary with
+  `GO_STORE_CRASH_CHILD=1`. The child opens the store and writes messages in a loop, printing each committed ID to
+  stdout after the call returns. The parent kills it with `Process.Kill` after about 300 commits, reopens the
+  store, and asserts that every printed ID is present and that `PRAGMA integrity_check` returns `ok`.
+
+### Implementation for User Story 3
+
+- [ ] T037 [US3] Create `internal/store/chats.go`:
+  - **Types:** `NameQuality` (`NameNone`, `NameFallback`, `NameReal`) and `ChatUpdate`.
+  - **`UpdateChats`:** validates every update first (`*ValidationError`). Then, under admission and the disk
+    guard, it runs one writer transaction that upserts each chat:
+    - `phone` comes from the JID (digits for `s.whatsapp.net`, else `''`);
+    - the name is set only when
+      `(excluded.name_quality, excluded.name_time, excluded.name) > (name_quality, coalesce(name_time, -1), name)`,
+      together with `name_fold = fold(name)`;
+    - `last_message_time = max(coalesce(last_message_time, excluded), excluded)` only when offered.
+  - **Times:** stored as Unix ms.
+  - **Single form:** `UpdateChat` wraps the batch.
+- [ ] T038 [US3] Create `internal/store/messages.go`:
+  - **Types:** `Message` and `MediaMeta` (contract).
+  - **`StoreMessages`:** validates all messages and checks the batch limits (≤ 1,000 messages, ≤ 16 MiB of
+    aggregate field bytes) before any SQL. Then, under admission and the disk guard, it runs one transaction:
+    - insert the chat with `ON CONFLICT DO NOTHING` (with `phone`), then
+      `UPDATE chats SET last_message_time = max(...)`;
+    - upsert the message on `(chat_jid, id)`; every column takes `excluded`, except each media column, which
+      takes `coalesce(nullif(excluded.col, ''), col)` (blobs: `CASE WHEN length(excluded.col) > 0 ...`);
+    - compute `text_fold`/`caption_fold` with `fold` and `sender_phone` from the parsed sender in Go.
+  - **Commit:** reported through `commitOutcome`.
+  - **Single form:** `StoreMessage` wraps the batch.
+
+**Checkpoint**: US3 passes on its own (T032–T036).
+
+---
+
+## Phase 6: User Story 4 - The tools find chats, contacts and messages (Priority: P1)
+
+**Goal**: every query that tools 005/006 need, correct and deterministic, fast on 100,000 messages.
+
+**Independent Test**: seed known chats, contacts and messages, and compare every query's result against
+expected rows.
+
+### Tests for User Story 4 ⚠️
+
+- [ ] T039 [P] [US4] `internal/store/queries_chats_test.go`:
+  - **`ListChats`:**
+    - matches the text in the name or the JID, case- and NFC-insensitively ("ПРИВІТ" finds "привіт");
+    - sorts by activity (newest first, no activity last, ties by JID) or by name (ascending, unnamed last);
+    - pages with limit and offset; `withLatest` returns the real latest message by time, or nil.
+  - **`GetChat`:** with its latest message, or `*NotFoundError`.
+  - **`DirectChatByPhone`:** an exact phone match only (a partial number does not match), or not found.
+  - **`ContactChats`:** a contact with a direct chat who wrote in two groups gives three chats, each once,
+    newest first, each with its latest message.
+  - **Paging rules:** limit 0, limit 201, offset -1 and offset 100,001 are `*ValidationError`; a page beyond the
+    end is empty.
+- [ ] T040 [P] [US4] `internal/store/queries_messages_test.go`:
+  - **Filters:** `ListMessages` with every combination of strict after, strict before, chat, sender phone
+    (normalised from "+49 151 1234567") and query, newest first, ties by `(chat_jid, id)` desc. Paging never
+    skips or repeats when times are equal (iterate all pages and compare with the full set).
+  - **Search:** matches text or caption; `%`, `_`, quotes and backslash match literally; "ÉTÉ" finds "été";
+    composed and decomposed é match each other; "ete" does not find "été".
+  - **After/before:** `after > before` gives empty, not an error.
+  - **Context:** N before and M after (0–20), both oldest first, from the same chat only; `MessageContext` by
+    `(chat_jid, id)`.
+  - **Last interaction:** `LastInteraction` returns the newest message of the direct chat (either side) or one
+    sent by the contact in a group, or nil.
+  - **Fields:** every `MessageView` field is filled (scenario 9). The sender name follows the order full → push →
+    first → business (device store), else the real name of the direct chat with the sender, else ''. It is '' for
+    from-me messages.
+- [ ] T041 [P] [US4] `internal/store/contacts_test.go`, seeded through the device store (T016):
+  - `SearchContacts` matches full, push, first and business name, and phone, case- and NFC-insensitively;
+  - groups are excluded;
+  - a person under both a LID and a phone is returned once, "matched if either entry matches", with the
+    phone-number JID and number;
+  - the name is taken from the phone-number entry in the order full, push, first, business, and if that entry has
+    none, from the LID entry's name in the same order;
+  - a LID without a mapping is returned with its LID JID and an empty phone;
+  - no device (never paired) gives an empty result, not an error.
+
+### Implementation for User Story 4
+
+- [ ] T042 [US4] Create `internal/store/queries.go` with the shared parts:
+  - `MessageView`, `ChatView`, `Page`, `ChatSort`, `MessageFilter`, `Context` and `Hit` (contract);
+  - `validatePage` (limit 1–200, offset 0–100,000) and `validateContext` (0–20 per side);
+  - the shared message SELECT, joining chat name and sender name. The sender name is a correlated subquery on
+    `whatsmeow_contacts` for the current device (`our_jid` = the single `whatsmeow_device.jid`), using
+    `coalesce(nullif(full_name,''), nullif(push_name,''), nullif(first_name,''), nullif(business_name,''))`, then
+    the direct chat's real name (`name_quality = 2`), else '';
+  - a `resultBudget` that adds each row's byte size and returns `ErrResourceLimit` above 32 MiB.
+
+  All SQL values are bound parameters. The sort columns and directions come from a fixed `map[ChatSort]string`.
+- [ ] T043 [US4] Implement `ListChats`, `GetChat`, `DirectChatByPhone` and `ContactChats` in
+  `internal/store/queries.go`, on the reader pool under admission:
+  - search uses `instr(name_fold, ?) > 0 OR instr(jid, ?) > 0` with the folded query;
+  - the latest message uses the `messages_chat_time` index (`ORDER BY time DESC, id DESC LIMIT 1`);
+  - `ContactChats` is the direct chat with phone `p` plus the distinct `chat_jid`s of `g.us` chats where
+    `sender_phone = p`, ordered by `last_message_time DESC, jid`.
+- [ ] T044 [US4] Implement `ListMessages`, `MessageContext` and `LastInteraction` in `internal/store/queries.go`:
+  - filters are built from fixed SQL fragments with bound values;
+  - search is `(instr(text_fold, ?) > 0 OR instr(caption_fold, ?) > 0)`;
+  - order is `time DESC, chat_jid DESC, id DESC`;
+  - context: per hit, two queries on `messages_chat_time` (before: `time < t OR (time = t AND id < id)`, DESC then
+    reversed; after: the mirror, ASC);
+  - before any context query runs, check that `hits × (before+after) ≤ 2,000` with checked arithmetic, else
+    `ErrResourceLimit`.
+- [ ] T045 [US4] Create `internal/store/contacts.go` with `SearchContacts`. The rules are in data-model.md
+  § Derived values "Contact identity". One query over the current device's `whatsmeow_contacts`, left-joined
+  with `whatsmeow_lid_map`:
+  - person key = `coalesce(pn_jid, their_jid)`;
+  - filter `instr(mcp_fold(<name col>), ?) > 0` over the four names of both entries, or `instr(phone, digits)`;
+  - exclude `@g.us`;
+  - group by person key, choosing the name per the rule;
+  - order by name fold, then key; limit and offset; result budget.
+
+  If the device has no row, return an empty result.
+- [ ] T046 [P] [US4] Create `internal/store/bench_test.go`: `BenchmarkQueries` seeds 100,000 messages across
+  1,000 chats once (through `StoreMessages` in batches of 1,000, cached per process in a temp dir). It has
+  sub-benchmarks for each of: `GetMessage`, `GetMessageByID`, `MediaInfo`, `ListChats` (both sorts, with search),
+  `GetChat`, `DirectChatByPhone`, `ContactChats`, `SearchContacts`, `ListMessages` (no filter, chat, sender,
+  search, with context 5/5), `MessageContext` and `LastInteraction`.
+
+**Checkpoint**: US4 passes on its own (T039–T041). Run the benchmark locally (it is not a CI gate).
+
+---
+
+## Phase 7: User Story 7 - Storage remains private, bounded and recoverable (Priority: P1)
+
+**Goal**: the abuse cases, limits, diagnostics, recovery and operator guide that make the store safe across all
+stories.
+
+**Independent Test**: isolated temporary directories, injected failures and synthetic data show every abuse case
+has no side effect. The recorded cross-identity and restore evidence passes.
+
+### Tests for User Story 7 ⚠️
+
+- [ ] T047 [P] [US7] `internal/store/limits_test.go` (SC-009). For every constant in `limits.go`, a test at the
+  boundary (accepted) and one beyond it (rejected, with no row written: compare table dumps), recording elapsed
+  time and result bytes with `testing.B`-style measurements in the log. Cover:
+  - every field size;
+  - batch count and bytes;
+  - list size and offset;
+  - context per side, and aggregate context rows: 200 hits × 10/10 = 4,000 is rejected, while 100 hits × 10/10 is
+    accepted;
+  - result bytes: seed rows near 256 KiB each so that one page exceeds 32 MiB → `ErrResourceLimit`, never a
+    shorter list;
+  - ambiguous-ID chats (101 chats → `ErrResourceLimit`);
+  - overflowing offsets and context (`math.MaxInt`).
+- [ ] T048 [P] [US7] `internal/store/admission_test.go`, with the real store:
+  - 16 blocking operations (hold the writer with an open `BEGIN IMMEDIATE` on a separate raw connection) plus 64
+    waiting, then one more gets `ErrBusy` at once;
+  - waiting ends at 5 s;
+  - a caller deadline of 200 ms ends a lock wait at about 200 ms, not at the 5 s busy timeout;
+  - cancellation frees the slot within 1 s;
+  - a commit cancelled at the commit point (test hook in `admit.go`) returns `ErrIndeterminate`, and a retry with
+    the same `(chat_jid, id)` leaves one row.
+- [ ] T049 [P] [US7] `internal/store/disk_store_test.go`:
+  - **Low disk:** an injected free-space function below 256 MiB makes `StoreMessages` and `UpdateChats` fail
+    with `ErrDiskLow`, with no row written and no file deleted. Recovery needs ≥ 512 MiB.
+  - **Disk full:** simulated with `PRAGMA max_page_count` on the writer connection (test hook). A write fails
+    with `ErrIO` code `disk_full`; earlier commits are intact; `-wal` and the main file still exist; the store
+    keeps working after the limit is raised.
+  - **Read-only database:** on Unix, make the file read-only by `chmod 0400` after close; on Windows, set the
+    read-only attribute. Then `Open` fails with a safe `ErrIO`/`readonly` reason, and nothing is deleted.
+- [ ] T050 [P] [US7] `internal/store/abuse_test.go`: one subtest per abuse case 1–12 in spec.md § Security → Abuse
+  cases that is automatable, each asserting "no side effect" (table dumps unchanged, sentinel file outside the
+  data directory unchanged):
+  - case 4: search text `x' OR '1'='1`, `%`, `_`, `\` matches literally;
+  - case 5: unsupported sort value `ChatSort(99)`, malformed JIDs (`@g.us`, `x@evil.example`, `\x00@lid`), bad
+    media key length, `-1` file length;
+  - cases 6–10: use T047–T049 and T027 by reference, plus a small direct assertion each;
+  - case 11: see T051;
+  - case 12: documented in T054;
+  - cases 1–3 are in T017 plus T056 (manual).
+- [ ] T051 [P] [US7] `internal/store/logsafety_test.go` (SC-011). At level Debug, run with a capturing handler:
+  - every success path: open, upgrade, migrate, store, query, merge, close;
+  - every failure path: each refusal, a migration failure, disk-low, disk-full, busy, validation, corruption
+    (flip bytes in a page of a copy, then query).
+
+  Seed secret markers: a 32-byte media key, a device key read from `whatsmeow_device`, the message text
+  "SECRET-BODY-7f3a", a caption, a name containing `\x1b[31m` and `\x07`, and a search string. Assert:
+  - none of the markers appears in any record or error string, whether raw, hex or base64;
+  - every event has `time` in UTC, `event`, `op_id`, `outcome` and `code`;
+  - paths are ≤ 512 bytes with control characters escaped.
+
+### Implementation for User Story 7
+
+- [ ] T052 [US7] Apply the cross-cutting enforcement in `internal/store/queries.go`, `messages.go`, `chats.go`,
+  `contacts.go` and `merge.go` until T047–T051 pass:
+  - every public method goes through `gate.enter`, writes go through `diskGuard.check`, and errors go through
+    `mapDriverError`;
+  - `store.limit` and `store.io_error` events are emitted;
+  - checked arithmetic is used for offsets, sizes and context;
+  - a test-only hook (unexported `testHooks` struct) supports commit cancellation, `max_page_count` and the
+    injected free-space function.
+- [ ] T053 [US7] Create `OPERATIONS.md` at the repository root with a "Storage" section and these subsections:
+  - **Files and privacy:** what `whatsapp.db`, `-wal` and `-shm` hold; the data classes (device credentials,
+    contacts and LID mappings, text and captions, media keys); owner-only access is not encryption at rest;
+    supported local filesystems and rejected path forms; network filesystems are unsupported.
+  - **Growth and retention:** messages are kept indefinitely; the database, WAL and backups grow; the 256 MiB
+    reserve and what happens when it is reached.
+  - **Backup:** the quiesced procedure from FR-047:
+    1. stop the process and every connection;
+    2. confirm a clean close (no `-wal`, or a zero-length `-wal`);
+    3. otherwise copy the whole stopped file set together;
+    4. copy into a private destination;
+    5. protect the backup like live credentials.
+
+    Copying only the main file during writes is unsupported. Directory locks do not coordinate copies.
+  - **Restore:** into a new private directory, offline, checked with any SQLite shell (for example `sqlite3`):
+    `PRAGMA integrity_check`,
+    `PRAGMA foreign_key_check`, `SELECT * FROM mcp_version`, `SELECT version, compat FROM whatsmeow_version`.
+    Replace live storage only after the checks pass, and keep the original until then. A restored device store
+    must never connect beside its original; live account checks or re-pairing need separate permission.
+  - **Recovery after a failed upgrade:** read the error's completed steps; restart with the same binary to retry;
+    there is no downgrade; restore from backup if needed.
+  - **Decommissioning (FR-050):** stop; inventory only this installation's database, sidecars, logs and backups;
+    unlinking does not guarantee erasure on SSDs, snapshots or backups; key destruction depends on the operator's
+    storage.
+  - **Operator responsibilities:** encryption, backup destinations and retention, recovery-point and
+    recovery-time objectives, restore rehearsals.
+
+  Add a one-line link to `OPERATIONS.md` in `README.md`.
+- [ ] T054 [US7] `internal/store/restore_test.go` (SC-010):
+  1. Seed a device and 5,000 messages, close cleanly (quiesce).
+  2. Copy the file set into a new directory made by `private.MkdirAll`.
+  3. Open the copy offline with a raw read-only connection and run `integrity_check` = `ok`, `foreign_key_check` =
+     no rows, both versions, and the counts.
+  4. Open it with `store.Open` and compare the dumps with the original.
+
+  Also follow the `OPERATIONS.md` procedure manually once on Windows and once on Linux, and record the result.
+- [ ] T055 [P] [US7] Create `internal/store/testdata/cmd/bumpversion/main.go` (sets `mcp_version` or
+  `whatsmeow_version.compat` in a given file, for quickstart step 4) and
+  `internal/store/testdata/cmd/seed/main.go` (writes N synthetic messages through `store.Open`). Both refuse to
+  run on a path outside a directory whose name starts with the system temp directory, unless `-force` is given.
+- [ ] T056 [US7] Manual cross-identity check (SC-008), following quickstart step 6 on Windows (`runas` with a
+  second local account) and on Linux (a second user). Record the commands, date, the denied output and the
+  `icacls` and `ls -l` listings in `verification.md`. Mark macOS "not verified" unless it was run.
+
+**Checkpoint**: all P1 stories are complete and hardened.
+
+---
+
+## Phase 8: User Story 5 - A single message is found by chat and ID (Priority: P2)
+
+**Goal**: exact lookups by `(chat_jid, id)`, lookups by ID alone with an ambiguity error, and media metadata.
+
+**Independent Test**: the same ID stored in two chats and another ID in one chat, each looked up both ways.
+
+### Tests for User Story 5 ⚠️
+
+- [ ] T057 [P] [US5] `internal/store/lookup_test.go`:
+  - `(C, X)` is found; a missing pair gives `*NotFoundError` naming the chat and the ID;
+  - an ID in exactly one chat is found by ID alone; none gives not found;
+  - an ID in C1 and C2 gives `*AmbiguousIDError` listing C1 and C2 sorted;
+  - 101 chats gives `ErrResourceLimit`;
+  - `MediaInfo` on a media message returns all eight metadata fields; on a text message it returns
+    `ErrNotMedia`.
+
+### Implementation for User Story 5
+
+- [ ] T058 [US5] Implement `GetMessage`, `GetMessageByID` and `MediaInfo` in `internal/store/queries.go`:
+  - `GetMessageByID` selects `chat_jid` for `id = ?` with `LIMIT 102` to detect more than 101 matches without an
+    unbounded read;
+  - `MediaInfo` returns `MediaMeta` with nil length when NULL, and `ErrNotMedia` when `media_type = ''`.
+
+**Checkpoint**: US5 passes on its own.
+
+---
+
+## Phase 9: User Story 6 - Merge a LID chat into the phone-number chat (Priority: P2)
+
+**Goal**: `MergeLIDChat` moves a `@lid` chat into its phone-number chat atomically and idempotently.
+
+**Independent Test**: seed a LID chat and a phone chat with overlapping and distinct messages, merge, check the
+result, then merge again and check nothing changes.
+
+### Tests for User Story 6 ⚠️
+
+- [ ] T059 [P] [US6] `internal/store/merge_test.go`:
+  1. L and P: after the merge P holds all messages, L is gone, P's activity is the later one, and P's name is the
+     better "by the name rule (higher quality, then newer name time, then the byte-wise greater name)";
+  2. only L: P is created with L's name, time and messages;
+  3. both hold X: P keeps its own copy and L's is dropped;
+  4. L's messages whose sender is the LID get sender = phone JID and the phone filled in;
+  5. an injected failure part-way (test hook) leaves both chats exactly as before (dump compare);
+  6. a second merge is a no-op without error.
+
+  Plus:
+  - merging a chat into itself, a non-`@lid` source or a non-`@s.whatsapp.net` target gives `*ValidationError`;
+  - a merge under disk-low gives `ErrDiskLow` with nothing changed.
+
+### Implementation for User Story 6
+
+- [ ] T060 [US6] Create `internal/store/merge.go` with `MergeLIDChat(ctx, lidJID, phoneJID)`: validate, then one
+  writer transaction under admission and the disk guard:
+  1. read L (return nil if absent);
+  2. upsert P with the better name per FR-018 and `max` activity, with `phone` from the JID;
+  3. `INSERT INTO messages (...) SELECT ... FROM messages WHERE chat_jid = L ON CONFLICT (chat_jid, id) DO NOTHING`,
+     with `chat_jid = P` and, when `sender_jid = L`, `sender_jid = P, sender_phone = <digits>`;
+  4. `DELETE FROM messages WHERE chat_jid = L`;
+  5. `DELETE FROM chats WHERE jid = L`.
+
+  Report through `commitOutcome`.
+
+**Checkpoint**: all stories are complete.
+
+---
+
+## Phase 10: Polish & Cross-Cutting Concerns
+
+- [ ] T061 Run `go mod tidy` and `go mod verify`. Confirm no `mattn/go-sqlite3` or `litestream` in `go list -m all`.
+  Run `CGO_ENABLED=0` builds for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64, and
+  record the binary sizes.
+- [ ] T062 Run `gofmt -l .` (empty), `go vet ./...`, `go test ./...` (read each exit code directly, not through a
+  pipe) and `govulncheck ./...`. Record the results. Record any unreachable finding as an exception in
+  `verification.md` with owner, compensating controls and expiry; a reachable one blocks the feature.
+- [ ] T063 Run every step of `specs/002-sqlite-storage/quickstart.md`, including the local benchmark (step 5,
+  SC-004: record each `ns/op` and the machine) and the 60 s fuzz runs (step 2). Record the results in
+  `verification.md`.
+- [ ] T064 [P] Update `AGENTS.md` "Current state": feature 002 adds `internal/store` (one file, two schema
+  histories, approved limits) and `OPERATIONS.md`, and `stdio`/`serve`/`pair` open the store. Keep the existing
+  style.
+- [ ] T065 [P] Review all new code for comments that cite requirement, decision or finding IDs (none allowed),
+  and for any `slog` call or error that formats message text, SQL or raw driver errors. Fix what is found.
+- [ ] T066 Check `git ls-files --eol` for `w/crlf` (none allowed) and that `verification.md` marks each
+  platform-specific control as passed or "not verified". Mark all tasks `[X]` in this file as they are completed.
+
+---
+
+## Dependencies & Execution Order
+
+### Phase Dependencies
+
+- **Setup (Phase 1)**: none.
+- **Foundational (Phase 2)**: needs T001. T014 and T015 are gates; T014's fallback, if needed, is done before
+  Phase 3.
+- **US1 (Phase 3)**: needs Phase 2. It is the MVP.
+- **US2 (Phase 4)**: needs US1 (`Open`, preflight and the runner exist).
+- **US3 (Phase 5)**: needs US1 (`Open`); independent of US2.
+- **US4 (Phase 6)**: needs US3 for seeding through `StoreMessages`. Contacts need T016.
+- **US7 (Phase 7)**: needs US1–US4. Its enforcement task T052 touches their files.
+- **US5 (Phase 8)**: needs US3 (writes) and the shared query code from T042.
+- **US6 (Phase 9)**: needs US3. Its admission and disk checks come from Phase 2.
+- **Polish (Phase 10)**: needs everything.
+
+### Within Each User Story
+
+Tests first (they must fail), then implementation, then the checkpoint run on CI's three OSes.
+
+### Parallel Opportunities
+
+- Phase 1: T002, T003 and T004 together.
+- Phase 2: T005–T013 and T015 are all different files and run together; T014 needs only T001; T016 follows T005,
+  T008 and T009.
+- US1: T017, T018 and T019 together; T021 alongside T020.
+- US2: T026–T029 together.
+- US3: T032–T036 together.
+- US4: T039–T041 and T046 together.
+- US7: T047–T051 and T055 together.
+- After US3, US5 (T057–T058) and US6 (T059–T060) can run in parallel with US4/US7. They touch different files,
+  except T058, which adds to `queries.go`, so coordinate it with T043/T044.
+
+---
+
+## Parallel Example: User Story 3
+
+```text
+Task: "T032 messages_test.go: re-store, media keep, chat creation, sender normalisation, batch limits"
+Task: "T033 chats_test.go: name rule with quality, time and byte-wise tie-break"
+Task: "T034 order_test.go: 20 random orders give identical dumps"
+Task: "T035 concurrency_test.go: 16×100 writers with readers, no 'database is locked'"
+Task: "T036 crash_test.go: killed child, every committed write present"
+```
+
+---
+
+## Implementation Strategy
+
+### MVP First (User Story 1)
+
+1. Phase 1 + Phase 2, with both gates recorded.
+2. Phase 3 (US1): the binary creates and opens one private database with both schemas.
+3. **Stop and validate**: T017–T019 green on Windows, Linux and macOS.
+
+### Incremental Delivery
+
+1. US2: safe evolution and refusals, so the database format can be shipped.
+2. US3: correct ingest writes. 004 can start building against the store.
+3. US4: queries. 005/006 can start.
+4. US7: limits, diagnostics, recovery and the operator guide. Feature acceptance needs it.
+5. US5 and US6: single-message lookups and the LID merge.
+6. Polish: tidy, full checks, quickstart, evidence.
+
+---
+
+## Notes
+
+- [P] = different files and no unfinished dependency. [USn] maps to spec.md user stories.
+- Commit after each task or logical group, with Conventional Commits that explain why, and no attribution lines.
+- Never act on a real WhatsApp account. Every device here is synthetic.
