@@ -323,8 +323,9 @@ fails on the format step.
   `gofmt`-formatted (naming the files), when `go vet` reports a problem, or when `go test ./...` fails.
 - **FR-032**: CI MUST build the binary for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64
   with `CGO_ENABLED=0`, reporting each target separately.
-- **FR-033**: CI MUST run the tests on Linux, Windows and macOS, because the lock and signal handling differ per
-  operating system.
+- **FR-033**: CI MUST run the tests on Linux, Windows and macOS for every pull request and every push to `main`,
+  because the lock and signal handling differ per operating system. Pushes to other branches MAY run the tests
+  on Linux only, for quick feedback.
 
 ### Key Entities
 
@@ -353,8 +354,8 @@ fails on the format step.
   locked again at once.
 - **SC-005**: A `stdio` run at debug level, from start to shutdown, writes 0 bytes to stdout.
 - **SC-006**: Runs from at least 2 different working directories without an override use the same data directory.
-- **SC-007**: CI is green on the feature branch for formatting, static checks, tests on 3 operating systems and
-  builds for all 5 targets; a deliberately unformatted file makes it fail.
+- **SC-007**: CI is green on the feature's pull request for formatting, static checks, tests on 3 operating
+  systems and builds for all 5 targets; a deliberately unformatted file makes it fail.
 
 ## Assumptions
 

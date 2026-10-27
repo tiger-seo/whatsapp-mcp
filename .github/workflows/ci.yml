@@ -15,6 +15,9 @@ env:
   CGO_ENABLED: "0"
 
 jobs:
+  # Format, vet and the five cross-builds share one runner: each is a few seconds of work, while every extra job
+  # costs its own start-up, checkout and Go setup. Each target is its own step, so a failure names it, and every
+  # step runs even after an earlier one failed.
   check:
     runs-on: ubuntu-latest
     steps:
@@ -32,14 +35,37 @@ jobs:
             exit 1
           fi
       - name: go vet
+        if: ${{ !cancelled() }}
         run: go vet ./...
+      - name: build windows/amd64
+        if: ${{ !cancelled() }}
+        env: { GOOS: windows, GOARCH: amd64 }
+        run: go vet ./... && go build -o /dev/null ./cmd/whatsapp-mcp
+      - name: build linux/amd64
+        if: ${{ !cancelled() }}
+        env: { GOOS: linux, GOARCH: amd64 }
+        run: go vet ./... && go build -o /dev/null ./cmd/whatsapp-mcp
+      - name: build linux/arm64
+        if: ${{ !cancelled() }}
+        env: { GOOS: linux, GOARCH: arm64 }
+        run: go vet ./... && go build -o /dev/null ./cmd/whatsapp-mcp
+      - name: build darwin/amd64
+        if: ${{ !cancelled() }}
+        env: { GOOS: darwin, GOARCH: amd64 }
+        run: go vet ./... && go build -o /dev/null ./cmd/whatsapp-mcp
+      - name: build darwin/arm64
+        if: ${{ !cancelled() }}
+        env: { GOOS: darwin, GOARCH: arm64 }
+        run: go vet ./... && go build -o /dev/null ./cmd/whatsapp-mcp
 
+  # The lock and signal handling differ per OS, so pull requests and main are tested on all three. Other branch
+  # pushes run Linux only, for quick feedback while work is in progress.
   test:
     name: test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: ${{ fromJSON((github.event_name == 'pull_request' || github.ref == 'refs/heads/main') && '["ubuntu-latest", "windows-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -47,26 +73,3 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go test ./...
-
-  build:
-    name: build (${{ matrix.goos }}/${{ matrix.goarch }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { goos: windows, goarch: amd64 }
-          - { goos: linux, goarch: amd64 }
-          - { goos: linux, goarch: arm64 }
-          - { goos: darwin, goarch: amd64 }
-          - { goos: darwin, goarch: arm64 }
-    env:
-      GOOS: ${{ matrix.goos }}
-      GOARCH: ${{ matrix.goarch }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - run: go vet ./...
-      - run: go build -o /dev/null ./cmd/whatsapp-mcp

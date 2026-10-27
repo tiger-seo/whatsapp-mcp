@@ -140,7 +140,7 @@ internal/buildinfo/
 └── buildinfo_test.go
 
 .github/workflows/
-└── ci.yml               # check, test (3 OS), build (5 targets)
+└── ci.yml               # check (gofmt, vet, 5 target builds), test (Linux; 3 OS on PRs and main)
 ```
 
 `go.mod` gains `github.com/gofrs/flock`, `github.com/pelletier/go-toml/v2` and the indirect

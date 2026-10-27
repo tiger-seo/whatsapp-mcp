@@ -20,7 +20,8 @@ Feature 001 (binary skeleton) is implemented; it is done once its CI run is veri
   registry in `internal/config/setting.go`; a new setting is one descriptor plus one `Config` field.
 - `internal/lock`: the single-instance lock on the data directory.
 - `internal/buildinfo`: version, commit and build date.
-- `.github/workflows/ci.yml`: gofmt, go vet, go test on three OSes, five cross-builds.
+- `.github/workflows/ci.yml`: one `check` job (gofmt, go vet, five cross-builds) and `go test` on Linux, plus
+  Windows and macOS for pull requests and `main`.
 
 Spike results are in `docs/spikes.md`.
 S1 (§8.5) is done: `sqlstore` works on `modernc.org/sqlite` with the dialect name `"sqlite"`. Nothing is

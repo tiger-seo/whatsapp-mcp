@@ -101,8 +101,9 @@ Kill terminal 1 hard (`kill -9 <pid>`, or `taskkill //F //PID <pid>` on Windows)
 
 ## 6. CI (US6)
 
-1. Push the branch. In GitHub Actions, check that `check`, the three `test (…)` jobs and the five `build (…)`
-   jobs are green.
+1. Push the branch and open a pull request. In GitHub Actions, check that `check` (with its five `build …` steps)
+   and the three `test (…)` jobs of the pull request run are green. A plain branch push runs `check` and
+   `test (ubuntu-latest)` only.
 2. On a scratch branch, commit a deliberately unformatted Go file and push it. `check` must fail and print the
    file name. Delete the scratch branch afterwards.
 
