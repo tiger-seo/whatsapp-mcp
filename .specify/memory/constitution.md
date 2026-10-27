@@ -54,16 +54,31 @@ or credentials.
 
 ### V. Secure by Default
 
+- Input from WhatsApp (messages, captions, names, media) and from MCP clients is untrusted data. It is
+  validated and bounded before use, and never treated as an instruction to the server.
+- Every resource that input can drive has a limit: bytes read, items returned, time, concurrency and
+  disk. A limit is enforced on what is actually consumed, not only on a size checked beforehand.
+- Sensitive data (the WhatsApp session, the database, secrets, media) lives only in private
+  directories and files: owner-only on Unix; on Windows an access list limited to the user, SYSTEM and
+  Administrators. Paths are opened without following links and checked on the open handle. An existing
+  path that is not private is refused with the command that fixes it, never changed silently. New
+  sensitive files are created through `internal/private`.
+- Secrets are generated with `crypto/rand`, compared in constant time, and never appear in logs, error
+  messages, help or debug dumps.
 - HTTP binds to loopback by default.
 - Every HTTP request needs a bearer token, compared in constant time. Binding a non-loopback address
   without a token fails at startup.
 - Files are sent only from allow-listed directories, resolved with symlinks followed.
-- Generated secrets are stored with file mode 0600.
 - Webhook requests are signed with HMAC.
 - Invalid configuration fails at startup with a clear message, never at runtime.
+- Dependencies are exact versions verified against `go.sum`, and CI actions are pinned to full commit
+  SHAs. CI fails on any vulnerability that govulncheck finds reachable. An unreachable one, in a
+  dependency or the standard library, is removed by an update or recorded as an exception under
+  Principle X.
 
-Rationale: the binary acts as a real person's WhatsApp account. The default configuration must be safe
-without the operator having to harden it.
+Rationale: the binary acts as a real person's WhatsApp account and holds their messages. Its input
+comes from anyone who can message that account and from an LLM that can be misled, so the default
+configuration must be safe without the operator having to harden it.
 
 ### VI. Testable by Design, and Tested
 
@@ -111,10 +126,35 @@ account for unusual activity.
 Rationale: every option, dependency and compatibility path is code to test and maintain for a small
 project.
 
+### X. Security Is Planned per Feature
+
+- `docs/security-review.md` (findings F01–F16) is the threat model for every feature, alongside the
+  specification.
+- Every feature spec has a Security section. It names the assets and trust boundaries the feature
+  touches, takes up each applicable finding as a requirement or defers it explicitly to a named later
+  feature, and lists the abuse cases to test.
+- A finding that needs a product decision, such as the approval of sends (F01) or the encryption of
+  remote HTTP (F02), is decided by the user and recorded in `docs/specification.md` before a feature
+  specifies it. A feature never decides it by itself.
+- The plan's Constitution Check fails if a capability the feature enables has an applicable High
+  finding that is neither resolved nor recorded as an exception with a named owner, compensating
+  controls and an expiry date. Exceptions are listed in the feature's `verification.md`.
+- Abuse cases are negative tests with synthetic data. They show that the rejected action has no side
+  effect: nothing is written, sent or created. A platform-specific control is tested on each platform
+  it claims to cover.
+- `verification.md` records the security evidence (commands, dates, results) and the limitations. A
+  control that was not tested on a platform is reported as not verified, never as passed.
+- A feature closes only the findings it addresses. The review itself stays unchanged; remaining work is
+  tracked in `docs/backlog/`.
+
+Rationale: the 2026-10-27 review found gaps in feature 001 only after it was implemented. Planning
+security with each feature catches them before the code exists, and keeps decisions that belong to the
+user from being made inside a feature.
+
 ## Development Conventions
 
-- Requirement and decision IDs (G1, M2, D3, FR-001, SC-002, …) belong in planning documents only, never
-  in code comments.
+- Requirement, decision and finding IDs (G1, M2, D3, FR-001, SC-002, F01, …) belong in planning
+  documents only, never in code comments.
 - Commits follow Conventional Commits and explain why, not what. Commits carry no AI or tool attribution.
 - The repository stores LF line endings only.
 
@@ -127,14 +167,20 @@ project.
 ## Governance
 
 - This constitution overrides other practices. Every `/speckit-plan` includes a Constitution Check
-  against Principles I–IX, and any deviation is justified in the plan's Complexity Tracking table.
+  against Principles I–X, and any deviation is justified in the plan's Complexity Tracking table.
 - Amendments use semantic versioning:
   - MAJOR: a principle is removed or redefined;
   - MINOR: a principle is added or expanded;
   - PATCH: the wording is clarified.
 
-  Each amendment records its date and the reason.
+  Each amendment records its date and the reason, below.
 - A change to settled behaviour (D1–D18) needs the user's decision, recorded in `docs/specification.md`
   §8.10 before the constitution or the code changes.
 
-**Version**: 1.0.0 | **Ratified**: 2026-10-27 | **Last Amended**: 2026-10-27
+**Amendments:**
+
+- 1.1.0 (2026-10-28): Principle V expanded with untrusted input, resource limits, private storage,
+  secret handling and supply-chain rules, replacing the Unix-only "0600" rule; Principle X added. Reason:
+  the security review of 2026-10-27 and the hardening of feature 001 that followed it.
+
+**Version**: 1.1.0 | **Ratified**: 2026-10-27 | **Last Amended**: 2026-10-28
