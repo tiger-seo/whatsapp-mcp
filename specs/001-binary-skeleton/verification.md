@@ -134,19 +134,24 @@ protection on `main` and no rulesets.
 package that does not exist, so the version was never injected; it now names `internal/buildinfo`, and
 `version` prints `3438529-dirty`.
 
-**Not yet verified, and remaining risks:**
+**CI on GitHub.** [40589285369](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/40589285369) (push) and
+[40589332934](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/40589332934) (pull request #2), commit
+`b440a04`: success, `check` and `test` on ubuntu, windows and macOS, 4 of 4 jobs, with the pinned action SHAs.
+`go mod verify`: `all modules verified`. govulncheck: the same result as locally. `data directory denied to
+other users`: `status` created `drwx------ runner runner /tmp/whatsapp-mcp-data.l8WMf2`; `sudo -u nobody` could
+neither list it nor read `config.toml`, while it could list `/tmp`.
 
-- The new CI steps (`go mod verify`, `govulncheck`, `data directory denied to other users`) and the pinned
-  action SHAs have not run on GitHub yet; they will on the first push of this branch. The macOS tests have not
-  run at all yet.
+**Toolchain.** `go.mod` now names `toolchain go1.27.3`, which `go` and `actions/setup-go` both use. With it,
+locally: `go mod verify`, `go vet ./...`, the five builds and `go test -count=1 ./...` (5 packages ok) pass,
+and govulncheck v1.9.0 reports `No vulnerabilities found` with nothing listed, reachable or not.
+
+**Remaining risks:**
+
 - No separate-identity check on Windows: only the access list is checked, and effective access was not
-  demonstrated with a second account. On Unix, that check is the new CI step (`sudo -u nobody`); it could not
-  run locally because WSL has no passwordless sudo.
+  demonstrated with a second account. On Unix, that check is the CI step above.
 - Ownership by another user is not tested (it needs root or a second account).
 - govulncheck's failure path was not shown with a deliberately vulnerable fixture.
 - Ancestors of the data directory are trusted. On Unix only the direct parent is checked, and directory checks
   go by path, so a parent writable by another identity could still swap a directory after its check.
 - Secret masking is tested with a synthetic descriptor in `internal/config`; there is no real secret setting
   yet, so the CLI output path is checked again when features 009 and 010 add the first ones.
-- CI builds and tests with Go 1.27.0, whose standard library has the 14 unreachable entries above, until
-  `go.mod` names a newer toolchain.
