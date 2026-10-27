@@ -83,3 +83,70 @@ Run on 2026-10-27 on GitHub Actions in the public repository `tiger-seo/whatsapp
 | [40546723853](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/40546723853), push to the scratch branch `scratch/ci-gofmt-check` | `2f3c104` (adds `cmd/whatsapp-mcp/zz_unformatted.go`, compiling but not formatted) | failure in `check` only, at the `gofmt` step: `These files are not gofmt-formatted: cmd/whatsapp-mcp/zz_unformatted.go`; the other 8 jobs passed |
 
 The scratch branch was deleted locally and on GitHub afterwards.
+
+## Security hardening follow-up
+
+Backlog item `001-binary-skeleton-security-hardening`, approved by the maintainer on 2026-10-27 with these
+choices: an existing data directory that other users can reach is refused with the command that fixes it,
+never changed; on Windows only this user, SYSTEM and Administrators may have access; `config.toml` is capped at
+1 MiB. The rules are in [configuration.md](contracts/configuration.md#data-directory-and-file-privacy).
+
+Run on 2026-10-27, same machine and Go caches as above. `TMP` for `go test` was `D:\tmp`, which inherits
+`Authenticated Users` and `Users`; the tests therefore create their data directories through the new
+`internal/private` package instead of using `t.TempDir()` directly.
+
+| Command | Result |
+| --- | --- |
+| `gofmt -l .` | exit 0, no files listed |
+| `GOOS=<t> GOARCH=<a> go vet ./...` and `go build -o /dev/null ./cmd/whatsapp-mcp`, five targets | exit 0 for all five |
+| `go test -count=1 -v ./...` (Windows) | exit 0; 5 packages ok; 84 top-level tests passed, 10 skipped, 0 failed, plus 46 subtests passed |
+| Linux test binaries (`GOOS=linux go test -c` for `internal/config`, `internal/lock`, `internal/private`), run in WSL 2 Ubuntu as uid 1000 under `/tmp` | exit 0 for all three: 38, 12 and 19 top-level tests passed; only `TestHelperHolder` skipped. Includes the FIFO, `/dev/zero`, symlink, sticky-parent and mode tests |
+| `go test -run '^$' -fuzz FuzzFormatFileErrors -fuzztime 30s ./internal/config/` | PASS, 6 386 executions, no failure |
+| `go mod verify` | `all modules verified` |
+| `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...` | exit 0, `No vulnerabilities found`; 0 reachable. Listed but not reachable: GO-2026-6604 (package level, `internal/syscall/windows`) and 13 module-level entries, all in the Go 1.27.0 standard library and fixed in go1.27.2 or go1.27.3 |
+| `git ls-files --eol` | no `w/crlf` entry |
+| ID grep over `*.go` (as above, plus `SEC-0`) | no matches |
+
+Skipped on Windows: the six symbolic-link tests (creating symlinks needs Developer Mode or elevation here; the
+Windows CI runner can create them), `TestFileFIFO` (no FIFOs), and the three Unix-only tests listed earlier.
+Junctions, which need no privilege, are tested on Windows (`TestCheckDirJunction`).
+
+**Real binary on Windows** (built from the branch, scratch directories under `D:\tmp\wamcp-sec`, removed
+afterwards):
+
+| Scenario | Result |
+| --- | --- |
+| `status --data-dir %TEMP%\wamcp-sec-new` (new, under the profile) | created; `icacls`: SYSTEM, Administrators, `NOTEBOOKPRO\Tiger`, each `(OI)(CI)(F)`, not inherited; exit 1 (`status is not implemented yet`) |
+| `status` on an existing `D:\tmp\wamcp-sec\shared` | exit 1: `other users can access it: NT AUTHORITY\Authenticated Users, BUILTIN\Users; run: icacls … /inheritance:r /grant:r *S-1-5-21-…-1001:(OI)(CI)F /grant:r *S-1-5-18:(OI)(CI)F /grant:r *S-1-5-32-544:(OI)(CI)F /remove:g *S-1-5-11 /remove:g *S-1-5-32-545` (account names printed in the system language) |
+| the suggested `icacls` command, run as printed, then `status` again | `Successfully processed 1 files`; then accepted, exit 1 (`not implemented`) |
+| `status --data-dir D:\tmp\wamcp-sec\fresh\nested` (new, under the inheriting `D:\tmp`) | created with the same three private entries; accepted |
+| `stdio` on a refused directory, stdin `/dev/null` | exit 1, **0 bytes** on stdout, nothing created in the directory |
+| `config.toml` of 1 048 577 bytes | exit 2, `…\config.toml: is larger than 1 MiB` |
+| `version` with `WHATSAPP_MCP_DATA_DIR` set to a refused directory | prints the version, exit 0 |
+| the existing `%AppData%\whatsapp-mcp` (read with `icacls` only) | SYSTEM, Administrators and this user, all inherited from the profile: passes unchanged |
+
+**Repository settings** (read with `gh api` on 2026-10-27, nothing changed): secret scanning and push protection
+enabled; Dependabot security updates disabled; Dependabot alerts disabled (`vulnerability-alerts` 404); no branch
+protection on `main` and no rulesets.
+
+**Local build script.** `build.sh` (local, untracked) now sets `CGO_ENABLED=0` itself; with the caller's
+`CGO_ENABLED=1` the binary still reports `build CGO_ENABLED=0` (`go version -m`). Its `-X` flag also named a
+package that does not exist, so the version was never injected; it now names `internal/buildinfo`, and
+`version` prints `3438529-dirty`.
+
+**Not yet verified, and remaining risks:**
+
+- The new CI steps (`go mod verify`, `govulncheck`, `data directory denied to other users`) and the pinned
+  action SHAs have not run on GitHub yet; they will on the first push of this branch. The macOS tests have not
+  run at all yet.
+- No separate-identity check on Windows: only the access list is checked, and effective access was not
+  demonstrated with a second account. On Unix, that check is the new CI step (`sudo -u nobody`); it could not
+  run locally because WSL has no passwordless sudo.
+- Ownership by another user is not tested (it needs root or a second account).
+- govulncheck's failure path was not shown with a deliberately vulnerable fixture.
+- Ancestors of the data directory are trusted. On Unix only the direct parent is checked, and directory checks
+  go by path, so a parent writable by another identity could still swap a directory after its check.
+- Secret masking is tested with a synthetic descriptor in `internal/config`; there is no real secret setting
+  yet, so the CLI output path is checked again when features 009 and 010 add the first ones.
+- CI builds and tests with Go 1.27.0, whose standard library has the 14 unreachable entries above, until
+  `go.mod` names a newer toolchain.

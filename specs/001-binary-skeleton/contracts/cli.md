@@ -122,7 +122,9 @@ The message texts are informative, and tests match on them. They may be reworded
 
 ## Error messages (stderr, before the logger exists)
 
-Every message starts with `whatsapp-mcp: `.
+Every message starts with `whatsapp-mcp: `. Control characters, line breaks and bidirectional formatting
+characters that come from input (a path, a flag name, `config.toml`) are printed as Go escapes (`\x1b`,
+`\n`, `\u202e`), so each error stays on its own line and cannot drive the terminal.
 
 | Situation | Message | Exit |
 | --- | --- | --- |
@@ -133,7 +135,8 @@ Every message starts with `whatsapp-mcp: `.
 | Positional argument | `whatsapp-mcp: stdio: unexpected argument "x"` | 2 |
 | Invalid configuration | see [configuration.md](configuration.md) | 2 |
 | No user config dir | `whatsapp-mcp: cannot find the per-user configuration directory (<os error>); set --data-dir or WHATSAPP_MCP_DATA_DIR` | 2 |
-| Data directory unusable | `whatsapp-mcp: data directory <path>: <reason>` (e.g. `exists and is not a directory`, `permission denied`) | 1 |
+| Data directory unusable | `whatsapp-mcp: data directory <path>: <reason>` (e.g. `exists and is not a directory`, `permission denied`, `other users can access it (mode 0755); run: chmod 700 <path>`); see [configuration.md](configuration.md#data-directory-and-file-privacy) | 1 |
+| Lock file unusable | `whatsapp-mcp: data directory <path>: lock <path>/whatsapp-mcp.lock: <reason>` (e.g. `is a symbolic link or another reparse point; replace it with a regular file`) | 1 |
 | Lock held | `whatsapp-mcp: another whatsapp-mcp (PID 4242) is using the data directory <path>` | 1 |
 | Lock held, PID unreadable | `whatsapp-mcp: another whatsapp-mcp (PID unknown) is using the data directory <path>` | 1 |
 | Not implemented | `whatsapp-mcp: pair is not implemented yet` | 1 |
