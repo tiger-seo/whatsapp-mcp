@@ -67,5 +67,11 @@ Binary built with `go build -o "$TEMP/wamcp/whatsapp-mcp.exe" ./cmd/whatsapp-mcp
 
 ## CI (quickstart §6)
 
-Pending: the branch has not been pushed yet. Record the run URL and the results of `check`, the three `test (…)`
-jobs and the five `build (…)` jobs here, and the result of the unformatted-file check on a scratch branch.
+Run on 2026-10-27 on GitHub Actions in the public repository `tiger-seo/whatsapp-mcp`.
+
+| Run | Commit | Result |
+| --- | --- | --- |
+| [40546442970](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/40546442970), push to `001-binary-skeleton` | `2f7aad4` | success: `check`, `test (ubuntu-latest)`, `test (windows-latest)`, `test (macos-latest)`, and `build (…)` for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64, 9 of 9 jobs |
+| [40546723853](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/40546723853), push to the scratch branch `scratch/ci-gofmt-check` | `2f3c104` (adds `cmd/whatsapp-mcp/zz_unformatted.go`, compiling but not formatted) | failure in `check` only, at the `gofmt` step: `These files are not gofmt-formatted: cmd/whatsapp-mcp/zz_unformatted.go`; the other 8 jobs passed |
+
+The scratch branch was deleted locally and on GitHub afterwards.
