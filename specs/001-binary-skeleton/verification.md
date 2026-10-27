@@ -59,11 +59,19 @@ Binary built with `go build -o "$TEMP/wamcp/whatsapp-mcp.exe" ./cmd/whatsapp-mcp
 | 5 | `stdio --log-level debug </dev/null >out.bin` | exit 0, **0 bytes** on stdout; config, `lock acquired`, `shutting down`, `stopped` on stderr |
 | 5 | log line format | every line `time=… level=… msg=…` plus attributes |
 
-**Not yet done:**
+**Manual Ctrl+C (quickstart §5, row 1),** run by the user on 2026-10-27 in a Windows `cmd.exe` console:
 
-- The manual Ctrl+C on `serve` in an interactive console (quickstart §5, row 1). The automated Ctrl+Break
-  test covers the same `os.Interrupt` path, but a real Ctrl+C needs a person at the console.
-- SIGTERM (§5, row 2), which runs only on Unix: covered by `TestProcessTerminate` in CI.
+| Command | Result |
+| --- | --- |
+| `whatsapp-mcp.exe serve`, then Ctrl+C | `serve: HTTP server not implemented yet`, then `shutting down reason=interrupt` and `stopped` 1 ms later |
+| `whatsapp-mcp.exe serve --data-dir d:\tmp\somedata`, then Ctrl+C | same three lines |
+| `whatsapp-mcp.exe serve --data-dir ./somedata` and `--data-dir somedata` | `data_dir: "…" from --data-dir is not an absolute path` |
+
+`cmd.exe` does not print the exit code; exit 0 on this path is shown by the automated Ctrl+Break test above.
+After the runs, each data directory held only an empty `whatsapp-mcp.lock`: the PID is cleared on a clean
+exit.
+
+SIGTERM (§5, row 2) runs only on Unix, and is covered by `TestProcessTerminate` in CI on Linux and macOS.
 
 ## CI (quickstart §6)
 
