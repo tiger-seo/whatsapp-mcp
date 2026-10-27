@@ -12,7 +12,17 @@ WhatsApp client is whatsmeow.
 
 ## Current state
 
-The repository holds only the specification; there is no code yet. Spike results are in `docs/spikes.md`.
+Feature 001 (binary skeleton) is implemented; it is done once its CI run is verified. The code:
+
+- `cmd/whatsapp-mcp`: the commands, flag parsing, the logger and the shutdown lifecycle. Only `version`
+  does real work yet.
+- `internal/config`: layered settings and the data directory. Every setting is one descriptor in the
+  registry in `internal/config/setting.go`; a new setting is one descriptor plus one `Config` field.
+- `internal/lock`: the single-instance lock on the data directory.
+- `internal/buildinfo`: version, commit and build date.
+- `.github/workflows/ci.yml`: gofmt, go vet, go test on three OSes, five cross-builds.
+
+Spike results are in `docs/spikes.md`.
 S1 (§8.5) is done: `sqlstore` works on `modernc.org/sqlite` with the dialect name `"sqlite"`. Nothing is
 imported from an earlier deployment (D16), so the I3 spike is closed and there is no `import` command.
 
