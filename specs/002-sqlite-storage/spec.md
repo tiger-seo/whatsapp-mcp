@@ -31,12 +31,14 @@ tools themselves (005, 006): this feature provides the operations they call.
   it does not promise byte-for-byte unchanged SQLite files.
 - **Chat names have a quality.** "Never gets worse" (S4) needs a rule: a name is either a *real name* (a group
   subject, a contact's full, push, first or business name, a history-sync display name) or a *fallback* derived from
-  the JID (a phone number, `Group <id>`, the JID's user part). A stored name is replaced only by a non-empty name of
-  the same or a higher quality. Same quality replaces, so a renamed group or contact is picked up; empty never
-  replaces anything.
+  the JID (a phone number, `Group <id>`, the JID's user part). Every offered name carries the time it was seen. A
+  stored name is replaced only by a non-empty name of a higher quality, or of the same quality seen at the same
+  time or later, so a renamed group or contact is picked up. At equal quality and time the byte-wise greater name
+  wins, so the result never depends on the order of arrival. Empty never replaces anything.
 - **Re-storing a message replaces it.** Writing a message whose `(chat_jid, id)` already exists replaces its stored
   fields with the new ones (history sync and live delivery carry the same data, and a later copy may carry fresher
-  media URLs). The chat's `last_message_time` still only moves forward.
+  media URLs). An empty media field in the new copy never overwrites a stored non-empty one, so an incomplete copy
+  cannot make media undownloadable. The chat's `last_message_time` still only moves forward.
 - **The `@lid` merge drops duplicates instead of skipping the chat.** In the old bridge (§3.5) a chat was skipped
   when both chats held the same message ID. Here the phone-number chat's copy is kept, the LID chat's copy is
   dropped, and the merge completes.
@@ -74,6 +76,14 @@ tools themselves (005, 006): this feature provides the operations they call.
   `OPERATIONS.md` at the repository root with a "Storage" section; later features extend it and the README links to it.
 - Q: How should the 200 ms query target be checked? → A: A Go benchmark over a seeded 100k-message database on the
   maintainer's machine, with results and machine recorded in `verification.md`; not a CI gate.
+- Q: When two different real names reach the store for the same chat, which one is kept, independent of arrival
+  order? → A: Each name carries the time it was seen; at the same quality the newer name wins, and at equal time
+  the byte-wise greater name wins. The LID merge compares quality first, then time.
+- Q: When an already stored message arrives again and the copies differ, which fields are replaced? → A: All fields
+  come from the new copy, except that an empty media metadata field never overwrites a stored non-empty one.
+- Q: For a person known under both a LID and a phone number, which JID and name does a contact search return? → A:
+  The phone-number JID and number, with the phone-number entry's name (full, push, first, business), falling back
+  to the LID entry's name.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -161,7 +171,9 @@ check that the resulting chats and messages are identical every time.
 **Acceptance Scenarios**:
 
 1. **Given** a message `(chat C, id X)` already stored, **When** the same `(C, X)` is stored again with different
-   content, **Then** there is still exactly one message `(C, X)`, and it carries the new content.
+   content, **Then** there is still exactly one message `(C, X)`, and it carries the new content. **Given** a stored
+   media message with a URL and direct path, **When** a copy without them is stored, **Then** the stored URL and
+   direct path are kept and the other fields come from the new copy.
 2. **Given** the same message ID `X` in two different chats, **When** both are stored, **Then** both are kept as
    separate messages.
 3. **Given** chat C with a latest message at 12:00, **When** a history message from 09:00 is stored in C, **Then**
@@ -173,7 +185,8 @@ check that the resulting chats and messages are identical every time.
 6. **Given** a chat whose stored name is the real name "Alice", **When** an update offers the fallback name
    "491511234567", **Then** the name stays "Alice".
 7. **Given** a chat whose stored name is a fallback, **When** an update offers a real name, **Then** the real name is
-   stored. **Given** a real name, **When** a different real name is offered, **Then** the new real name is stored.
+   stored. **Given** a real name seen at 10:00, **When** a different real name seen at 11:00 is offered, **Then** the
+   new name is stored; **When** one seen at 09:00 is offered instead, **Then** the stored name stays.
 8. **Given** an image, video or document message with a caption, **When** it is stored, **Then** the caption is kept
    in its own field, separate from the message text, and the media metadata needed to download it later is kept.
 9. **Given** a message from `491511234567:12@s.whatsapp.net` (a device of that user), **When** it is stored, **Then**
@@ -258,7 +271,7 @@ the result; run the merge again and check nothing changes.
 
 1. **Given** a LID chat L and a phone-number chat P, **When** L is merged into P, **Then** all of L's messages belong
    to P, L no longer exists, P's last activity is the later of the two, and P's name is the better of the two by the
-   name-quality rule.
+   name rule (higher quality, then newer name time, then the byte-wise greater name).
 2. **Given** only L exists, **When** it is merged into P, **Then** P is created with L's name, time and messages.
 3. **Given** L and P both hold message ID X, **When** L is merged, **Then** P keeps its own copy of X, L's copy is
    dropped, and the merge completes.
@@ -391,8 +404,8 @@ separate OS test identities. No real WhatsApp account or network connection is n
 
 **Chats and messages (S3, S4, D18, §3.2)**
 
-- **FR-012**: A chat MUST record its full JID, its name, the quality of that name (real or fallback), and its last
-  activity time. Whether it is a group or a direct chat follows from the JID.
+- **FR-012**: A chat MUST record its full JID, its name, the quality of that name (real or fallback), the time that
+  name was seen, and its last activity time. Whether it is a group or a direct chat follows from the JID.
 - **FR-013**: A message MUST record its ID, chat JID, full sender JID (without the device part), normalised sender
   phone number (empty when the sender is an unresolved LID), time, whether it is from me, text, caption, media type,
   and the media metadata needed to download it later: URL, direct path, media key, file hash, encrypted file hash,
@@ -400,14 +413,19 @@ separate OS test identities. No real WhatsApp account or network connection is n
 - **FR-014**: The store MUST derive the normalised sender phone number from the sender JID itself (digits only, for
   phone-number JIDs), so the two can never disagree.
 - **FR-015**: A message MUST be identified by `(chat_jid, id)`. Storing a message whose `(chat_jid, id)` exists MUST
-  replace its stored fields; storing never creates a second copy.
+  replace its stored fields with the new copy's, except that an empty media metadata field (URL, direct path, media
+  key, file hash, encrypted file hash, file length, MIME type, original file name) MUST NOT overwrite a stored
+  non-empty one; storing never creates a second copy.
 - **FR-016**: Storing a message MUST create its chat if it does not exist and move the chat's last activity time
   forward to the message's time if that is later, in the same atomic step.
-- **FR-017**: The store MUST offer a chat update (name, name quality, last activity time) for chats known without a
+- **FR-017**: The store MUST offer a chat update (name, name quality, the time the name was seen, last activity
+  time) for chats known without a
   message, such as history-sync conversations. The last activity time MUST only ever move forward, and an absent time
   MUST NOT clear it.
-- **FR-018**: A chat's name MUST be replaced only by a non-empty name of the same or a higher quality. Real names rank
-  above fallbacks.
+- **FR-018**: A chat's name MUST be replaced only by a non-empty name that ranks higher by, in order: quality (real
+  above fallback), then the time the name was seen (a later or equal time ranks at least as high), then byte-wise
+  comparison of the names (greater wins). The outcome MUST NOT depend on the order in which names arrive. A name
+  offered without a time, or with a time outside the approved timestamp range, is rejected.
 - **FR-019**: A batch of messages within FR-043 count/byte limits MUST be storable in one transaction. Invalid or
   oversized batches MUST be rejected as a whole without storing a prefix; callers split larger conversations.
 - **FR-020**: The schema MUST support fast lookup by chat and time, by sender phone number, and by time.
@@ -435,8 +453,11 @@ separate OS test identities. No real WhatsApp account or network connection is n
 - **FR-027**: Get chat: by JID, with its latest message; "not found" if absent.
 - **FR-028**: Search contacts: match the text against full name, push name, first name, business name and phone
   number of the device store's contacts, excluding groups. A contact known by LID is reported with its phone number
-  where the device store maps it; a person known under both a LID and a phone number is reported once. Each result
-  has a phone number (possibly empty), a name and a JID.
+  where the device store maps it; a person known under both a LID and a phone number is reported once, matched if
+  either entry matches. Each result has a phone number (possibly empty), a name and a JID. For a person known under
+  both, the result carries the phone-number JID and phone number, and the phone-number entry's first non-empty name
+  in the order full, push, first, business; if that entry has none, the LID entry's name in the same order. A LID
+  without a mapped phone number is reported with its LID JID and an empty phone number.
 - **FR-029**: Direct chat by contact: the direct chat whose phone number equals the given normalised number exactly,
   or "not found".
 - **FR-030**: Contact chats: the direct chat with the contact plus every group in which the contact sent a message,
@@ -459,7 +480,7 @@ separate OS test identities. No real WhatsApp account or network connection is n
 **LID chat merge (P2, §3.5)**
 
 - **FR-036**: The store MUST offer an operation that merges a `@lid` chat into a given phone-number chat atomically:
-  create or update the phone-number chat with the better name and the later last activity time, move the messages,
+  create or update the phone-number chat with the better name under FR-018 and the later last activity time, move the messages,
   keep the phone-number chat's copy when both hold the same message ID, rewrite senders equal to the LID to the phone
   JID with the phone number filled in, and delete the LID chat.
 - **FR-037**: Merging MUST be idempotent: merging a LID chat that no longer exists does nothing and reports no
@@ -488,8 +509,8 @@ separate OS test identities. No real WhatsApp account or network connection is n
 - **Message schema version**: the number of the last message-schema migration applied; separate from the device
   store's version.
 - **Migration**: a numbered, embedded schema change, applied once and in order.
-- **Chat**: a conversation identified by its full JID (direct or group), with a name, the quality of that name, and the
-  time of its newest stored message.
+- **Chat**: a conversation identified by its full JID (direct or group), with a name, the quality of that name, the time
+  the name was seen, and the time of its newest stored message.
 - **Message**: identified by chat JID and ID; carries the sender (full JID and phone number), time, from-me flag, text,
   caption, media type and media metadata. Belongs to exactly one chat.
 - **Media metadata**: what is needed to download a message's media later: URL, direct path, key, hashes, length, MIME
