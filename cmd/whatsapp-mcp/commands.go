@@ -8,9 +8,9 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/tiger-seo/whatsapp-mcp-next/internal/buildinfo"
-	"github.com/tiger-seo/whatsapp-mcp-next/internal/config"
-	"github.com/tiger-seo/whatsapp-mcp-next/internal/lock"
+	"github.com/tiger-seo/whatsapp-mcp/internal/buildinfo"
+	"github.com/tiger-seo/whatsapp-mcp/internal/config"
+	"github.com/tiger-seo/whatsapp-mcp/internal/lock"
 )
 
 // runVersion prints the build information. It reads no configuration and touches no files, so it works

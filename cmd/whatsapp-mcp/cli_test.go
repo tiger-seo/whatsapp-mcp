@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tiger-seo/whatsapp-mcp-next/internal/lock"
+	"github.com/tiger-seo/whatsapp-mcp/internal/lock"
 )
 
 type result struct {

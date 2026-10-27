@@ -5,7 +5,7 @@ import (
 	"runtime/debug"
 )
 
-// Set at build time with -ldflags "-X github.com/tiger-seo/whatsapp-mcp-next/internal/buildinfo.Version=…".
+// Set at build time with -ldflags "-X github.com/tiger-seo/whatsapp-mcp/internal/buildinfo.Version=…".
 var (
 	Version = "dev"
 	Commit  = ""

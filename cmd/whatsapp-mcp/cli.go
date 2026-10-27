@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/tiger-seo/whatsapp-mcp-next/internal/config"
+	"github.com/tiger-seo/whatsapp-mcp/internal/config"
 )
 
 const (

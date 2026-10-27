@@ -183,7 +183,7 @@ and `pelletier/go-toml/v2 v2.4.3`. The spike is not kept in the repository.
 ## R10. Build information
 
 - **Decision:** `internal/buildinfo` has the package variables `Version = "dev"`, `Commit = ""` and
-  `Date = ""`, which are set with `-ldflags "-X github.com/tiger-seo/whatsapp-mcp-next/internal/buildinfo.Version=…"`
+  `Date = ""`, which are set with `-ldflags "-X github.com/tiger-seo/whatsapp-mcp/internal/buildinfo.Version=…"`
   (feature 011 wires this into GoReleaser).
   - When `Commit` or `Date` is empty, they fall back to `debug.ReadBuildInfo()` `vcs.revision` (with `-dirty`
     appended when `vcs.modified=true`) and `vcs.time`, then to `unknown`.

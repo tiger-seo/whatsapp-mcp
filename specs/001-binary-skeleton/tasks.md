@@ -29,7 +29,7 @@ parallel. See "Dependencies".
 
 ## Conventions for every task
 
-- Module path: `github.com/tiger-seo/whatsapp-mcp-next`. Go 1.27.0 from `go.mod`. Always `CGO_ENABLED=0`.
+- Module path: `github.com/tiger-seo/whatsapp-mcp`. Go 1.27.0 from `go.mod`. Always `CGO_ENABLED=0`.
 - On this machine, before any `go` command: `export GOMODCACHE=D:/tmp/gocache/mod GOCACHE=D:/tmp/gocache/build
   GOTMPDIR=D:/tmp CGO_ENABLED=0` (C: is nearly full).
 - Standard library `testing` only, no assertion library. Use `t.TempDir()` for files.
@@ -82,7 +82,7 @@ and check the output and exit codes (quickstart §2).
 
 ### Implementation for User Story 1
 
-- [X] T009 [P] [US1] Implement `internal/buildinfo/buildinfo.go` per research R10 and [data-model.md](data-model.md) "Build information": package variables `Version = "dev"`, `Commit = ""`, `Date = ""` (settable with `-ldflags "-X github.com/tiger-seo/whatsapp-mcp-next/internal/buildinfo.Version=…"`); an `Info` struct with `Version`, `Commit`, `Date`, `GoVersion`, `Target`; `Get() Info` that fills an empty `Commit` from `debug.ReadBuildInfo()` setting `vcs.revision` (with `-dirty` appended when `vcs.modified=true`) and an empty `Date` from `vcs.time`, falling back to `unknown`; `GoVersion = runtime.Version()`, `Target = runtime.GOOS + "/" + runtime.GOARCH`. Deliberately ignore `debug.BuildInfo.Main.Version`. Keep the settings lookup in a helper that takes `[]debug.BuildSetting` so T007 can test it. Make T007 pass
+- [X] T009 [P] [US1] Implement `internal/buildinfo/buildinfo.go` per research R10 and [data-model.md](data-model.md) "Build information": package variables `Version = "dev"`, `Commit = ""`, `Date = ""` (settable with `-ldflags "-X github.com/tiger-seo/whatsapp-mcp/internal/buildinfo.Version=…"`); an `Info` struct with `Version`, `Commit`, `Date`, `GoVersion`, `Target`; `Get() Info` that fills an empty `Commit` from `debug.ReadBuildInfo()` setting `vcs.revision` (with `-dirty` appended when `vcs.modified=true`) and an empty `Date` from `vcs.time`, falling back to `unknown`; `GoVersion = runtime.Version()`, `Target = runtime.GOOS + "/" + runtime.GOARCH`. Deliberately ignore `debug.BuildInfo.Main.Version`. Keep the settings lookup in a helper that takes `[]debug.BuildSetting` so T007 can test it. Make T007 pass
 - [X] T010 [US1] Implement the `version` command in `cmd/whatsapp-mcp/commands.go`: print to stdout, one field per line, exactly `whatsapp-mcp <Version>`, `commit:  <Commit>`, `built:   <Date>`, `go:      <GoVersion>`, `target:  <Target>` (format in [contracts/cli.md](contracts/cli.md) "`version` output") and return 0. It must not read the environ, the config file or the data directory. Move the stub handlers of `stdio`, `serve`, `pair` and `status` from `cli.go` into `commands.go`. Make T008 pass
 
 **Checkpoint**: `go test ./cmd/... ./internal/buildinfo` passes; `whatsapp-mcp version` works with any environment.

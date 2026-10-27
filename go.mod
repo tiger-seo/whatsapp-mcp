@@ -1,4 +1,4 @@
-module github.com/tiger-seo/whatsapp-mcp-next
+module github.com/tiger-seo/whatsapp-mcp
 
 go 1.27.0
 
