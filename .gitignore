@@ -1,0 +1,34 @@
+# Build output
+/whatsapp-mcp
+/dist/
+*.exe
+*.test
+*.out
+coverage.txt
+
+# Local data and secrets
+/data/
+.env
+.env.*
+*.db
+*.db-shm
+*.db-wal
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Spec Kit: the CLI reinstalls its own files; only produced artifacts are committed.
+.claude/skills/speckit-**
+.specify/*
+!.specify/archive/
+!.specify/memory/
+.specify/memory/.constitution-template.json
+
+# Spec Kit quality-gate checklists: useful only while a feature is being
+# specified/planned, redundant once implemented — never commit these.
+specs/*/checklists/requirements.md
+.specify/archive/*/checklists/requirements.md
