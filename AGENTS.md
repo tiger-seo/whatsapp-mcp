@@ -33,6 +33,31 @@ imported from an earlier deployment (D16), so the I3 spike is closed and there i
 
 The work is split into Spec Kit features in `docs/roadmap.md`, to be implemented one at a time in its order.
 
+## Owner reviews
+
+Every feature passes two reviews by the `owner-judge` agent (`.claude/agents/owner-judge.md`); the
+constitution's Development Workflow sets the rule.
+
+1. After `/speckit-tasks`, commit the feature directory and run owner-judge in **design** mode.
+2. After implementation, commit the work and its `verification.md` evidence and run it in **code** mode.
+
+Add the row the agent ends with to the "Owner reviews" table in `specs/NNN-*/verification.md` and commit it:
+
+```
+## Owner reviews
+
+| Stage | Date | Commit | Verdict | Owner decision |
+| --- | --- | --- | --- | --- |
+| design | 2026-10-28 | 8c54a83 | PASS | |
+```
+
+The last row of a stage counts. `BLOCK` means fix and review again; `CONCERNS` needs the user's decision in
+the last column. `.claude/hooks/owner-review-gate.sh` (wired in `.claude/settings.json`) refuses
+`/speckit-implement` without a passing design review and `gh pr create` / `gh pr merge` without a passing
+code review, and treats a review as stale once anything it covered changed after the recorded commit.
+Changing `verification.md` never makes a review stale. On a branch without a feature directory the hook
+asks for confirmation instead; put the verdict in the pull request. The hook needs `bash` and `jq`.
+
 ## Conventions
 
 - One Go module at the root; the binary is `whatsapp-mcp` (`cmd/whatsapp-mcp`); code goes in `internal/...`
