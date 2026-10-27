@@ -5,13 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/tiger-seo/whatsapp-mcp/internal/lock"
+	"github.com/tiger-seo/whatsapp-mcp/internal/private"
 )
 
 type result struct {
@@ -27,6 +30,17 @@ func runIn(t *testing.T, environ []string, args ...string) result {
 	return result{code, stdout.String(), stderr.String()}
 }
 
+// privateDir returns a new, existing data directory that only this user can reach. A bare t.TempDir() may
+// inherit wider access, as on Windows when the temporary directory is outside the user's profile.
+func privateDir(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "data")
+	if err := private.MkdirAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func (r result) expect(t *testing.T, code int) {
 	t.Helper()
 	if r.code != code {
@@ -35,7 +49,7 @@ func (r result) expect(t *testing.T, code int) {
 }
 
 func TestVersion(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	for _, environ := range [][]string{
 		nil,
 		{"WHATSAPP_MCP_LOG_LEVEL=verbose", "WHATSAPP_MCP_DATA_DIR=relative"},
@@ -133,7 +147,7 @@ func checkLogLines(t *testing.T, r result) {
 
 func writeConfig(t *testing.T, dir, content string) {
 	t.Helper()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := private.MkdirAll(dir); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0o600); err != nil {
@@ -142,7 +156,7 @@ func writeConfig(t *testing.T, dir, content string) {
 }
 
 func TestConfigLayers(t *testing.T) {
-	dir := filepath.Clean(t.TempDir())
+	dir := privateDir(t)
 	writeConfig(t, dir, "log_level = \"warn\"\n")
 	env := []string{"WHATSAPP_MCP_LOG_LEVEL=info"}
 
@@ -165,7 +179,7 @@ func TestConfigLayers(t *testing.T) {
 }
 
 func TestInvalidConfiguration(t *testing.T) {
-	r := runIn(t, []string{"WHATSAPP_MCP_LOG_LEVEL=verbose"}, "status", "--data-dir", t.TempDir())
+	r := runIn(t, []string{"WHATSAPP_MCP_LOG_LEVEL=verbose"}, "status", "--data-dir", privateDir(t))
 	r.expect(t, exitUsage)
 	if !strings.HasPrefix(r.stderr, "whatsapp-mcp: invalid configuration:\n") {
 		t.Errorf("stderr = %q", r.stderr)
@@ -179,7 +193,7 @@ func TestInvalidConfiguration(t *testing.T) {
 }
 
 func TestUnknownVariableWarning(t *testing.T) {
-	r := runIn(t, []string{"WHATSAPP_MCP_LOGLEVEL=debug"}, "status", "--data-dir", t.TempDir())
+	r := runIn(t, []string{"WHATSAPP_MCP_LOGLEVEL=debug"}, "status", "--data-dir", privateDir(t))
 	r.expect(t, exitError)
 	if !strings.Contains(r.stderr, `level=WARN msg="unknown environment variable" name=WHATSAPP_MCP_LOGLEVEL`) {
 		t.Errorf("no warning:\n%s", r.stderr)
@@ -223,7 +237,7 @@ func TestStatusDataDir(t *testing.T) {
 }
 
 func TestLockHeld(t *testing.T) {
-	dir := filepath.Clean(t.TempDir())
+	dir := privateDir(t)
 	l, err := lock.Acquire(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -260,7 +274,7 @@ func TestLockHeld(t *testing.T) {
 }
 
 func TestStdioStdinClosed(t *testing.T) {
-	r := runIn(t, nil, "stdio", "--data-dir", t.TempDir())
+	r := runIn(t, nil, "stdio", "--data-dir", privateDir(t))
 	r.expect(t, exitOK)
 	for _, want := range []string{"stdio: MCP server not implemented yet", `msg="shutting down" reason="stdin closed"`, "msg=stopped"} {
 		if !strings.Contains(r.stderr, want) {
@@ -268,4 +282,49 @@ func TestStdioStdinClosed(t *testing.T) {
 		}
 	}
 	checkLogLines(t, r)
+}
+
+// exposeDir gives other users access to an existing directory: mode 0755 on Unix, read access for
+// BUILTIN\Users on Windows.
+func exposeDir(t *testing.T, dir string) {
+	t.Helper()
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if out, err := exec.Command("icacls", dir, "/grant", "*S-1-5-32-545:(OI)(CI)R").CombinedOutput(); err != nil {
+		t.Fatalf("icacls: %v\n%s", err, out)
+	}
+}
+
+func TestOpenDataDirRefused(t *testing.T) {
+	dir := privateDir(t)
+	writeConfig(t, dir, "log_level = \"debug\"\n")
+	exposeDir(t, dir)
+	for _, name := range []string{"stdio", "serve", "pair", "status"} {
+		r := runIn(t, nil, name, "--data-dir", dir)
+		r.expect(t, exitError)
+		if r.stdout != "" {
+			t.Errorf("%s: stdout = %q, want empty", name, r.stdout)
+		}
+		if want := "whatsapp-mcp: data directory " + dir + ": other users can access it"; !strings.HasPrefix(r.stderr, want) {
+			t.Errorf("%s: stderr = %q, want prefix %q", name, r.stderr, want)
+		}
+		if strings.Contains(r.stderr, "level=DEBUG") {
+			t.Errorf("%s: config.toml was used: %q", name, r.stderr)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(dir, lock.FileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a lock file was created in the refused directory")
+	}
+}
+
+func TestFlagErrorEscaped(t *testing.T) {
+	r := runIn(t, nil, "stdio", "--\x1b[2Jbad")
+	r.expect(t, exitUsage)
+	if strings.Contains(r.stderr, "\x1b") {
+		t.Errorf("stderr kept an escape character: %q", r.stderr)
+	}
 }

@@ -4,10 +4,11 @@ import (
 	"errors"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/tiger-seo/whatsapp-mcp/internal/private"
 )
 
 func TestFileMissingOrEmpty(t *testing.T) {
@@ -23,7 +24,7 @@ func TestFileMissingOrEmpty(t *testing.T) {
 	})
 	t.Run("missing file", func(t *testing.T) {
 		fx := newFixture(t, "")
-		if err := os.MkdirAll(fx.dataDir, 0o700); err != nil {
+		if err := private.MkdirAll(fx.dataDir); err != nil {
 			t.Fatal(err)
 		}
 		mustLoad(t, fx, nil)
@@ -109,16 +110,5 @@ func TestFileUnreadable(t *testing.T) {
 	_, _, err := fx.load(nil)
 	if want := fx.configPath() + ": permission denied"; err == nil || err.Error() != want {
 		t.Errorf("error = %v, want %s", err, want)
-	}
-}
-
-func TestFileDataDirIsAFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "afile")
-	if err := os.WriteFile(path, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	fx := fixture{dataDir: path, userDir: t.TempDir()}
-	if _, _, err := fx.load(nil); err != nil {
-		t.Errorf("Load: %v; a data directory that is a file is reported when it is prepared", err)
 	}
 }

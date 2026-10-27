@@ -43,7 +43,16 @@ type Setting struct {
 // Settings returns the registry, in the order used by help and the debug dump. The data directory comes
 // first because config.toml is found through it.
 func Settings() []Setting {
-	settings := []Setting{
+	settings := registry()
+	for i := range settings {
+		settings[i].Env = EnvPrefix + strings.ToUpper(settings[i].Name)
+	}
+	return settings
+}
+
+// registry returns the descriptors without their environment variables. Tests replace it to add settings.
+var registry = func() []Setting {
+	return []Setting{
 		{
 			Name:      "data_dir",
 			Flag:      "data-dir",
@@ -65,10 +74,14 @@ func Settings() []Setting {
 			Text:      func(c *Config) string { return strings.ToLower(c.LogLevel.String()) },
 		},
 	}
-	for i := range settings {
-		settings[i].Env = EnvPrefix + strings.ToUpper(settings[i].Name)
+}
+
+// DefaultHelp returns the default as help shows it. A secret's default is not shown.
+func (s Setting) DefaultHelp(in Inputs) (string, error) {
+	if s.Secret {
+		return secretText, nil
 	}
-	return settings
+	return s.Default(in)
 }
 
 func parseLogLevel(s string) (any, error) {

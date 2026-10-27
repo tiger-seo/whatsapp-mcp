@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/tiger-seo/whatsapp-mcp/internal/private"
 )
 
 // fixture is a data directory with an optional config.toml, and a fake per-user config directory.
@@ -21,7 +23,7 @@ func newFixture(t *testing.T, toml string) fixture {
 	t.Helper()
 	fx := fixture{dataDir: filepath.Join(t.TempDir(), "data"), userDir: t.TempDir()}
 	if toml != "" {
-		if err := os.MkdirAll(fx.dataDir, 0o700); err != nil {
+		if err := private.MkdirAll(fx.dataDir); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(fx.configPath(), []byte(toml), 0o600); err != nil {
@@ -29,6 +31,17 @@ func newFixture(t *testing.T, toml string) fixture {
 		}
 	}
 	return fx
+}
+
+// privateDir returns a new, existing data directory that only this user can reach. A bare t.TempDir() may
+// inherit wider access, as on Windows when the temporary directory is outside the user's profile.
+func privateDir(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "data")
+	if err := private.MkdirAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 func (fx fixture) configPath() string { return filepath.Join(fx.dataDir, FileName) }

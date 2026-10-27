@@ -33,7 +33,7 @@ func TestNoUserConfigDir(t *testing.T) {
 	if !errors.As(err, &ue) || !strings.Contains(err.Error(), "--data-dir") || !strings.Contains(err.Error(), "WHATSAPP_MCP_DATA_DIR") {
 		t.Errorf("error = %v, want one suggesting --data-dir and WHATSAPP_MCP_DATA_DIR", err)
 	}
-	dir := t.TempDir()
+	dir := privateDir(t)
 	if _, _, err := Load(Inputs{Flags: map[string]string{"data-dir": dir}, UserConfigDir: failing}); err != nil {
 		t.Errorf("with --data-dir: %v", err)
 	}
@@ -78,25 +78,6 @@ func TestPrepareDataDir(t *testing.T) {
 	}
 	if err := PrepareDataDir(dir); err != nil {
 		t.Errorf("second call: %v", err)
-	}
-}
-
-func TestPrepareDataDirKeepsMode(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows ignores the mode bits")
-	}
-	dir := filepath.Join(t.TempDir(), "open")
-	if err := os.Mkdir(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := PrepareDataDir(dir); err != nil {
-		t.Fatal(err)
-	}
-	if fi, _ := os.Stat(dir); fi.Mode().Perm() != 0o755 {
-		t.Errorf("mode = %v, want 0755 unchanged", fi.Mode().Perm())
 	}
 }
 
