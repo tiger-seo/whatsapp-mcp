@@ -145,7 +145,7 @@ func TestProcessVersion(t *testing.T) {
 }
 
 func TestProcessSingleInstance(t *testing.T) {
-	dir := filepath.Clean(t.TempDir())
+	dir := privateDir(t)
 	env := childEnv()
 	holder := start(t, false, env, "serve", "--data-dir", dir)
 	holder.waitFor(t, "serve: HTTP server not implemented yet", 10*time.Second)
@@ -183,7 +183,7 @@ func TestProcessSingleInstance(t *testing.T) {
 }
 
 func TestProcessStdoutStaysEmpty(t *testing.T) {
-	p := start(t, false, childEnv(), "stdio", "--data-dir", t.TempDir(), "--log-level", "debug")
+	p := start(t, false, childEnv(), "stdio", "--data-dir", privateDir(t), "--log-level", "debug")
 	p.expectExit(t, exitOK, 10*time.Second)
 	if n := len(p.stdout.String()); n != 0 {
 		t.Errorf("stdio wrote %d bytes to stdout: %q", n, p.stdout)
@@ -196,7 +196,7 @@ func TestProcessStdoutStaysEmpty(t *testing.T) {
 }
 
 func testStopSignal(t *testing.T, sig, reason string) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	p := start(t, false, childEnv(), "serve", "--data-dir", dir)
 	p.waitFor(t, "serve: HTTP server not implemented yet", 10*time.Second)
 	if err := sendStop(p.cmd.Process, sig); err != nil {

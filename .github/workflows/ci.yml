@@ -13,6 +13,8 @@ concurrency:
 
 env:
   CGO_ENABLED: "0"
+  # Bump together with the Go toolchain; Dependabot does not see versions inside run steps.
+  GOVULNCHECK_VERSION: v1.9.0
 
 jobs:
   # Format, vet and the five cross-builds share one runner: each is a few seconds of work, while every extra job
@@ -21,8 +23,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - name: gofmt
@@ -37,6 +39,28 @@ jobs:
       - name: go vet
         if: ${{ !cancelled() }}
         run: go vet ./...
+      # go.sum pins what is downloaded; this checks that the module cache still matches it.
+      - name: go mod verify
+        if: ${{ !cancelled() }}
+        run: go mod verify
+      # Fails only on a vulnerability that the code can reach. Ones in unused parts of a dependency or of the
+      # standard library are listed in the log but do not fail the run.
+      - name: govulncheck
+        if: ${{ !cancelled() }}
+        run: go run golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} ./...
+      # The unit tests check the mode bits; this checks that the OS really keeps another user out. /tmp is
+      # sticky and world-readable, so a denial comes from the data directory itself.
+      - name: data directory denied to other users
+        if: ${{ !cancelled() }}
+        run: |
+          go build -o "$RUNNER_TEMP/whatsapp-mcp" ./cmd/whatsapp-mcp
+          dir=$(mktemp -u /tmp/whatsapp-mcp-data.XXXXXX)
+          "$RUNNER_TEMP/whatsapp-mcp" status --data-dir "$dir" && exit 1
+          echo 'log_level = "info"' > "$dir/config.toml"
+          ls -ld "$dir"
+          if sudo -u nobody ls "$dir" >/dev/null 2>&1; then echo "::error::nobody can list $dir"; exit 1; fi
+          if sudo -u nobody cat "$dir/config.toml" >/dev/null 2>&1; then echo "::error::nobody can read config.toml"; exit 1; fi
+          sudo -u nobody ls /tmp >/dev/null
       - name: build windows/amd64
         if: ${{ !cancelled() }}
         env: { GOOS: windows, GOARCH: amd64 }
@@ -68,8 +92,8 @@ jobs:
         os: ${{ fromJSON((github.event_name == 'pull_request' || github.ref == 'refs/heads/main') && '["ubuntu-latest", "windows-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - run: go test ./...

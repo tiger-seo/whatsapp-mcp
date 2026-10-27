@@ -92,7 +92,7 @@ func parseFlags(cmd *command, args []string, s *streams) (flags map[string]strin
 			writeCommandHelp(s.stdout, cmd)
 			return nil, exitOK, false
 		}
-		fmt.Fprintf(s.stderr, "whatsapp-mcp: %s: %v\n", cmd.name, err)
+		fmt.Fprintf(s.stderr, "whatsapp-mcp: %s: %s\n", cmd.name, config.Printable(err.Error()))
 		writeCommandHelp(s.stderr, cmd)
 		return nil, exitUsage, false
 	}
@@ -118,7 +118,7 @@ func writeCommandHelp(w io.Writer, cmd *command) {
 	}
 	in := config.Inputs{UserConfigDir: os.UserConfigDir}
 	for _, st := range settings {
-		def, err := st.Default(in)
+		def, err := st.DefaultHelp(in)
 		if err != nil {
 			def = "<user config dir>/whatsapp-mcp"
 		}

@@ -11,6 +11,8 @@ import (
 	"sync"
 
 	"github.com/gofrs/flock"
+
+	"github.com/tiger-seo/whatsapp-mcp/internal/private"
 )
 
 // FileName is the lock file in the data directory.
@@ -47,31 +49,58 @@ func (e *HeldError) Error() string {
 
 // Acquire takes the lock on dataDir without waiting, and records this process's PID in the lock file.
 // If another process holds it, the error is a *HeldError.
+//
+// The lock file must be a private regular file, never a link, so that whatever is at its path cannot make
+// Acquire or Release write to another file.
 func Acquire(dataDir string) (*Lock, error) {
 	path := filepath.Join(dataDir, FileName)
-	fl := flock.New(path, flock.SetFlag(os.O_CREATE|os.O_RDWR))
-	ok, err := fl.TryLock()
+	// flock does not expose its handle, so the PID goes through a second one. That one is opened first and
+	// checked; flock's must then be the same file, or a swap between the two opens could redirect the writes.
+	f, err := private.OpenFile(path, os.O_RDWR|os.O_CREATE)
 	if err != nil {
 		return nil, fmt.Errorf("lock %s: %w", path, err)
 	}
-	if !ok {
-		return nil, &HeldError{Path: path, DataDir: dataDir, PID: readPID(path)}
-	}
-	// flock does not expose its handle, so the PID goes through a second one.
-	f, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	fl := flock.New(path, flock.SetFlag(os.O_RDWR))
+	ok, err := fl.TryLock()
 	if err == nil {
-		if err = f.Truncate(pidOffset); err == nil {
-			_, err = f.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), pidOffset)
-		}
-		if err != nil {
-			f.Close()
-		}
+		err = sameFile(f, fl)
 	}
 	if err != nil {
+		fl.Close()
+		f.Close()
+		return nil, fmt.Errorf("lock %s: %w", path, err)
+	}
+	if !ok {
+		defer f.Close()
+		return nil, &HeldError{Path: path, DataDir: dataDir, PID: readPID(f)}
+	}
+	if err = f.Truncate(pidOffset); err == nil {
+		_, err = f.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), pidOffset)
+	}
+	if err != nil {
+		f.Close()
 		fl.Close()
 		return nil, fmt.Errorf("lock %s: %w", path, err)
 	}
 	return &Lock{Path: path, fl: fl, f: f}, nil
+}
+
+// errReplaced means the lock file was replaced between the two opens.
+var errReplaced = errors.New("the lock file was replaced while it was being opened; check who else can write to the data directory")
+
+func sameFile(f *os.File, fl *flock.Flock) error {
+	a, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	b, err := fl.Stat()
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(a, b) {
+		return errReplaced
+	}
+	return nil
 }
 
 // Release empties the lock file while still holding the lock, so a newer holder's PID is never lost,
@@ -83,12 +112,7 @@ func (l *Lock) Release() error {
 	return l.err
 }
 
-func readPID(path string) int {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0
-	}
-	defer f.Close()
+func readPID(f *os.File) int {
 	buf := make([]byte, 32)
 	n, err := f.ReadAt(buf, pidOffset)
 	if err != nil && !errors.Is(err, io.EOF) {

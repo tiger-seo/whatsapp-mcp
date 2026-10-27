@@ -2,7 +2,10 @@ package config
 
 import (
 	"errors"
+	"io/fs"
 	"log/slog"
+
+	"github.com/tiger-seo/whatsapp-mcp/internal/private"
 )
 
 // Inputs are everything Load reads, so that tests can supply their own.
@@ -62,7 +65,7 @@ func (c *Config) LogValues() [][]slog.Attr {
 	for _, s := range Settings() {
 		value := s.Text(c)
 		if s.Secret {
-			value = "(secret)"
+			value = secretText
 		}
 		o := c.origins[s.Name]
 		out = append(out, []slog.Attr{
@@ -79,12 +82,16 @@ func (c *Config) LogValues() [][]slog.Attr {
 // It reports all invalid values together, joined, and creates nothing: config.toml is only read, and
 // the data directory is created later by PrepareDataDir. The warnings are unknown prefixed environment
 // variables, for the caller to log.
+//
+// config.toml is trusted only inside a private data directory. If an existing data directory is not
+// private, the file is not read, and when every setting is otherwise valid the error is a *DataDirError.
 func Load(in Inputs) (*Config, []Warning, error) {
 	settings := Settings()
 	env := newEnvironment(in.Environ)
 	warnings := env.unknown(settings)
 	cfg := &Config{origins: map[string]Origin{}}
 	var errs []error
+	var dirErr error
 
 	// The data directory comes first, because config.toml is inside it.
 	var f *file
@@ -95,9 +102,13 @@ func Load(in Inputs) (*Config, []Warning, error) {
 			return nil, warnings, err
 		}
 		errs = append(errs, err)
+	} else if err := private.CheckDir(cfg.DataDir); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			dirErr = &DataDirError{Dir: cfg.DataDir, Err: err}
+		}
 	} else {
 		var err error
-		if f, err = readFile(cfg.DataDir); err != nil {
+		if f, err = readFile(cfg.DataDir, settings); err != nil {
 			errs = append(errs, err)
 		} else if f != nil {
 			errs = append(errs, f.checkKeys(settings)...)
@@ -111,6 +122,9 @@ func Load(in Inputs) (*Config, []Warning, error) {
 	if len(errs) > 0 {
 		return nil, warnings, errors.Join(errs...)
 	}
+	if dirErr != nil {
+		return nil, warnings, dirErr
+	}
 	return cfg, warnings, nil
 }
 
@@ -119,7 +133,7 @@ func resolve(s Setting, in Inputs, env *environment, f *file, cfg *Config) error
 	text := func(v string, o Origin) error {
 		parsed, err := s.ParseText(v)
 		if err != nil {
-			return &SettingError{Setting: s.Name, Origin: o, Value: v, Reason: err.Error()}
+			return newSettingError(s, o, v, err)
 		}
 		s.Apply(cfg, parsed)
 		cfg.origins[s.Name] = o

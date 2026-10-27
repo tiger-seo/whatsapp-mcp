@@ -8,11 +8,25 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gofrs/flock"
+
+	"github.com/tiger-seo/whatsapp-mcp/internal/private"
 )
+
+// privateDir returns a new, existing data directory that only this user can reach. A bare t.TempDir() may
+// inherit wider access, as on Windows when the temporary directory is outside the user's profile.
+func privateDir(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "data")
+	if err := private.MkdirAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
 
 func mustAcquire(t *testing.T, dir string) *Lock {
 	t.Helper()
@@ -50,7 +64,7 @@ func heldError(t *testing.T, err error) *HeldError {
 }
 
 func TestAcquireWritesPID(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	l := mustAcquire(t, dir)
 	if l.Path != filepath.Join(dir, FileName) {
 		t.Errorf("Path = %q", l.Path)
@@ -61,7 +75,7 @@ func TestAcquireWritesPID(t *testing.T) {
 }
 
 func TestSecondAcquireFails(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	l := mustAcquire(t, dir)
 	start := time.Now()
 	_, err := Acquire(dir)
@@ -75,7 +89,7 @@ func TestSecondAcquireFails(t *testing.T) {
 }
 
 func TestReleaseThenAcquire(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	l, err := Acquire(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +107,7 @@ func TestReleaseThenAcquire(t *testing.T) {
 }
 
 func TestStaleContentIgnored(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	path := filepath.Join(dir, FileName)
 	if err := os.WriteFile(path, []byte("\x00junk that is longer than any pid\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -105,7 +119,7 @@ func TestStaleContentIgnored(t *testing.T) {
 }
 
 func TestUnknownPID(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	fl := flock.New(filepath.Join(dir, FileName), flock.SetFlag(os.O_CREATE|os.O_RDWR))
 	if ok, err := fl.TryLock(); !ok || err != nil {
 		t.Fatalf("TryLock: %v, %v", ok, err)
@@ -141,7 +155,7 @@ func TestHelperHolder(t *testing.T) {
 }
 
 func TestOtherProcess(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDir(t)
 	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperHolder$")
 	cmd.Env = append(os.Environ(), "LOCK_HELPER_DIR="+dir)
 	stdin, err := cmd.StdinPipe()
@@ -173,4 +187,93 @@ func TestOtherProcess(t *testing.T) {
 	}
 	cmd.Wait()
 	mustAcquire(t, dir)
+}
+
+// outside writes a file outside the data directory, and returns a check that it was left alone.
+func outside(t *testing.T) (path string, unchanged func()) {
+	t.Helper()
+	path = filepath.Join(t.TempDir(), "outside")
+	const content = "precious\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path, func() {
+		t.Helper()
+		if data, err := os.ReadFile(path); err != nil || string(data) != content {
+			t.Errorf("file outside = %q, %v; want it unchanged", data, err)
+		}
+	}
+}
+
+func TestSymlinkRefused(t *testing.T) {
+	target, unchanged := outside(t)
+	dir := privateDir(t)
+	if err := os.Symlink(target, filepath.Join(dir, FileName)); err != nil {
+		t.Skipf("cannot create a symbolic link here: %v", err)
+	}
+	if _, err := Acquire(dir); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		t.Errorf("error = %v, want a symbolic link refused", err)
+	}
+	unchanged()
+}
+
+func TestDanglingSymlinkRefused(t *testing.T) {
+	dir := privateDir(t)
+	target := filepath.Join(t.TempDir(), "created")
+	if err := os.Symlink(target, filepath.Join(dir, FileName)); err != nil {
+		t.Skipf("cannot create a symbolic link here: %v", err)
+	}
+	if _, err := Acquire(dir); err == nil {
+		t.Error("Acquire followed a dangling link")
+	}
+	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Error("the link target was created")
+	}
+}
+
+func TestHardLinkRefused(t *testing.T) {
+	target, unchanged := outside(t)
+	dir := privateDir(t)
+	if err := os.Link(target, filepath.Join(dir, FileName)); err != nil {
+		t.Skipf("cannot create a hard link here: %v", err)
+	}
+	if _, err := Acquire(dir); err == nil || !strings.Contains(err.Error(), "more than one hard link") {
+		t.Errorf("error = %v, want a hard link refused", err)
+	}
+	unchanged()
+}
+
+func TestDirectoryRefused(t *testing.T) {
+	dir := privateDir(t)
+	if err := os.Mkdir(filepath.Join(dir, FileName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Acquire(dir); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Errorf("error = %v, want not a regular file", err)
+	}
+}
+
+func TestSameFile(t *testing.T) {
+	dir := privateDir(t)
+	a, b := filepath.Join(dir, "a"), filepath.Join(dir, "b")
+	for _, p := range []string{a, b} {
+		if err := os.WriteFile(p, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f, err := os.Open(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	for path, want := range map[string]error{a: nil, b: errReplaced} {
+		fl := flock.New(path, flock.SetFlag(os.O_RDWR))
+		if ok, err := fl.TryLock(); !ok || err != nil {
+			t.Fatalf("TryLock: %v, %v", ok, err)
+		}
+		if err := sameFile(f, fl); err != want {
+			t.Errorf("%s: sameFile = %v, want %v", filepath.Base(path), err, want)
+		}
+		fl.Close()
+	}
 }

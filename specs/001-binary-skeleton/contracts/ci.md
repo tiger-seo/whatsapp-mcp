@@ -12,7 +12,7 @@ later features refer to them.
 
 | Job (as shown in GitHub) | Runner | Steps | Fails when |
 | --- | --- | --- | --- |
-| `check` | ubuntu-latest | `gofmt`; `go vet`; then one step per target, `build windows/amd64`, `build linux/amd64`, `build linux/arm64`, `build darwin/amd64` and `build darwin/arm64`, each running `go vet ./...` and `go build -o /dev/null ./cmd/whatsapp-mcp` with `GOOS`/`GOARCH` set | `gofmt -l` lists any file (the files are printed); `go vet` reports anything; a target does not vet or build (the failing step names the target) |
+| `check` | ubuntu-latest | `gofmt`; `go vet`; `go mod verify`; `govulncheck` (version pinned in the workflow's `GOVULNCHECK_VERSION`); `data directory denied to other users` (builds the binary, lets `status` create a data directory under `/tmp`, writes `config.toml`, and checks that `sudo -u nobody` can neither list the directory nor read the file); then one step per target, `build windows/amd64`, `build linux/amd64`, `build linux/arm64`, `build darwin/amd64` and `build darwin/arm64`, each running `go vet ./...` and `go build -o /dev/null ./cmd/whatsapp-mcp` with `GOOS`/`GOARCH` set | `gofmt -l` lists any file (the files are printed); `go vet` reports anything; the module cache does not match `go.sum`; govulncheck finds a vulnerability that the code can reach (others are only listed); user `nobody` can reach the data directory; a target does not vet or build (the failing step names the target) |
 | `test (ubuntu-latest)` | ubuntu-latest | `go test ./...` | any test fails |
 | `test (windows-latest)`, `test (macos-latest)` | the named OS; **only for pull requests and pushes to `main`** | `go test ./...` | any test fails on that OS |
 
@@ -24,3 +24,8 @@ later features refer to them.
   because each spent most of its time on start-up and Go setup, and the Windows and macOS tests were limited to
   pull requests and `main`.
 - The workflow produces no artefacts. Release builds are feature 011 (GoReleaser).
+- Every action is pinned to a full commit SHA, with its version in a comment. `.github/dependabot.yml` proposes
+  updates to the actions and the Go modules weekly, as pull requests that run this workflow; a maintainer
+  reviews the release notes and the new SHA before merging. `GOVULNCHECK_VERSION` is bumped by hand.
+- Workflow token: `contents: read` only. The workflow runs on `pull_request`, never `pull_request_target`, and
+  uses no secrets.

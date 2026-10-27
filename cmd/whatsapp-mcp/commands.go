@@ -106,6 +106,11 @@ func startup(cmd *command, args []string, s *streams) (cfg *config.Config, logge
 	cfg, warnings, err := config.Load(config.Inputs{Flags: flags, Environ: s.environ, UserConfigDir: os.UserConfigDir})
 	if err != nil {
 		fmt.Fprintln(s.stderr, config.FormatError(err))
+		// An unusable data directory is a problem with the environment, not with the arguments.
+		var de *config.DataDirError
+		if errors.As(err, &de) {
+			return nil, nil, exitError, false
+		}
 		return nil, nil, exitUsage, false
 	}
 	logger = slog.New(slog.NewTextHandler(s.stderr, &slog.HandlerOptions{Level: cfg.LogLevel}))
@@ -117,7 +122,7 @@ func startup(cmd *command, args []string, s *streams) (cfg *config.Config, logge
 		logger.LogAttrs(context.Background(), slog.LevelDebug, "config", attrs...)
 	}
 	if err := config.PrepareDataDir(cfg.DataDir); err != nil {
-		fmt.Fprintln(s.stderr, "whatsapp-mcp: "+err.Error())
+		fmt.Fprintln(s.stderr, config.FormatError(err))
 		return nil, nil, exitError, false
 	}
 	return cfg, logger, exitOK, true
@@ -128,9 +133,9 @@ func acquireLock(cfg *config.Config, logger *slog.Logger, s *streams) (*lock.Loc
 	if err != nil {
 		var he *lock.HeldError
 		if !errors.As(err, &he) {
-			err = fmt.Errorf("data directory %s: %w", cfg.DataDir, err)
+			err = &config.DataDirError{Dir: cfg.DataDir, Err: err}
 		}
-		fmt.Fprintln(s.stderr, "whatsapp-mcp: "+err.Error())
+		fmt.Fprintln(s.stderr, config.FormatError(err))
 		return nil, exitError, false
 	}
 	logger.Debug("lock acquired", "path", l.Path, "pid", os.Getpid())
