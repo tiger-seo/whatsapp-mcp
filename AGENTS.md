@@ -1,9 +1,12 @@
-# whatsapp-mcp-next
+# whatsapp-mcp
 
 A WhatsApp MCP server in a single Go binary. It needs no Docker, no PostgreSQL and no C compiler. The
 WhatsApp client is whatsmeow.
 
 ## Start here
+
+`docs/` (the specification, the spike results and the roadmap) is kept locally and is not in the repository.
+Without it, ask the user for the specification before planning; don't guess the behaviour from the code.
 
 - `docs/specification.md` is the source of truth. Read §8 before planning or writing code.
   - §1–§7 describe existing behaviour. Use them as the reference for behaviour that must be kept.
@@ -12,7 +15,8 @@ WhatsApp client is whatsmeow.
 
 ## Current state
 
-Feature 001 (binary skeleton) is implemented; it is done once its CI run is verified. The code:
+Feature 001 (binary skeleton) is implemented and verified, including CI; it is done once pull request #1 is
+merged into `main`. The code:
 
 - `cmd/whatsapp-mcp`: the commands, flag parsing, the logger and the shutdown lifecycle. Only `version`
   does real work yet.
