@@ -55,7 +55,7 @@ hardens all of them); the P2 stories US5 and US6 follow.
 - [ ] T003 [P] Extend `specs/002-sqlite-storage/verification.md`, which already holds the "Owner reviews" table.
   Keep that table, and add these sections above it:
   - "Environment";
-  - "Gate results (readonly_shm, device upgrade transactions)";
+  - "Gate results (committed view, device upgrade transactions)";
   - "Automated tests per OS";
   - "Benchmark (SC-004)";
   - "Cross-identity evidence (SC-008)";
@@ -72,8 +72,9 @@ hardens all of them); the P2 stories US5 and US6 follow.
 
 **Purpose**: the shared building blocks every story uses, and the two gates the design depends on.
 
-**⚠️ CRITICAL**: no user story work starts until this phase is complete. If T014 fails on any OS, implement the
-fallback described in it before Phase 3.
+**⚠️ CRITICAL**: no user story work starts until this phase is complete. The T014 gate must pass on Windows,
+Linux and macOS before Phase 3; if it fails on one, fix the committed view, because there is no fallback (research
+R4, spike S2).
 
 - [ ] T005 [P] Create `internal/store/limits.go`: unexported constants for the approved profile, verbatim.
   - **Field sizes:** "JID ≤ 256 B; message ID ≤ 256 B; chat and contact names ≤ 1 KiB; text ≤ 256 KiB; caption
@@ -183,25 +184,49 @@ fallback described in it before Phase 3.
 - [ ] T013 [P] In `cmd/whatsapp-mcp/commands.go` `startup`, add a `slog.HandlerOptions.ReplaceAttr` that renders
   the `time` attribute in UTC, keeping the text handler and level. Test in `cmd/whatsapp-mcp/cli_test.go` that a
   log line's time ends in `Z`.
-- [ ] T014 **Gate**: create `internal/store/gate_test.go` with `TestReadOnlyPreflightChangesNothing`.
-  1. In a source directory, create a WAL database with modernc on one connection with
-     `PRAGMA wal_autocheckpoint=0`, and commit a row, so that it exists only in `-wal`.
-  2. While that connection is still open, build three case directories:
-     - A: copy the main file, `-wal` and `-shm`;
-     - B: copy only the main file and `-wal`;
-     - C: copy nothing yet.
+- [ ] T014 **Gate**: the committed view (research R4), test first.
+  1. Create `internal/store/gate_test.go` with `TestCommittedViewChangesNothing`, which must fail before step 2.
+     Build each fixture from a source database created with modernc in WAL mode with
+     `PRAGMA wal_autocheckpoint=0`: rows checkpointed into the main file, then rows committed one per transaction
+     only in `-wal`. A crash state is a copy taken while the source connection is still open. The fixtures are:
+     - clean: main only, after a clean close;
+     - main + empty `-wal`;
+     - main + empty `-wal` + empty `-shm`;
+     - main + `-wal`;
+     - main + `-wal` + `-shm`;
+     - main + `-wal` + zeroed `-shm`;
+     - main + `-wal` with the last frame cut in half (the last commit is lost);
+     - main + `-wal` restarted after a `PRAGMA wal_checkpoint(PASSIVE)`, with stale frames behind the new ones.
 
-     Then close the source connection cleanly (SQLite checkpoints and deletes `-wal`/`-shm`), and copy the main
-     file alone into C. The committed row must be readable in all three.
-  3. For each case, snapshot every file in the directory (name, size, mtime, SHA-256; helper `snapshotDir` in
-     `internal/store/helpers_test.go`).
-  4. Open `file:<path>?mode=ro&readonly_shm=1&_pragma=query_only(1)`, read the committed row, close, and
-     snapshot again.
+     For each fixture:
+     - Snapshot every file in its directory: name, size, modification time and SHA-256 (add the helper `snapshotDir` to
+       `internal/store/helpers_test.go`).
+     - Open through `openCommittedView` and read `count(*)` and `max(id)`. Close, then snapshot again.
+     - Assert that both snapshots are identical and that no file was created or removed.
+     - Assert that the result equals SQLite's own (the differential check): open a throwaway copy of the same
+       files read-write with the plain driver, and read the same values.
 
-  Assert: the row is visible, the snapshots are identical, and no file was created or removed. Run it on
-  Windows, Linux and macOS (CI) and record the results. **If it fails on any OS:** implement the fallback from
-  research R4 in `internal/store/preflight.go` (read the main file and WAL into memory, open via modernc
-  deserialisation) and make this test pass with it.
+     Two more fixtures need only the parser, with no SQLite open:
+     - a synthetic big-endian WAL (magic `0x377f0683`, checksums computed in the test) must give the same page
+       index as its little-endian twin;
+     - a WAL with format version ≠ 3007000, and one whose page size differs from the main file's, are refused
+       with `ErrNotDatabase`.
+  2. Create `internal/store/walview.go`:
+     - `openCommittedView(path) (dsn string, release func() error, err error)`. It opens the main file and `-wal`
+       with `os.Open` (read-only) and scans the WAL by the rules in research R4.
+     - The scan builds `map[uint32]int64` from page number to the frame's WAL offset. It streams the WAL rather
+       than reading it whole, and computes every offset in `int64`.
+     - It registers an `fs.FS` exposing only `db` with `vfs.New` and returns `file:db?mode=ro&vfs=<name>`.
+     - `release` closes the files and calls `(*vfs.FS).Close`. Callers close every connection first.
+     - The `fs.File` implements `Seek` (only `io.SeekStart`) and `Read`, as modernc's VFS uses them. Reads take
+       pages from the index or the main file and present bytes 18–19 as `1`. `Stat().Size()` is the committed
+       size.
+  3. Add `FuzzWALScan` in `internal/store/walview_test.go`. The seeds are the gate fixtures' WAL files. On any
+     input, the scan returns without panic. Every indexed offset plus the page size lies within the WAL file. The
+     index holds no more entries than the WAL has whole frames.
+
+  Run the gate on Windows, Linux and macOS (CI) and record the results under "Gate results". Do not start T023
+  until it passes on all three.
 - [ ] T015 [P] **Gate**: create `internal/store/device_upgrade_test.go` with
   `TestDeviceUpgradeStepsAreTransactional`:
   - locate the pinned whatsmeow module directory with
@@ -319,8 +344,9 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
 - [ ] T023 [US1] Create `internal/store/preflight.go`:
   - `checkHeader(path)` reads 100 bytes and requires `"SQLite format 3\x00"` and a power-of-two page size from 512
     to 65536 (stored value 1 = 65536); otherwise `ErrNotDatabase`;
-  - `preflight(ctx, path) (pf preflightResult, err error)` opens `file:<path>?mode=ro&readonly_shm=1&_pragma=query_only(1)`,
-    or uses the T014 fallback;
+  - `preflight(ctx, path) (pf preflightResult, err error)` opens one connection on the DSN from
+    `openCommittedView` (T014), and closes the connection then calls `release` before returning on every path.
+    It never opens `path` itself through SQLite;
   - it reads `sqlite_master` for the presence of `mcp_version`, `chats`, `messages`, `whatsmeow_version` and any
     other `whatsmeow_%` table;
   - it reads `SELECT count(*), max(version) FROM mcp_version` and `SELECT version, compat FROM whatsmeow_version`;
@@ -820,8 +846,7 @@ result, then merge again and check nothing changes.
 ### Phase Dependencies
 
 - **Setup (Phase 1)**: none.
-- **Foundational (Phase 2)**: needs T001. T014 and T015 are gates; T014's fallback, if needed, is done before
-  Phase 3.
+- **Foundational (Phase 2)**: needs T001. T014 and T015 are gates and must pass on all three OSes before Phase 3.
 - **US1 (Phase 3)**: needs Phase 2. It is the MVP.
 - **US2 (Phase 4)**: needs US1 (`Open`, preflight and the runner exist).
 - **US3 (Phase 5)**: needs US1 (`Open`); independent of US2.
@@ -838,7 +863,7 @@ Tests first (they must fail), then implementation, then the checkpoint run on CI
 ### Parallel Opportunities
 
 - Phase 1: T002, T003 and T004 together.
-- Phase 2: T005–T013 and T015 are all different files and run together; T014 needs only T001; T016 follows T005,
+- Phase 2: T005–T013 and T015 are all different files and run together; T014 needs T001 and T006 (`ErrNotDatabase`); T016 follows T005,
   T008 and T009.
 - US1: T017, T018 and T019 together; T021 alongside T020.
 - US2: T026–T029 together.

@@ -19,7 +19,8 @@ The design follows [research.md](research.md):
 
 - two connection pools, 1 writer and 4 readers (R2);
 - whatsmeow's per-step transactional upgrades, verified for the pinned version (R3);
-- a `mode=ro&readonly_shm=1` preflight (R4);
+- a preflight that reads through a read-only committed view, which replays the WAL in Go and is served to SQLite
+  by `modernc.org/sqlite/vfs`, so no file is opened for writing (R4, spike S2);
 - pre-folded columns searched with `instr` for Unicode, case-insensitive, literal search (R7);
 - a semaphore admission gate with deadlines (R9);
 - a free-space reserve (R10).
@@ -77,7 +78,7 @@ tests, in one package and small changes to `cmd/whatsapp-mcp` and `internal/priv
 | VI. Testable, and tested | store tested against SQLite in temp dirs with no network; whatsmeow's *client* is not used here; gofmt, vet and test gate the feature | Pass |
 | VII. Correct MCP tools | the store gives `(chat_jid, id)` lookups and ambiguous-ID errors, a 200 cap and distinct not-found/invalid errors that 005/006 map to tool errors | Pass |
 | VIII. Real accounts handled with care | synthetic devices only; no pairing or connection; restored copies never connect | Pass |
-| IX. Simplicity | three justified pure-Go dependencies (R14); own 60-line migration runner instead of a framework; no settings added (limits are constants) | Pass |
+| IX. Simplicity | three justified pure-Go dependencies (R14); own 60-line migration runner instead of a framework; no settings added (limits are constants). The preflight's WAL view (about 150 lines) uses `modernc.org/sqlite/vfs` from the same module, so it adds no dependency; spike S2 showed that no SQLite open mode avoids it (R4) | Pass |
 | X. Security planned per feature | the spec's Security section takes up F03, F05, F09–F13 and F16 and defers the others to named features; abuse cases are tests; evidence goes to `verification.md`. High findings for capabilities this feature enables: F03, F05 and F09 are addressed, and F15 is covered by existing CI. None open, no exceptions | Pass |
 
 Post-design re-check (after data model and contracts): unchanged. All Pass, with the one justified deviation under
@@ -117,6 +118,7 @@ internal/store/
 ├── store.go             # Store, Open, Close, Device
 ├── files.go             # path forms, artifact checks, creation (R6)
 ├── preflight.go         # header check and read-only version preflight (R4)
+├── walview.go           # committed view: WAL replay served read-only through modernc's fs.FS VFS (R4)
 ├── migrate.go           # migration runner (R5)
 ├── migrations/
 │   └── 0001_init.sql    # mcp_version, chats, messages, indexes
@@ -145,9 +147,9 @@ The device-store container is handed out through `Store.Device()` for 003. `cmd/
 
 ## Implementation notes for task generation
 
-1. **Gate first:** the SC-006 byte-for-byte preflight test and the `readonly_shm` behaviour on Windows, Linux and
-   macOS (R4), plus `TestDeviceUpgradeStepsAreTransactional` (R3). If `readonly_shm` fails anywhere, switch to the
-   in-memory fallback before building on it.
+1. **Gate first:** the committed view (R4) with its byte-for-byte and differential tests on Windows, Linux and
+   macOS, plus `TestDeviceUpgradeStepsAreTransactional` (R3). Nothing is built on the preflight until the view
+   passes on all three.
 2. Then files/private → preflight → migrations → `Open`/`Close` → CLI wiring (US1, US2).
 3. Writes and rules (US3), then queries (US4), single-message lookups (US5), then the merge (US6).
 4. Limits, admission, disk, events and the abuse cases (US7) run across all of the above. Each approved limit gets a

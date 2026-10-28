@@ -73,27 +73,71 @@ were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-202
   2. If the main file is missing or has length 0, there is nothing to preflight: it is a fresh database.
   3. Otherwise read its first 100 bytes in Go and require the SQLite magic `SQLite format 3\0` and a valid page
      size. Anything else is "not a usable database" (US1 scenario 3) without SQLite ever opening the file.
-  4. Open one connection with `file:<path>?mode=ro&readonly_shm=1&_pragma=query_only(1)` (no other pragmas) and
-     read: whether `mcp_version`, `whatsmeow_version` and any other `mcp_`/`whatsmeow_` tables exist; the message
-     version; the device `version` and `compat`. Close it.
+  4. Build the **committed view** (below) and open one connection through it. Read whether `mcp_version`,
+     `whatsmeow_version` and any other `mcp_`/`whatsmeow_` tables exist, the message version, and the device
+     `version` and `compat`. Close the connection and unregister the view.
   5. Refuse a newer message version, a device `compat` above the bundled table, a version table with zero or
      more than one row, or schema tables present without their version table.
-- **Rationale:** `mode=ro` never writes the main file. `readonly_shm=1` makes SQLite open an existing `-shm`
-  read-only and, if there is none, read the WAL through private heap memory instead of creating `-shm`. Committed
-  transactions still in the WAL are therefore visible to the preflight (FR-010) and no sidecar is created. The
-  SC-006 test proves it per platform: it snapshots name, size, modification time and SHA-256 of every file in the
-  directory before and after a refused open, for each refusal (newer message schema, newer device schema, bad
+- **The committed view:** SQLite never opens the real files during the preflight. A read-only `io/fs.FS`
+  (`internal/store/walview.go`) is registered with `modernc.org/sqlite/vfs.New`, and the preflight connects with
+  `file:db?mode=ro&vfs=<name>`. Through that VFS SQLite can neither write nor create a file. The view exposes a
+  single name, `db`, and no `-wal`, `-shm` or `-journal` names.
+  - **WAL scan:** the view opens the main file and `-wal` read-only with `os.Open` and scans the WAL once, in a
+    stream, as SQLite's recovery does:
+    - The header must have magic `0x377f0682` or `0x377f0683`, which selects the checksum byte order, and
+      format version 3007000. A different version is refused as "not a usable database".
+    - The WAL's page size must be a power of two from 512 to 65536 and equal the main header's page size. A
+      mismatch is also refused as "not a usable database".
+    - If the header checksum is wrong, the WAL holds no commit and is ignored, as SQLite would ignore it.
+    - A frame counts only if its salts equal the header's, its page number is not 0, and the running checksum
+      matches. The first frame that fails ends the scan.
+    - Frames apply only up to the last commit frame. That frame's commit field sets the database size in pages.
+  - **Page index:** the scan keeps an index from page number to the WAL offset of that page's latest committed
+    frame, not the page data. Memory grows with the number of distinct pages in the WAL (bounded by the WAL size
+    divided by the page size), never with the database.
+  - **Reads:** a page found in the index is read from the WAL with `ReadAt`, and any other page from the main
+    file with `ReadAt`. A page past the main file's end that the WAL does not supply reads as zeros. The file
+    size reported to SQLite is the committed size.
+  - **Format bytes:** bytes 18–19 (file format write and read version) are presented as `1` (rollback journal),
+    so SQLite never asks for shared memory.
+  - **`-shm`:** it is never read. Its only job is to coordinate live connections, and the preflight runs while
+    holding the instance lock, so none exists.
+- **Rationale:** spike S2 (`docs/spikes.md`, 2026-10-28) tried every SQLite read-only mode on Windows and Linux,
+  using clean, empty-sidecar, crash, torn-frame and restarted-WAL states.
+  - `mode=ro` creates or rewrites `-shm` and `-wal` in every state.
+  - `readonly_shm=1` is unchanged only when both `-wal` and `-shm` already exist. After a clean close it creates
+    empty sidecars on Windows. On Linux it fails to open when there is no `-shm`.
+  - `immutable=1` misses every commit still in the WAL.
+  - Deserialising the whole image is correct but needs about 3× the database size in memory (3.0 GB for 1 GB).
+  - The committed view gave SQLite's own answer in every state on both platforms and changed no file. On the
+    1 GB database it ran in 2.4 s with a 19 MB peak RSS, and that time was mostly a full-table scan the real
+    preflight never does.
+
+  The SC-006 test proves it per platform. It snapshots name, size, modification time and SHA-256 of every file in
+  the directory before and after a refused open, for each refusal (newer message schema, newer device schema, bad
   version metadata, not a database), with and without a WAL holding committed data.
-- **Risk and fallback:** if the SC-006 test shows that `readonly_shm` is not honoured on one platform, the
-  preflight reads the main file and WAL into memory and opens them with `modernc.org/sqlite`'s in-memory
-  deserialisation instead. This is slower, but bounded by the startup budget. Tasks schedule the SC-006 test
-  first so that this is settled before the rest of the store is built on it.
+- **Correctness of the view:** the WAL rules above are the part we own, so they are tested against SQLite
+  itself:
+  - **Fixture states:** a differential test builds clean, empty-WAL, crash, zeroed-`-shm`, torn-last-frame and
+    restarted-WAL states. For each, it compares what the view returns with what SQLite returns when it opens a
+    throwaway copy of the same files read-write.
+  - **Fuzzing:** a fuzz target feeds arbitrary WAL bytes. The view may refuse or ignore the WAL, but it must
+    never panic, read past either file's end, or index more pages than the WAL can hold.
+- **Not verified by the spike:** macOS (the binary builds; CI runs the gate there before anything is built on
+  it); big-endian checksums (magic `0x377f0683`, written only by big-endian hosts, covered by a synthetic
+  fixture); databases over 4 GiB (page numbers are 32-bit, so offsets are computed in `int64`).
 - **Integrity:** the preflight does not run `PRAGMA integrity_check` on every start, which would cost seconds to
   minutes on a large history. Corruption in the header or schema pages is caught by steps 3–4. Corruption deeper
   in the file surfaces as `SQLITE_CORRUPT` on access and fails that operation safely. Full `integrity_check` and
   `foreign_key_check` are part of the restore procedure (FR-047).
-- **Alternatives:** `immutable=1` (ignores the WAL, so it would miss committed state); copying the files to a
-  temporary directory (creates new sensitive artifacts).
+- **Alternatives:**
+  - `mode=ro&readonly_shm=1`, the earlier decision, abandoned after S2: it creates sidecars on Windows and
+    fails on Linux when there is no `-shm`.
+  - `immutable=1`, which ignores the WAL and so misses committed state.
+  - `immutable=1` when the WAL holds no commit and the view otherwise: two code paths for no gain, since the
+    view handles both cases.
+  - In-memory deserialisation, which holds the whole database in memory.
+  - Copying the files to a temporary directory, which creates new sensitive artifacts.
 
 ## R5. Message-schema migrations
 
