@@ -23,3 +23,4 @@ CI can produce the macOS evidence the gate needs.
 | design | 2026-10-28 | 3ab978f | BLOCK | |
 | design | 2026-10-28 | 0e5d6e0 | CONCERNS | Accepted 2026-10-28: both medium and all low findings fixed in the design before implementation; SQLite's memory budget accepted as holding up to about 1 million messages from one contact (research R16) |
 | design | 2026-10-28 | fdd03f0 | BLOCK | |
+| design | 2026-10-28 | fe48fce | BLOCK | |
