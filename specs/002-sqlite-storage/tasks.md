@@ -52,7 +52,8 @@ hardens all of them); the P2 stories US5 and US6 follow.
   - the store owns `<data dir>/whatsapp.db`, and no other package issues database queries;
   - `Device()` is the only shared handle;
   - the store is safe for concurrent use.
-- [ ] T003 [P] Create `specs/002-sqlite-storage/verification.md` with sections:
+- [ ] T003 [P] Extend `specs/002-sqlite-storage/verification.md`, which already holds the "Owner reviews" table.
+  Keep that table, and add these sections above it:
   - "Environment";
   - "Gate results (readonly_shm, device upgrade transactions)";
   - "Automated tests per OS";
