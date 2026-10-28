@@ -12,6 +12,7 @@ CI can produce the macOS evidence the gate needs.
 | 2026-10-28 | CI run 40671433110 (commit 915c280): ubuntu-latest, windows-latest, macos-latest (arm64) | `go test -timeout 15m ./...` | PASS on all three: `internal/store` ok (0.268 s, 1.068 s, 0.160 s), every other package ok; `check` job (gofmt, vet, govulncheck, five cross-builds) PASS |
 | 2026-10-28 | windows/amd64 (commit after a024055: a log header SQLite ignores is ignored) | `CGO_ENABLED=0 go test -count=1 ./...` | PASS: all packages; `TestCommittedViewChangesNothing` 9/9 fixtures, including a zeroed `-wal` next to a clean database; linux and macOS not yet re-run on this change |
 | 2026-10-28 | windows/amd64 (commit after 9a82bfe: a log no longer than its header is ignored, as SQLite does) | `CGO_ENABLED=0 go test -count=1 ./internal/store/` | PASS |
+| 2026-10-28 | CI run 40677470454 (commit f78d7f7, includes 79e031f and the 32-byte log change): ubuntu-latest, windows-latest, macos-latest (arm64) | `go test -timeout 15m ./...` | PASS on all three: `internal/store` ok (0.382 s, 1.912 s, 0.159 s); `check` job PASS |
 
 ## Owner reviews
 
