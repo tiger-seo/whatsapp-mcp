@@ -66,16 +66,12 @@ func TestScanWALRefusals(t *testing.T) {
 	binary.BigEndian.PutUint32(badVersion[4:8], walVersion+1)
 	badVersion = reencodeWAL(badVersion, walMagicLE, binary.LittleEndian)
 
-	badMagic := bytes.Clone(wal)
-	binary.BigEndian.PutUint32(badMagic[0:4], 0x12345678)
-
 	for name, tc := range map[string]struct {
 		wal      []byte
 		pageSize int64
 	}{
-		"format version": {badVersion, 4096},
-		"page size":      {wal, 8192},
-		"magic":          {badMagic, 4096},
+		"format version":            {badVersion, 4096},
+		"page size unlike the main": {wal, 8192},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := scanWAL(bytesReader(tc.wal), tc.pageSize); !errors.Is(err, ErrNotDatabase) {
@@ -89,12 +85,19 @@ func TestScanWALIgnores(t *testing.T) {
 	wal := fixtureWAL(t)
 	badHeaderSum := bytes.Clone(wal)
 	badHeaderSum[24] ^= 0xff
+	badMagic := bytes.Clone(wal)
+	binary.BigEndian.PutUint32(badMagic[0:4], 0x12345678)
+	badPageSize := bytes.Clone(wal)
+	binary.BigEndian.PutUint32(badPageSize[8:12], 1000)
 
 	for name, b := range map[string][]byte{
 		"empty":                 nil,
 		"shorter than a header": wal[:walHeaderSize-1],
 		"header only":           wal[:walHeaderSize],
 		"bad header checksum":   badHeaderSum,
+		"unknown magic":         badMagic,
+		"invalid page size":     badPageSize,
+		"zeros":                 make([]byte, walHeaderSize+walFrameHeaderSize+4096),
 	} {
 		t.Run(name, func(t *testing.T) {
 			idx := mustScan(t, b, 4096)

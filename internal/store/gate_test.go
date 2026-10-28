@@ -58,6 +58,9 @@ func gateFixtures(t testing.TB, root string) map[string]string {
 	copyFiles(t, src, newDir("empty-wal+empty-shm"), "")
 	writeZeros(t, filepath.Join(dirs["empty-wal+empty-shm"], gateDB+"-wal"), 0)
 	writeZeros(t, filepath.Join(dirs["empty-wal+empty-shm"], gateDB+"-shm"), 0)
+	// What a power loss can leave on a filesystem that shows unwritten blocks as zeros: SQLite ignores the log.
+	copyFiles(t, src, newDir("zeroed-wal"), "")
+	writeZeros(t, filepath.Join(dirs["zeroed-wal"], gateDB+"-wal"), walHeaderSize+walFrameHeaderSize+4096)
 
 	// A log restarted after a full checkpoint: new frames under new salts, with stale frames behind them.
 	src2 := filepath.Join(root, "source-restart")
@@ -168,6 +171,7 @@ func TestCommittedViewChangesNothing(t *testing.T) {
 		"clean":               {150, 150},
 		"empty-wal":           {150, 150},
 		"empty-wal+empty-shm": {150, 150},
+		"zeroed-wal":          {150, 150},
 		"wal":                 {150, 150},
 		"wal+shm":             {150, 150},
 		"wal+zeroed-shm":      {150, 150},
