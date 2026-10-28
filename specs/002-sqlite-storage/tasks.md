@@ -58,7 +58,7 @@ before the tasks it blocks start, and before the code review at the latest.
 
 **Purpose**: dependencies, package skeleton, evidence file.
 
-- [ ] T001 Add the dependencies to `go.mod`/`go.sum`:
+- [X] T001 Add the dependencies to `go.mod`/`go.sum`:
   - `go get modernc.org/sqlite@v1.61.0 go.mau.fi/whatsmeow@v0.0.0-20261027104441-1eec1136a50b golang.org/x/text@latest`
     (keep the resolved x/text version);
   - check that `go.mau.fi/util` resolves to v0.11.0;
@@ -70,7 +70,7 @@ before the tasks it blocks start, and before the code review at the latest.
   - the store owns `<data dir>/whatsapp.db`, and no other package issues database queries;
   - `Device()` is the only shared handle;
   - the store is safe for concurrent use.
-- [ ] T003 [P] Extend `specs/002-sqlite-storage/verification.md`, which already holds the "Owner reviews" table.
+- [X] T003 [P] Extend `specs/002-sqlite-storage/verification.md`, which already holds the "Owner reviews" table.
   Keep that table, and add these sections above it:
   - "Environment";
   - "Gate results (committed view, device upgrade transactions)";
@@ -96,7 +96,7 @@ before the tasks it blocks start, and before the code review at the latest.
 Linux and macOS before Phase 3; if it fails on one, fix the committed view, because there is no fallback (research
 R4, spike S2).
 
-- [ ] T005 [P] Create `internal/store/limits.go`: unexported constants for the approved profile, verbatim.
+- [X] T005 [P] Create `internal/store/limits.go`: unexported constants for the approved profile, verbatim.
   - **Field sizes:** "JID ≤ 256 B; message ID ≤ 256 B; chat and contact names ≤ 1 KiB; text ≤ 256 KiB; caption
     ≤ 256 KiB; search text ≤ 1 KiB; URL ≤ 4 KiB; direct path ≤ 4 KiB; MIME type ≤ 255 B; original file name
     ≤ 1 KiB".
@@ -113,7 +113,7 @@ R4, spike S2).
   - **Disk:** "Free-space reserve 256 MiB … measurement at most 30 s old; … writes resume when ≥ 512 MiB is free";
     WAL limit 64 MiB.
   - Every limit is defined in bytes, with KiB = 1024.
-- [ ] T006 [P] Create `internal/store/errors.go` with the error set of `contracts/store-api.md` § Errors:
+- [X] T006 [P] Create `internal/store/errors.go` with the error set of `contracts/store-api.md` § Errors:
   - sentinels `ErrInvalid`, `ErrNotFound`, `ErrNotMedia`, `ErrResourceLimit`, `ErrBusy`, `ErrClosed`, `ErrDiskLow`,
     `ErrIndeterminate`, `ErrSchemaTooNew`, `ErrSchemaInvalid`, `ErrUnsafeStorage`, `ErrNotDatabase`, `ErrIO`;
   - types `ValidationError{Field, Reason}`, `NotFoundError{ChatJID, ID}`, `AmbiguousIDError{ChatJIDs}`,
@@ -125,7 +125,7 @@ R4, spike S2).
 
   Test the `errors.Is`/`errors.As` mapping and that `Error()` never contains the inputs it was given beyond
   identifiers, in `internal/store/errors_test.go`.
-- [ ] T007 [P] Create `internal/store/events.go`:
+- [X] T007 [P] Create `internal/store/events.go`:
   - a typed event logger over `*slog.Logger` with methods for the events in
     `contracts/startup-and-events.md` (`open`, `refused`, `preflight`, `upgrade`, `migrate`, `ready`, `close`,
     `ioError`, `limit`);
@@ -145,7 +145,7 @@ R4, spike S2).
   Test in `internal/store/events_test.go` and `internal/store/walog_test.go`, with a capturing `slog.Handler`
   helper in `internal/store/helpers_test.go`. The `walog` test checks that an argument holding a secret marker
   never appears in the output, and that `Sub` nests module paths.
-- [ ] T008 [P] Create `internal/store/fold.go`:
+- [X] T008 [P] Create `internal/store/fold.go`:
   - `fold(s string) string` = `cases.Fold().String(norm.NFC.String(s))`;
   - `registerFold()` registers it once (`sync.Once`) as the deterministic SQL function `mcp_fold(text)` via
     `sqlite.RegisterDeterministicScalarFunction`.
@@ -161,7 +161,7 @@ R4, spike S2).
   `internal/store/fold_test.go` adds a golden table: "ПРИВІТ"→"привіт", "ÉTÉ"→"été", composed é = decomposed é,
   "ß"→"ss", Greek final sigma, "ete"≠fold("été"), `%`/`_` unchanged. A change in x/text that alters any row fails
   the test.
-- [ ] T009 [P] Create `internal/store/validate.go`. It covers the rules from data-model.md § Validation and
+- [X] T009 [P] Create `internal/store/validate.go`. It covers the rules from data-model.md § Validation and
   research R11, using `types.ParseJID` from `go.mau.fi/whatsmeow/types`:
   - `parseChatJID`: server `s.whatsapp.net`, `g.us` or `lid`; non-empty user; ≤ 256 B;
   - `parseSenderJID`: server `s.whatsapp.net` or `lid`; the device part is stripped, so
@@ -182,7 +182,7 @@ R4, spike S2).
   - "+49 151 1234567", "49-151-1234567" and "491511234567@s.whatsapp.net" → "491511234567";
   - `FuzzNormalizePhone` and `FuzzValidateMessage` (no panic; accepted values round-trip; rejected values name a
     field).
-- [ ] T010 [P] Add `CheckFile(path string) (FileID, error)` to `internal/private/private.go`, with implementations
+- [X] T010 [P] Add `CheckFile(path string) (FileID, error)` to `internal/private/private.go`, with implementations
   in `private_unix.go`, `private_darwin.go` and `private_windows.go`:
   - it opens the existing path without following links (as `OpenFile` does, read-only);
   - it runs `checkFile` on the handle;
@@ -229,7 +229,7 @@ R4, spike S2).
     (the holders), and a `StoreMessage` caller is admitted at once; each waiting deep caller counts once toward
     the 64-waiter cap; a deep caller still waiting at `close` gets `ErrClosed`;
   - no goroutine leaks (count before and after).
-- [ ] T012 [P] Create `internal/store/disk.go`, `disk_unix.go` (`unix.Statfs`, `Bavail*uint64(Bsize)`) and
+- [X] T012 [P] Create `internal/store/disk.go`, `disk_unix.go` (`unix.Statfs`, `Bavail*uint64(Bsize)`) and
   `disk_windows.go` (`windows.GetDiskFreeSpaceEx`).
   - `diskGuard{free func(dir string) (uint64, error); now func() time.Time}`: cached for at most 30 s.
   - `check()` returns `ErrDiskLow` below 256 MiB. Once refused, writes stay refused until ≥ 512 MiB is free.
@@ -237,7 +237,7 @@ R4, spike S2).
   Tests in `internal/store/disk_test.go` with an injected `free` and clock: 256 MiB exactly passes and 1 byte less
   fails; resumption needs 512 MiB; the cache is refreshed after 30 s. A smoke test calls the real `free` on
   `t.TempDir()`.
-- [ ] T013 [P] In `cmd/whatsapp-mcp/commands.go` `startup`, add a `slog.HandlerOptions.ReplaceAttr` that renders
+- [X] T013 [P] In `cmd/whatsapp-mcp/commands.go` `startup`, add a `slog.HandlerOptions.ReplaceAttr` that renders
   the `time` attribute in UTC, keeping the text handler and level. Test in `cmd/whatsapp-mcp/cli_test.go` that a
   log line's time ends in `Z`.
 - [X] T014 **Gate**: the committed view (research R4), test first.
@@ -283,7 +283,7 @@ R4, spike S2).
 
   Run the gate on Windows, Linux and macOS (CI) and record the results under "Gate results". Do not start T023
   until it passes on all three.
-- [ ] T015 [P] **Gate**: create `internal/store/device_upgrade_test.go` with
+- [X] T015 [P] **Gate**: create `internal/store/device_upgrade_test.go` with
   `TestDeviceUpgradeStepsAreTransactional`:
   - locate the pinned whatsmeow module directory with
     `exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "go.mau.fi/whatsmeow")`, and skip with a clear message if
@@ -293,7 +293,7 @@ R4, spike S2).
   - assert that the highest target version equals `len(upgrades.Table)` (16).
 
   Record the result.
-- [ ] T016 Extend `internal/store/helpers_test.go` with:
+- [X] T016 Extend `internal/store/helpers_test.go` with:
   - `newDataDir(t)`, a private directory via `private.MkdirAll`;
   - `openTest(t, dir)`, which opens a store with a capturing logger;
   - `seedDevice(t, st)`, which saves a synthetic `store.Device` with random keys and a made-up JID through
@@ -317,7 +317,7 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
 
 ### Tests for User Story 1 ⚠️
 
-- [ ] T017 [P] [US1] `internal/store/files_test.go`:
+- [X] T017 [P] [US1] `internal/store/files_test.go`:
   - **Path forms:** on Windows, `\\server\share\x`, `\\?\C:\x`, `\\.\C:\x` and `C:\x:stream` are rejected with
     `ErrUnsafeStorage` before any file is touched.
   - **Resolved drives (Windows):** a `subst` drive pointing at a private local directory is accepted, and its
@@ -341,7 +341,7 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
   - **Created file swapped:** a test hook after `createDB` and before the writer opens renames another file over
     the new `whatsapp.db`; `Open` fails with `unsafe_artifact`.
   - **Permissions:** an existing `whatsapp.db` with mode 0644 is refused with the chmod fix and left at 0644.
-- [ ] T018 [P] [US1] `internal/store/open_test.go`:
+- [X] T018 [P] [US1] `internal/store/open_test.go`:
   - **Fresh directory:** opening creates `whatsapp.db`; `whatsmeow_version` = 16; `mcp_version` = latest; the
     file is 0600 on Unix and passes `private.CheckFile` on all OSes; the same holds for `-wal` and `-shm` while
     open.
@@ -359,7 +359,7 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
     connection. A query that forces a large sort (`ORDER BY` on an unindexed expression over 50,000 seeded rows)
     and a `CREATE INDEX` on a scratch table create no new file in the data directory, in `os.TempDir()` or in
     `SQLITE_TMPDIR`; compare directory listings before and after.
-- [ ] T019 [P] [US1] `cmd/whatsapp-mcp/e2e_test.go`:
+- [X] T019 [P] [US1] `cmd/whatsapp-mcp/e2e_test.go`:
   - `stdio` with closed stdin on an empty `--data-dir` exits 0, creates `whatsapp.db`, and logs `store.ready`;
   - a second run logs no `store.migrate`;
   - `pair` opens and closes the store, then still reports "not implemented" with its existing exit code;
@@ -374,7 +374,7 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
 
 ### Implementation for User Story 1
 
-- [ ] T020 [US1] Create `internal/store/files.go`, with `files_windows.go` and `files_other.go`:
+- [X] T020 [US1] Create `internal/store/files.go`, with `files_windows.go` and `files_other.go`:
   - `checkPathForm(dataDir)`:
     - Windows: reject UNC, `\\?\`, `\\.\` and any `:` after the drive designator. Then open the directory and
       check where it resolves (research R6): `GetFinalPathNameByHandle` must not give `\\?\UNC\`, `GetDriveType`
@@ -392,7 +392,7 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
   Errors are `*StorageError` with code `unsafe_artifact`, `orphan_sidecar`, `rollback_journal`, `unsupported_path`
   or `not_private`,
   plus the `private` fix text.
-- [ ] T021 [P] [US1] Create `internal/store/migrations/0001_init.sql` exactly as data-model.md specifies:
+- [X] T021 [P] [US1] Create `internal/store/migrations/0001_init.sql` exactly as data-model.md specifies:
   - `CREATE TABLE mcp_version (version INTEGER NOT NULL) STRICT`, and `INSERT INTO mcp_version VALUES (1)`.
   - `chats` (STRICT) with:
     - `jid TEXT PRIMARY KEY`;
@@ -424,7 +424,7 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
     - `messages_chat_sender_phone (chat_jid, sender_phone, time DESC, id DESC)` and
       `messages_chat_sender_jid (chat_jid, sender_jid, time DESC, id DESC)`, for a listing filtered by chat and
       sender.
-- [ ] T022 [US1] Create `internal/store/migrate.go`:
+- [X] T022 [US1] Create `internal/store/migrate.go`:
   - `type migration struct{ version int; name string; sql string }`;
   - `loadMigrations(fs.FS)` parses `NNNN_<name>.sql` from `//go:embed migrations/*.sql`, requiring a contiguous
     1..N with no gaps;
@@ -433,7 +433,7 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
     on the writer (`_txlock=immediate`);
   - logs `store.migrate` per step;
   - on failure returns `*MigrationError{Schema: "messages", Step: "NNNN (<name>)", Completed: ...}`.
-- [ ] T023 [US1] Create `internal/store/preflight.go`:
+- [X] T023 [US1] Create `internal/store/preflight.go`:
   - `checkHeader(path)` reads 100 bytes and requires `"SQLite format 3\x00"` and a power-of-two page size from 512
     to 65536 (stored value 1 = 65536); otherwise `ErrNotDatabase`;
   - `preflight(ctx, path) (pf preflightResult, err error)` opens one connection on the DSN from
@@ -456,7 +456,7 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
     other `whatsmeow_*` table is device version 0, an interrupted first start, and is not refused;
   - `chats`/`messages` without `mcp_version`, or `whatsmeow_*` tables without `whatsmeow_version` →
     `ErrSchemaInvalid`.
-- [ ] T024 [US1] Create `internal/store/store.go` with `type Store`, `Open`, `Close` and `Device`, following
+- [X] T024 [US1] Create `internal/store/store.go` with `type Store`, `Open`, `Close` and `Device`, following
   contracts/store-api.md § Lifecycle in this order:
   1. `checkPathForm`;
   2. `checkArtifacts`, keeping the identities;
@@ -481,7 +481,7 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
   On any error, close everything opened and return the mapped error. `Close` calls `gate.close` (T011), then
   closes the reader and the writer, logs `store.close` with its duration, and is idempotent. Log
   `store.open`/`store.refused`/`store.preflight` at the matching points.
-- [ ] T025 [US1] Wire the store into `cmd/whatsapp-mcp/commands.go`:
+- [X] T025 [US1] Wire the store into `cmd/whatsapp-mcp/commands.go`:
   - **`runUntilStopped`:** after `acquireLock`, call `store.Open(ctx, cfg.DataDir, logger)` with a 10-minute
     timeout derived from `lc.ctx`. On error, print `whatsapp-mcp: ` + the error to stderr, release the lock and
     exit 1. On success, `lc.addStop("store", st.Close)`, which is registered after the lock so it runs before the
@@ -506,7 +506,7 @@ directory.
 
 ### Tests for User Story 2 ⚠️
 
-- [ ] T026 [P] [US2] `internal/store/migrate_test.go`. Use an injected list of three test migrations
+- [X] T026 [P] [US2] `internal/store/migrate_test.go`. Use an injected list of three test migrations
   (`0001` = real init, `0002` adds a test table, `0003` adds a column):
   - fresh → version 3, in order;
   - a database at version 1 or 2 applies only the rest and keeps seeded rows;
@@ -514,7 +514,7 @@ directory.
     seeded data intact; the error is a `*MigrationError` naming `0003` and "completed: messages 2";
   - a retry with a fixed `0003` resumes from 2;
   - `loadMigrations` rejects gaps and duplicates.
-- [ ] T027 [P] [US2] `internal/store/preflight_test.go` (SC-006). For each refusal, snapshot the directory with
+- [X] T027 [P] [US2] `internal/store/preflight_test.go` (SC-006). For each refusal, snapshot the directory with
   `snapshotDir` before and after `Open` and require identical snapshots with no file created or removed. Cover
   each case with and without an un-checkpointed WAL holding committed data:
   - `mcp_version` = latest+1 (`ErrSchemaTooNew`, error text names "message schema", 1+latest and latest);
@@ -526,7 +526,7 @@ directory.
     opens, and the device schema is upgraded to 16;
   - `chats` present without `mcp_version`;
   - `whatsmeow_device` present without `whatsmeow_version`.
-- [ ] T028 [P] [US2] `internal/store/device_test.go`:
+- [X] T028 [P] [US2] `internal/store/device_test.go`:
   - **Upgrade:** create a store, close it, simulate device v15 by
     `ALTER TABLE whatsmeow_chat_settings DROP COLUMN wasa_root_secret_id` and
     `UPDATE whatsmeow_version SET version=15`, then reopen: version 16, the column is back, seeded device data is
@@ -536,19 +536,19 @@ directory.
     ran (`mcp_version` unchanged); no store is returned.
   - **Device succeeds, message migration fails:** device v15 → 16 is committed; the injected failing message
     migration leaves messages at its previous version; the error lists "completed: device 16, messages N".
-- [ ] T029 [P] [US2] `cmd/whatsapp-mcp/e2e_test.go`:
+- [X] T029 [P] [US2] `cmd/whatsapp-mcp/e2e_test.go`:
   - a too-new message schema makes `stdio` exit 1 with the schema and both versions in stderr;
   - the lock is released afterwards (a second run gets the same error, not "lock held").
 
 ### Implementation for User Story 2
 
-- [ ] T030 [US2] Complete the refusal and error paths in `internal/store/preflight.go` and
+- [X] T030 [US2] Complete the refusal and error paths in `internal/store/preflight.go` and
   `internal/store/store.go` until T026–T029 pass:
   - `*SchemaError` carries `Schema` (`messages`/`device`), `Observed` and `Supported`;
   - `*MigrationError.Completed` reports both histories' versions after the failure;
   - `store.refused` and `store.upgrade`/`store.migrate` events carry `outcome` `refused` or `failed` and stable
     codes `schema_too_new`, `schema_invalid`, `migration_failed`, `device_upgrade_failed`.
-- [ ] T031 [US2] Make `Open` take a migration list through an unexported option, used only by tests, so T026/T028
+- [X] T031 [US2] Make `Open` take a migration list through an unexported option, used only by tests, so T026/T028
   inject migrations without changing the embedded files. Production `Open` uses `loadMigrations(embedded)`.
 
 **Checkpoint**: US1 and US2 pass on their own. Record the SC-006 results per OS.
@@ -565,7 +565,7 @@ every time.
 
 ### Tests for User Story 3 ⚠️
 
-- [ ] T032 [P] [US3] `internal/store/messages_test.go` (the scenarios of US3):
+- [X] T032 [P] [US3] `internal/store/messages_test.go` (the scenarios of US3):
   1. re-storing `(C, X)` with new text replaces it, and there is still exactly one row; storing two different
      copies A then B keeps B, and B then A keeps A (the one order-dependent case SC-003 excludes);
   2. the same `X` in two chats gives two rows;
@@ -583,7 +583,7 @@ every time.
 
   Also: a batch of 1,000 messages is accepted, while 1,001 messages or one byte over 16 MiB is rejected with
   nothing stored; one invalid message in a batch rejects the whole batch.
-- [ ] T033 [P] [US3] `internal/store/chats_test.go`:
+- [X] T033 [P] [US3] `internal/store/chats_test.go`:
   - **Fallback vs real:** real "Alice" vs an offered fallback "491511234567" → stays "Alice"; fallback →
     replaced by real.
   - **Saved vs real:** a saved "Mum" vs a later push name "Bank Support" (real) → stays "Mum"; a real name is
@@ -595,22 +595,22 @@ every time.
   - **Activity:** a zero `LastActivity` never clears; activity only moves forward.
   - **Ordering edge cases:** chats with no messages list with no latest message; chats with no activity sort
     last.
-- [ ] T034 [P] [US3] `internal/store/order_test.go` (SC-003): a fixed fixture of 50 chats and 2,000 messages
+- [X] T034 [P] [US3] `internal/store/order_test.go` (SC-003): a fixed fixture of 50 chats and 2,000 messages
   with duplicates of identical content, name offers of all three qualities and several times, and history chats
   without messages. Store it in 20 seeded random orders and permutations of batch splits, each into a fresh
   store. Dump `chats` and `messages` ordered by key; all 20 dumps are identical. Re-stores with different content
   are the exception SC-003 names; T032 item 1 covers them.
-- [ ] T035 [P] [US3] `internal/store/concurrency_test.go` (SC-005): 16 goroutines × 100 `StoreMessage` calls
+- [X] T035 [P] [US3] `internal/store/concurrency_test.go` (SC-005): 16 goroutines × 100 `StoreMessage` calls
   while 4 goroutines run `ListMessages` and `ListChats` in a loop. Expect 0 errors (in particular none matching
   "database is locked"), and all 1,600 messages present.
-- [ ] T036 [P] [US3] `internal/store/crash_test.go` (SC-007). The test re-executes its own binary with
+- [X] T036 [P] [US3] `internal/store/crash_test.go` (SC-007). The test re-executes its own binary with
   `GO_STORE_CRASH_CHILD=1`. The child opens the store and writes messages in a loop, printing each committed ID to
   stdout after the call returns. The parent kills it with `Process.Kill` after about 300 commits, reopens the
   store, and asserts that every printed ID is present and that `PRAGMA integrity_check` returns `ok`.
 
 ### Implementation for User Story 3
 
-- [ ] T037 [US3] Create `internal/store/chats.go`:
+- [X] T037 [US3] Create `internal/store/chats.go`:
   - **Types:** `NameQuality` (`NameNone`, `NameFallback`, `NameReal`, `NameSaved`) and `ChatUpdate`.
   - **`UpdateChats`:** validates every update first (`*ValidationError`). Then, under admission and the disk
     guard, it runs one writer transaction that upserts each chat:
@@ -621,7 +621,7 @@ every time.
     - `last_message_time = max(coalesce(last_message_time, excluded), excluded)` only when offered.
   - **Times:** stored as Unix ms.
   - **Single form:** `UpdateChat` wraps the batch.
-- [ ] T038 [US3] Create `internal/store/messages.go`:
+- [X] T038 [US3] Create `internal/store/messages.go`:
   - **Types:** `Message` and `MediaMeta` (contract).
   - **`StoreMessages`:** validates all messages and checks the batch limits (≤ 1,000 messages, ≤ 16 MiB of
     aggregate field bytes) before any SQL. Then, under admission and the disk guard, it runs one transaction:
@@ -885,7 +885,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
   - a commit cancelled at the commit point (test hook in `admit.go`) returns `ErrIndeterminate`, and a retry with
     the same `(chat_jid, id)` leaves one row;
   - after `Close`, every public method returns `ErrClosed`, and a second `Close` returns nil.
-- [ ] T049 [P] [US7] `internal/store/disk_store_test.go`:
+- [X] T049 [P] [US7] `internal/store/disk_store_test.go`:
   - **Low disk:** an injected free-space function below 256 MiB makes `StoreMessages` and `UpdateChats` fail
     with `ErrDiskLow`, with no row written and no file deleted. Recovery needs ≥ 512 MiB.
   - **Disk full:** simulated with `PRAGMA max_page_count` on the writer connection (test hook). A write fails
@@ -931,7 +931,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
   - checked arithmetic is used for offsets, sizes and context;
   - a test-only hook (unexported `testHooks` struct) supports commit cancellation, `max_page_count` and the
     injected free-space function.
-- [ ] T053 [US7] Create `OPERATIONS.md` at the repository root with a "Storage" section and these subsections:
+- [X] T053 [US7] Create `OPERATIONS.md` at the repository root with a "Storage" section and these subsections:
   - **Files and privacy:** what `whatsapp.db`, `-wal` and `-shm` hold; the data classes (device credentials,
     contacts and LID mappings, text and captions, media keys); owner-only access is not encryption at rest;
     supported local filesystems and rejected path forms; network filesystems are unsupported.
@@ -993,7 +993,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
      before the killed transaction, which shows the hot journal was rolled back.
 
   Also follow the `OPERATIONS.md` procedure manually once on Windows and once on Linux, and record the result.
-- [ ] T055 [P] [US7] Create `internal/store/testdata/cmd/bumpversion/main.go` (sets `mcp_version` or
+- [X] T055 [P] [US7] Create `internal/store/testdata/cmd/bumpversion/main.go` (sets `mcp_version` or
   `whatsmeow_version.compat` in a given file, for quickstart step 4) and
   `internal/store/testdata/cmd/seed/main.go` (writes N synthetic messages through `store.Open`). Both refuse to
   run on a path outside a directory whose name starts with the system temp directory, unless `-force` is given.
@@ -1046,7 +1046,7 @@ result, then merge again and check nothing changes.
 
 ### Tests for User Story 6 ⚠️
 
-- [ ] T059 [P] [US6] `internal/store/merge_test.go`:
+- [X] T059 [P] [US6] `internal/store/merge_test.go`:
   1. L and P: after the merge P holds all messages, L is gone, P's activity is the later one, and P's name is the
      better "by the name rule (higher quality, then newer name time, then the byte-wise greater name)";
   2. only L: P is created with L's time and messages, and with L's name when it is saved or real; when L has only a
@@ -1091,7 +1091,7 @@ result, then merge again and check nothing changes.
 
 ## Phase 10: Polish & Cross-Cutting Concerns
 
-- [ ] T061 Run `go mod tidy` and `go mod verify`. Confirm no `mattn/go-sqlite3` or `litestream` in `go list -m all`.
+- [X] T061 Run `go mod tidy` and `go mod verify`. Confirm no `mattn/go-sqlite3` or `litestream` in `go list -m all`.
   Run `CGO_ENABLED=0` builds for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64, and
   record the binary sizes. Check that `go list -m modernc.org/libc` equals the libc version that
   `modernc.org/sqlite`'s own `go.mod` requires (`go mod graph | grep '^modernc.org/sqlite@'`), and add the same
@@ -1102,12 +1102,12 @@ result, then merge again and check nothing changes.
 - [ ] T063 Run every step of `specs/002-sqlite-storage/quickstart.md`, including the local benchmark (step 5,
   SC-004: record each `ns/op` and the machine) and the 60 s fuzz runs (step 2). Record the results in
   `verification.md`.
-- [ ] T064 [P] Update `AGENTS.md` "Current state": feature 002 adds `internal/store` (one file, two schema
+- [X] T064 [P] Update `AGENTS.md` "Current state": feature 002 adds `internal/store` (one file, two schema
   histories, approved limits) and `OPERATIONS.md`, and `stdio`/`serve`/`pair` open the store. Keep the existing
   style.
-- [ ] T065 [P] Review all new code for comments that cite requirement, decision or finding IDs (none allowed),
+- [X] T065 [P] Review all new code for comments that cite requirement, decision or finding IDs (none allowed),
   and for any `slog` call or error that formats message text, SQL or raw driver errors. Fix what is found.
-- [ ] T066 Check `git ls-files --eol` for `w/crlf` (none allowed) and that `verification.md` marks each
+- [X] T066 Check `git ls-files --eol` for `w/crlf` (none allowed) and that `verification.md` marks each
   platform-specific control as passed or "not verified". Mark all tasks `[X]` in this file as they are completed.
 
 ---
