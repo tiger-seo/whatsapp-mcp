@@ -36,12 +36,15 @@ The preflight refuses zero rows, more than one row, a version above the latest b
 | `phone` | TEXT NOT NULL DEFAULT '' | digits of the user part when the server is `s.whatsapp.net`, otherwise `''`; set by the store from `jid` |
 | `name` | TEXT NOT NULL DEFAULT '' | ≤ 1 KiB; original text |
 | `name_fold` | TEXT NOT NULL DEFAULT '' | `fold(name)` (R7) |
-| `name_quality` | INTEGER NOT NULL DEFAULT 0 | 0 = none, 1 = fallback, 2 = real |
+| `name_quality` | INTEGER NOT NULL DEFAULT 0 | 0 = none, 1 = fallback, 2 = real (push, business, group subject, history-sync display name), 3 = saved (address-book full or first name) |
 | `name_time` | INTEGER | Unix ms when the name was seen; `NULL` while `name_quality = 0` |
 | `last_message_time` | INTEGER | Unix ms; `NULL` = no activity known |
 
-Indexes: `chats_last_activity (last_message_time DESC, jid)`, `chats_name (name_fold, jid)`, `chats_phone (phone)`
-where `phone <> ''`.
+Indexes: `chats_last_activity (last_message_time DESC, jid)`, `chats_name (name_fold, jid)`, `chats_phone (phone)`.
+
+No index is partial. SQLite uses a partial index for `col = ?` only when it can prove from the query that the bound
+value satisfies the index's condition, which it cannot for a parameter, so a partial index would leave those
+lookups scanning the table.
 
 Whether a chat is a group follows from the JID (`g.us`); it is not stored.
 
@@ -88,10 +91,13 @@ messages explicitly.
 Indexes (S3, FR-020):
 
 - `messages_chat_time (chat_jid, time DESC, id DESC)`: chat history, context, latest message per chat
-- `messages_sender_time (sender_phone, time DESC)` where `sender_phone <> ''`: sender filters, contact chats,
-  last interaction
-- `messages_sender_jid (sender_jid, chat_jid)`: the LID merge's sender rewrite, and contacts known only by LID
+- `messages_sender_time (sender_phone, time DESC)`: sender filters, contact chats and last interaction by phone
+  number
+- `messages_sender_jid (sender_jid, time DESC)`: the same three by LID, and the LID merge's sender rewrite
 - `messages_time (time DESC, chat_jid, id)`: listing across chats, `after`/`before`
+
+A query plan test (`EXPLAIN QUERY PLAN`) checks that every lookup in FR-021–FR-033 uses one of these indexes and
+never scans `messages`.
 
 The order of every list is deterministic: messages by `(time, chat_jid, id)`; chats by `(last_message_time, jid)`
 or `(name_fold, jid)`. Rows without a name or time come last.
@@ -121,10 +127,11 @@ escaped only when they appear in diagnostics.
 
 | Value | Definition |
 | --- | --- |
-| Sender name (FR-024) | For `from_me = 0`: the device-store contact for `sender_jid` (`full_name`, then `push_name`, `first_name`, `business_name`), else the real name (`name_quality = 2`) of the chat whose `jid = sender_jid`, else `''`. For `from_me = 1`: `''` (the tools render "Me"). |
+| Sender name (FR-024) | For `from_me = 0`: the device-store contact for `sender_jid`, then for its counterpart in `whatsmeow_lid_map` (`full_name`, then `first_name`, `push_name`, `business_name`), else the saved or real name (`name_quality >= 2`) of the chat whose `jid = sender_jid`, else `''`. For `from_me = 1`: `''` (the tools render "Me"). |
 | Chat name on a message | `chats.name` of `chat_jid` |
 | Latest message of a chat | the first row of `messages_chat_time` for that chat |
-| Contact identity (FR-028) | the device's `whatsmeow_contacts` rows, joined with `whatsmeow_lid_map (lid, pn)`. A LID row with a mapped phone and the phone row are one person, keyed by the phone JID. The name comes from the phone row, else from the LID row. Groups (`g.us`) are excluded. |
+| Contact identity (FR-028) | the device's `whatsmeow_contacts` rows, joined with `whatsmeow_lid_map (lid, pn)`. A LID row with a mapped phone and the phone row are one person, keyed by the phone JID. The name comes from the phone row, else from the LID row, each in the order full, first, push, business. Groups (`g.us`) are excluded. |
+| Resolved contact (FR-035) | the input as a phone number, phone JID or LID JID, plus its counterpart from `whatsmeow_lid_map` (`pn → lid` or `lid → pn`) for the current device: `{phone, phoneJID, lid}`, any of which may be empty but not all. Message matches use `sender_phone = phone OR sender_jid = lid`; the direct chat is `jid = phoneJID`, else `jid = lid`. |
 | Current device | the single row of `whatsmeow_device`. If there is none (never paired, or logged out), contact queries return no rows and sender names fall back to chat names. |
 
 ## State transitions
@@ -137,5 +144,6 @@ missing ──create (private file)──▶ empty ──device upgrade──▶
 ready ──Close──▶ closed (WAL checkpointed by SQLite on last close)
 ```
 
-A LID chat moves through the merge as follows: `L exists ∧ P any` → (one transaction) → `P` holds every
-message, `L` is gone. Repeating the merge with `L` already absent does nothing.
+A LID moves through the merge as follows, in one transaction: every message with `sender_jid = L`, in any chat,
+gets `sender_jid = P` and the phone filled in; then, if chat `L` exists, `P` takes every message and `L` is gone.
+Repeating the merge once nothing is left under `L` does nothing.

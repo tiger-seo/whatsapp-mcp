@@ -23,7 +23,9 @@ The design follows [research.md](research.md):
   by `modernc.org/sqlite/vfs`, so no file is opened for writing (R4, spike S2);
 - pre-folded columns searched with `instr` for Unicode, case-insensitive, literal search (R7);
 - a semaphore admission gate with deadlines (R9);
-- a free-space reserve (R10).
+- a free-space reserve (R10);
+- contacts found under a phone number or a LID, resolved through the device store's map, with the LID merge
+  rewriting senders in every chat (R15).
 
 `stdio`, `serve` and `pair` open the store after the lock. The operator guide starts as `OPERATIONS.md`.
 
@@ -66,7 +68,8 @@ tests, in one package and small changes to `cmd/whatsapp-mcp` and `internal/priv
 
 ## Constitution Check
 
-*GATE: checked before Phase 0 and again after Phase 1 (constitution v1.1.0).*
+*GATE: checked before Phase 0 and again after Phase 1, and re-checked against constitution v1.2.0 after the
+design review of 2026-10-28.*
 
 | Principle | How this plan complies | Status |
 | --- | --- | --- |
@@ -80,6 +83,7 @@ tests, in one package and small changes to `cmd/whatsapp-mcp` and `internal/priv
 | VIII. Real accounts handled with care | synthetic devices only; no pairing or connection; restored copies never connect | Pass |
 | IX. Simplicity | three justified pure-Go dependencies (R14); own 60-line migration runner instead of a framework; no settings added (limits are constants). The preflight's WAL view (about 150 lines) uses `modernc.org/sqlite/vfs` from the same module, so it adds no dependency; spike S2 showed that no SQLite open mode avoids it (R4) | Pass |
 | X. Security planned per feature | the spec's Security section takes up F03, F05, F09–F13 and F16 and defers the others to named features; abuse cases are tests; evidence goes to `verification.md`. High findings for capabilities this feature enables: F03, F05 and F09 are addressed, and F15 is covered by existing CI. None open, no exceptions | Pass |
+| Development Workflow (v1.2.0): owner reviews | the design review ran on 2026-10-28 and returned BLOCK; its findings are resolved in the spec, research, data model, contract and tasks, and a new design review must pass before `/speckit-implement`. The code review follows implementation, before the pull request. Both verdicts go to `verification.md` | Pending re-review |
 
 Post-design re-check (after data model and contracts): unchanged. All Pass, with the one justified deviation under
 Principle V recorded in Complexity Tracking. The design adds no settings and no services. The only new package outside `internal/store` is a function added to `internal/private`.
@@ -92,7 +96,7 @@ Principle V recorded in Complexity Tracking. The design adds no settings and no 
 specs/002-sqlite-storage/
 ├── spec.md
 ├── plan.md              # this file
-├── research.md          # Phase 0: decisions R1–R14
+├── research.md          # Phase 0: decisions R1–R15
 ├── data-model.md        # Phase 1: tables, rules, transitions
 ├── quickstart.md        # Phase 1: validation guide
 ├── contracts/
@@ -110,13 +114,13 @@ cmd/whatsapp-mcp/
 └── *_test.go            # e2e: first start, refusal exit codes, close on shutdown
 
 internal/private/
-├── private.go           # + CheckFile (strict 0600 rule on Unix for database artifacts)
+├── private.go           # + CheckFile (strict 0600 rule on Unix, macOS ACLs, file identity)
 └── private_*_test.go
 
 internal/store/
 ├── doc.go
 ├── store.go             # Store, Open, Close, Device
-├── files.go             # path forms, artifact checks, creation (R6)
+├── files.go             # path forms (resolved on Windows), artifact checks and identities, creation (R6)
 ├── preflight.go         # header check and read-only version preflight (R4)
 ├── walview.go           # committed view: WAL replay served read-only through modernc's fs.FS VFS (R4)
 ├── migrate.go           # migration runner (R5)
@@ -130,8 +134,8 @@ internal/store/
 ├── chats.go             # UpdateChats, name and activity rules
 ├── messages.go          # StoreMessages, re-store rule
 ├── queries.go           # list/get chats and messages, context, last interaction
-├── contacts.go          # SearchContacts over the device store
-├── merge.go             # MergeLIDChat
+├── contacts.go          # SearchContacts and resolveContact over the device store (R15)
+├── merge.go             # MergeLID: sender rewrite in every chat, then the @lid chat
 ├── errors.go            # error types (contract)
 ├── events.go            # typed, secret-free event logging (R12)
 ├── walog.go             # whatsmeow waLog → slog bridge: level, module, format string only (R3)

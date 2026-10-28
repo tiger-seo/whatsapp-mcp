@@ -9,14 +9,19 @@ were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-202
 
 - **Decision:** `modernc.org/sqlite v1.61.0`, driver name `sqlite`. The read-write DSN is
   `file:<path>?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)&_pragma=journal_size_limit(67108864)&_txlock=immediate`.
-  The read pool adds `_pragma=query_only(1)`.
+  The read DSN is a separate string, not the write DSN with an extra pragma:
+  `file:<path>?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)&_pragma=query_only(1)`.
+  It has no `_txlock`, so its transactions are the default `BEGIN DEFERRED`, and no `journal_mode`,
+  `synchronous` or `journal_size_limit`, which only the writer needs.
 - **Rationale:** the S1 spike proved this DSN with whatsmeow's `sqlstore` (dialect `"sqlite"`), including 16×100
   concurrent writes without errors. `_txlock=immediate` takes the write lock at `BEGIN`, so writers wait in the busy
   handler instead of failing on lock upgrade. `synchronous(NORMAL)` is the documented safe setting for WAL: a
   committed transaction survives a process crash (SC-007); only an OS crash or power loss can lose the last
   commits, never corrupt the file. `temp_store(MEMORY)` keeps SQLite's temporary files (sorts, statement
   journals) out of the system temp directory, which is not private (FR-040); their size is bounded by the
-  result limits. `journal_size_limit` implements the approved 64 MiB WAL truncation.
+  result limits. `journal_size_limit` implements the approved 64 MiB WAL truncation. The read DSN must not
+  inherit `_txlock=immediate`: `BEGIN IMMEDIATE` asks for the write lock, which a `query_only` connection refuses,
+  so every transaction on the reader (ours, and dbutil's through `ReadOnlyDB`) would fail.
 - **Alternatives:** `mattn/go-sqlite3` (needs CGO, forbidden by Principle II); `synchronous(FULL)` (slower on every
   commit for a guarantee the spec does not require); a private `SQLITE_TMPDIR` inside the data directory (works,
   but adds another artifact to check, protect and clean up).
@@ -24,9 +29,13 @@ were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-202
 ## R2. Connection pools
 
 - **Decision:** two `*sql.DB` handles on the same file. The **writer** has `SetMaxOpenConns(1)` and serves all
-  writes, both ours and whatsmeow's device store. The **reader** has `SetMaxOpenConns(4)`, `query_only(1)`, and
+  writes, both ours and whatsmeow's device store. The **reader** has `SetMaxOpenConns(4)`, the read DSN (R1), and
   serves our queries; it is also given to dbutil as `ReadOnlyDB`. Idle connections are kept open (no lifetime
   limit), so no connection is reopened while the store runs.
+- **Order at open:** `mcp_fold` (R7) is registered before either pool exists, because modernc applies registered
+  functions to connections opened after the registration only. A reader connection opened earlier would answer
+  "no such function" for as long as it lives. The reader is opened and pinged before the device upgrade, because
+  the container given to `Upgrade` already carries it as `ReadOnlyDB`.
 - **Rationale:** matches the approved profile (1 write + 4 read connections). One writer connection makes write
   ordering explicit and means a write never waits on SQLite's busy handler for another of our own connections;
   WAL lets the four readers run alongside it. whatsmeow's container is built with `sqlstore.NewWithWrappedDB` on a
@@ -168,15 +177,33 @@ were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-202
     mode, but a `-journal` left from another tool is checked like any other sidecar.
   - `internal/private` gains `CheckFile(path)` to check an existing file without opening it for writing. It adds
     the stricter rule FR-004 needs for these files: on Unix no group or other permission bits at all (0600),
-    where the existing rule only forbids group and other *write*. The Windows rule is unchanged.
+    where the existing rule only forbids group and other *write*. The Windows rule is unchanged. It returns the
+    file's identity (device and inode on Unix, volume serial and file ID on Windows).
+  - **Linux ACLs** need no separate check: with a POSIX ACL, the group bits of the mode are the ACL mask, so a
+    0600 or 0700 mode leaves every named-user or named-group entry without effective permissions.
+  - **macOS ACLs** are separate from the mode bits and can grant access that 0600 does not show. `CheckFile` and
+    the data-directory check read the extended security attribute with `unix.Getattrlist`
+    (`ATTR_CMN_EXTENDED_SECURITY`) and refuse any artifact with an ACL entry, with the fix
+    "run: chmod -N <path>". This is pure Go (`golang.org/x/sys/unix`). CI's macOS job tests it with `chmod +a`.
+  - **File identity after open:** the identities recorded before the open are compared with the files at the
+    same paths after the writer's first ping. A difference means a file was replaced between the check and
+    SQLite's open, and startup fails with `unsafe_artifact` before the device upgrade or any migration. This is
+    the check abuse case 2 tests, with a test hook that swaps the file at that point.
 - **Rationale:** the data directory is owned by this user and nobody else can write it (`private` checks the
   parent), so other users cannot create, rename or swap entries inside it. That is the defence against
   check/open races (FR-040); the handle checks catch anything already there. The approach reuses the
   constitution's mandated package rather than a second implementation.
 - **Path forms (approved profile):** the data directory path is rejected before use if it is a UNC or network
   path (`\\server\...`), a device path (`\\?\`, `\\.\`) or contains an alternate data stream (`:` after the drive
-  letter) on Windows. Unix network filesystems are not detected (no portable signal); they are documented as
-  unsupported in `OPERATIONS.md`.
+  letter) on Windows. The text alone misses drive letters: a mapped network drive (`net use Z: \\server\share`)
+  and a `subst` drive both look local. So the check also opens the directory and asks Windows where it really is:
+  - `GetFinalPathNameByHandle` gives the resolved path. A `\\?\UNC\` result is a network path, and a `subst`
+    drive resolves to its real target, which is then checked the same way;
+  - `GetDriveType` on the resolved volume must be `DRIVE_FIXED` or `DRIVE_REMOVABLE`, never `DRIVE_REMOTE`;
+  - `GetVolumeInformationByHandle` must report the file system `NTFS`, the only one the profile names.
+
+  All three are in `golang.org/x/sys/windows`. Unix network filesystems are not detected (no portable signal);
+  they are documented as unsupported in `OPERATIONS.md`.
 - **Alternatives:** a custom SQLite VFS that opens every file through `private` (heavy, and duplicates what the
   directory guarantee already gives); `chmod` after creation (a race window, and it changes files, which the
   constitution forbids for existing ones).
@@ -223,6 +250,12 @@ were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-202
   `(chat_jid, id)`, which is idempotent. Any other failure is reported as rolled back.
 - **Result bytes:** query code accounts the bytes of each scanned row against the 32 MiB budget, and the context
   rows against the 2,000-row budget. Crossing either aborts with `ErrResourceLimit`, never a truncated result.
+- **Close:** every `opCtx` also derives from a store-wide context that `Close` cancels. `Close` first marks the
+  gate closed, so new and waiting callers get `ErrClosed` at once. It then waits up to 2 s for running
+  operations, cancels the store-wide context, waits up to 1 s for them to release (the approved cancellation
+  allowance), and closes the reader and then the writer. A caller's `ctx` can shorten each wait. So the store
+  takes about 3 s of the 10 s shutdown limit at most, however long an operation was going to run. An operation
+  cancelled during commit reports `ErrIndeterminate` as usual.
 - **Rationale:** a bounded queue, no retry loops, and deadlines that never exceed the caller's (FR-043, FR-044).
   `busy_timeout(5000)` stays, but the context deadline wins when it is earlier.
 - **Alternatives:** `golang.org/x/sync/semaphore` (adds a module for 20 lines; it also lacks a waiting cap).
@@ -286,3 +319,27 @@ were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-202
 Transitive additions (zerolog, protobuf, `go.mau.fi/util`, `filippo.io/edwards25519` and others) are pure Go. CI's
 module verification and `govulncheck` run on the new graph. A reachable vulnerability blocks the feature, and an
 unreachable one is recorded as an exception in `verification.md` (Principle V, X).
+
+## R15. Contacts under either identity
+
+- **Decision:** `resolveContact(ctx, s)` accepts any `NormalizePhone` form or a `@lid` JID and returns
+  `{phone, phoneJID, lid}`.
+  - **From a phone number:** look up `whatsmeow_lid_map` for the current device by `pn`, to find the LID.
+  - **From a LID:** look it up by `lid`, to find the phone number. With no row, only the LID is known.
+  - **Queries:** messages match `sender_phone = :phone OR sender_jid = :lid`, with empty values skipped. The
+    direct chat is `jid = :phoneJID`, else `jid = :lid`. Each half of the `OR` uses its own index
+    (`messages_sender_time`, `messages_sender_jid`).
+
+  `ContactChats`, `DirectChat`, `LastInteraction` and `MessageFilter.Sender` all go through it.
+- **Merge:** `MergeLID` first runs `UPDATE messages SET sender_jid = :phoneJID, sender_phone = :phone WHERE
+  sender_jid = :lid` across all chats, then merges the `@lid` chat if it exists. Rewriting makes the stored data
+  canonical. Resolving at query time covers the time before 004 calls the merge, and LIDs whose mapping arrives
+  while the process runs. The update is one indexed statement bounded by the 10 s operation deadline.
+- **Rationale:** M6 requires every contact tool to take a LID, and a person who writes in groups under a LID before
+  their number is known must still be found by that number. Doing both keeps the queries right whether or not
+  the merge has run yet.
+- **Alternatives:**
+  - Resolving at query time only, with no rewrite: stored senders would stay inconsistent forever, and every
+    query would depend on the map.
+  - Rewriting only: queries made between a mapping's arrival and 004's merge would miss messages.
+  - Narrowing M6: rejected by the owner (spec clarifications, design review session).

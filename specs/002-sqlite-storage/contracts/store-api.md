@@ -12,7 +12,9 @@ The operations features 003–008 call. This is the interface, not the implement
 // data-directory lock. ctx bounds the whole startup (the caller passes the 10-minute startup budget).
 func Open(ctx context.Context, dataDir string, logger *slog.Logger) (*Store, error)
 
-// Close closes both pools. It is safe to call twice. ctx bounds the wait for in-flight operations.
+// Close stops admitting operations, waits up to 2 s for running ones, cancels whatever is still running, waits
+// up to 1 s more for them to release, then closes both pools. It is safe to call twice. ctx can shorten every
+// wait. Any call made during or after Close returns ErrClosed.
 func (s *Store) Close(ctx context.Context) error
 
 // Device returns whatsmeow's device-store container, sharing the store's file and writer connection.
@@ -20,9 +22,10 @@ func (s *Store) Close(ctx context.Context) error
 func (s *Store) Device() *sqlstore.Container
 ```
 
-`Open` order: path-form check → artifact checks (R6) → create or header check → read-only preflight (R4) →
-read-write pools → artifact re-check → device upgrade → message migrations → ready. On any failure, everything
-opened so far is closed before it returns.
+`Open` order: path-form check → artifact checks, recording each file's identity (R6) → create or header check →
+read-only preflight (R4) → register `mcp_fold` → writer pool → artifact re-check, same identities → reader pool →
+device upgrade → message migrations → ready. On any failure, everything opened so far is closed before it
+returns.
 
 ## Writes
 
@@ -47,7 +50,9 @@ type MediaMeta struct {
     MIMEType, FileName     string
 }
 
-type NameQuality int // NameNone (0), NameFallback (1), NameReal (2)
+// NameNone (0), NameFallback (1), NameReal (2: push, business, group subject, history-sync display name),
+// NameSaved (3: address-book full or first name). Ingest chooses the quality of what it offers.
+type NameQuality int
 
 type ChatUpdate struct {
     JID          string
@@ -64,8 +69,9 @@ func (s *Store) StoreMessages(ctx context.Context, msgs []Message) error
 // UpdateChats applies 1..1,000 chat updates in one transaction (name rule and last-activity rule).
 func (s *Store) UpdateChats(ctx context.Context, updates []ChatUpdate) error
 
-// MergeLIDChat merges chat lidJID into phoneJID in one transaction. A missing lidJID is a no-op.
-func (s *Store) MergeLIDChat(ctx context.Context, lidJID, phoneJID string) error
+// MergeLID merges everything stored under lidJID into phoneJID in one transaction: the sender of every message
+// sent as lidJID, in any chat, and the chat lidJID if it exists. Nothing left under lidJID is a no-op.
+func (s *Store) MergeLID(ctx context.Context, lidJID, phoneJID string) error
 ```
 
 Single-item helpers (`StoreMessage`, `UpdateChat`) wrap the batch forms.
@@ -92,16 +98,18 @@ type Contact struct{ JID, Phone, Name string }
 
 type ChatSort int // ByLastActivity (newest first), ByName (ascending, unnamed last)
 
+// A contact argument is a phone number (any NormalizePhone form), a phone JID or a LID JID. The store resolves it
+// through the current device's LID map and matches either identity.
 func (s *Store) ListChats(ctx context.Context, query string, sort ChatSort, withLatest bool, p Page) ([]ChatView, error)
-func (s *Store) GetChat(ctx context.Context, jid string) (ChatView, error)            // with Latest
-func (s *Store) DirectChatByPhone(ctx context.Context, phone string) (ChatView, error) // exact match
-func (s *Store) ContactChats(ctx context.Context, phone string, p Page) ([]ChatView, error)
+func (s *Store) GetChat(ctx context.Context, jid string) (ChatView, error)          // with Latest
+func (s *Store) DirectChat(ctx context.Context, contact string) (ChatView, error)   // exact phone, else the @lid chat
+func (s *Store) ContactChats(ctx context.Context, contact string, p Page) ([]ChatView, error)
 func (s *Store) SearchContacts(ctx context.Context, query string, p Page) ([]Contact, error)
 
 type MessageFilter struct {
     After, Before time.Time // zero = unset; both strict
     ChatJID       string
-    SenderPhone   string    // normalised by the store
+    Sender        string    // a contact; "" = unset
     Query         string    // matches text or caption
 }
 
@@ -117,7 +125,7 @@ func (s *Store) MessageContext(ctx context.Context, chatJID, id string, c Contex
 func (s *Store) GetMessage(ctx context.Context, chatJID, id string) (MessageView, error)
 func (s *Store) GetMessageByID(ctx context.Context, id string) (MessageView, error)
 func (s *Store) MediaInfo(ctx context.Context, chatJID, id string) (MessageView, MediaMeta, error)
-func (s *Store) LastInteraction(ctx context.Context, phone string) (*MessageView, error) // nil = none
+func (s *Store) LastInteraction(ctx context.Context, contact string) (*MessageView, error) // nil = none
 ```
 
 `Page.Limit` must be 1–200, and `Page.Offset` 0–100,000. Context rows across all hits must not exceed 2,000, and
@@ -144,6 +152,7 @@ text, captions, keys, SQL or raw driver messages.
 | `ErrNotMedia` | `MediaInfo` on a message without media | — |
 | `ErrResourceLimit` | a batch, result, context or byte budget is exceeded | the limit's name |
 | `ErrBusy` | 64 operations already waiting, or the 5 s admission wait expired | — |
+| `ErrClosed` | the call was made during or after `Close` | — |
 | `ErrDiskLow` | free space below the reserve | free bytes, reserve |
 | `ErrIndeterminate` | the commit outcome cannot be established | — |
 | `*SchemaError` (`ErrSchemaTooNew`, `ErrSchemaInvalid`) | preflight refusal | schema (`messages`/`device`), observed, supported |
@@ -151,10 +160,11 @@ text, captions, keys, SQL or raw driver messages.
 | `*StorageError` (`ErrUnsafeStorage`, `ErrNotDatabase`, `ErrIO`) | unsafe artifact or path form, not a database, I/O or disk-full | artifact (escaped, bounded), `private` fix text, code |
 
 Context cancellation returns the caller's `ctx.Err()` (wrapped), except during commit (`ErrIndeterminate`).
-`MergeLIDChat` rejects `lidJID == phoneJID`, a source that is not `@lid` and a target that is not
-`@s.whatsapp.net` with `*ValidationError`.
+`MergeLID` rejects `lidJID == phoneJID`, a source that is not `@lid` and a target that is not
+`@s.whatsapp.net` with `*ValidationError`. A contact argument that is none of the three accepted forms is a
+`*ValidationError` naming the field.
 
 ## Concurrency
 
 All methods are safe for concurrent use. At most 16 run at once and 64 wait (R9). Each runs under the earlier of
-the caller's deadline and 10 s.
+the caller's deadline and 10 s, and is cancelled by `Close` after its grace period.
