@@ -12,6 +12,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/tiger-seo/whatsapp-mcp/internal/private"
 	"modernc.org/sqlite/vfs"
 )
 
@@ -157,6 +158,20 @@ type committedView struct {
 // that opens it. Both files are opened read-only. Callers close every connection on the DSN before release, which
 // unregisters the view and closes the files.
 func openCommittedView(path string) (dsn string, release func() error, err error) {
+	dsn, release, _, err = openCommittedViewIDs(path)
+	return dsn, release, err
+}
+
+// viewIDs holds the identities of the files the view read, taken from its own handles. wal is zero when there
+// is no log.
+type viewIDs struct {
+	main, wal private.FileID
+	hasWAL    bool
+}
+
+// openCommittedViewIDs is openCommittedView that also reports the identity of each file it opened, so the caller
+// can check that they are the files it examined earlier.
+func openCommittedViewIDs(path string) (dsn string, release func() error, ids viewIDs, err error) {
 	v := &committedView{}
 	defer func() {
 		if err != nil {
@@ -165,21 +180,24 @@ func openCommittedView(path string) (dsn string, release func() error, err error
 	}()
 
 	if v.main, err = os.Open(path); err != nil {
-		return "", nil, err
+		return "", nil, viewIDs{}, err
+	}
+	if ids.main, err = private.FileIDOf(v.main); err != nil {
+		return "", nil, viewIDs{}, err
 	}
 	fi, err := v.main.Stat()
 	if err != nil {
-		return "", nil, err
+		return "", nil, viewIDs{}, err
 	}
 	hdr := make([]byte, dbHeaderSize)
 	if _, err := v.main.ReadAt(hdr, 0); err != nil {
 		if errors.Is(err, io.EOF) {
-			return "", nil, ErrNotDatabase
+			return "", nil, viewIDs{}, ErrNotDatabase
 		}
-		return "", nil, err
+		return "", nil, viewIDs{}, err
 	}
 	if v.pageSize, err = pageSizeFromHeader(hdr); err != nil {
-		return "", nil, err
+		return "", nil, viewIDs{}, err
 	}
 	v.size = fi.Size()
 
@@ -188,11 +206,15 @@ func openCommittedView(path string) (dsn string, release func() error, err error
 	case errors.Is(err, fs.ErrNotExist):
 		v.wal, err = nil, nil
 	case err != nil:
-		return "", nil, err
+		return "", nil, viewIDs{}, err
 	default:
+		if ids.wal, err = private.FileIDOf(v.wal); err != nil {
+			return "", nil, viewIDs{}, err
+		}
+		ids.hasWAL = true
 		idx, err := scanWAL(v.wal, v.pageSize)
 		if err != nil {
-			return "", nil, err
+			return "", nil, viewIDs{}, err
 		}
 		if idx.dbPages != 0 {
 			v.frames, v.size = idx.frames, int64(idx.dbPages)*v.pageSize
@@ -201,7 +223,7 @@ func openCommittedView(path string) (dsn string, release func() error, err error
 
 	name, fsys, err := vfs.New(v)
 	if err != nil {
-		return "", nil, err
+		return "", nil, viewIDs{}, err
 	}
 	release = func() error {
 		if err := fsys.Close(); err != nil {
@@ -209,7 +231,7 @@ func openCommittedView(path string) (dsn string, release func() error, err error
 		}
 		return v.closeFiles()
 	}
-	return "file:" + viewName + "?mode=ro&vfs=" + name, release, nil
+	return "file:" + viewName + "?mode=ro&vfs=" + name, release, ids, nil
 }
 
 func (v *committedView) closeFiles() error {
