@@ -36,6 +36,24 @@ hardens all of them); the P2 stories US5 and US6 follow.
 
 ---
 
+## Parked findings
+
+Parked by the owner on 2026-10-28 after seven `BLOCK` rounds of the design review (constitution v1.3.0,
+Development Workflow). They come from the seventh design review of commit `8d38457`. None is a high-severity
+data-loss, security or real-account finding. Each must be resolved, and a review of that part must clear it,
+before the tasks it blocks start, and before the code review at the latest.
+
+| ID | Finding (seventh design review, `8d38457`) | Blocks |
+| --- | --- | --- |
+| P1 | [high] A listing filtered by chat and by a sender with both identities, written as `chat_jid = ? AND (sender_phone = ? OR sender_jid = ?)`, plans as `SEARCH messages_chat_time (chat_jid=?)` and reads the whole chat (0.4–0.9 s at 300,000 messages). The distributed form `(chat_jid = ? AND sender_phone = ?) OR (chat_jid = ? AND sender_jid = ?)` reaches the two chat-and-sender indexes, and a `UNION ALL` of the two single-index branches merges them with no sort. T044 must name the shape and data-model.md's expected-plan table must match it. Owner decision still open: whether every sender query (not only chat and sender) uses the `UNION ALL` form, which would remove the per-contact row-ID sets, the key sort and possibly the deep-listing slots and the 1-million-message ceiling of research R16. | Phase 6 (T039–T046) |
+| P2 | [high] `TestQueryScale`'s 3× rule fails by construction: `SearchContacts` by name, `ContactChats` and the sender listings read every row they match by design and grow about 10×; the offset-99,800 listing is empty at a tenth; and Windows timing gives medians of 0 s. | T046 |
+| P3 | [medium] The scale test can count pages instead of time: modernc exports `sqlite.DBStatus`, reachable through `(*sql.Conn).Raw`, whose cache hit + miss delta counts the pages a query touched (1.0–1.3× tenth to full for constant-cost queries, about 10× for linear ones). The linear queries need their own rule, a bound per matched row. | T046 |
+| P4 | [medium] T047's slope depends on how the seeded messages split between phone and LID: an even split measures about 12 B a message, all under the phone (the state after a merge) about 24 B. Seed under the phone, or take the larger of both splits. | T047 |
+| P5 | [low] Own-account detection compares with `whatsmeow_device.lid`, which can be NULL or empty; an empty own LID would equal the empty LID of an unmapped contact and treat that contact as the account. Compare only non-empty values, and add the case to T040. | T040, T044 |
+| P6 | [low] The 64-waiter cap is shared with callers waiting for a deep slot; if the cap is checked before trying the admission semaphore, an ingest call gets `ErrBusy` with 64 deep listings waiting although admission slots are free. Specify try-acquire before the cap check, and test `StoreMessage` with 64 deep waiters. | T011 (the `enterDeep` part only), T048 |
+
+---
+
 ## Phase 1: Setup (Shared Infrastructure)
 
 **Purpose**: dependencies, package skeleton, evidence file.
@@ -185,7 +203,7 @@ R4, spike S2).
   - on Windows an extra ACE for Everyone fails, and a junction or reparse point fails;
   - two calls on the same file return equal `FileID`s, and a file renamed over it gives a different one;
   - `FileIDOf` on an open handle equals `CheckFile` on its path, on Unix and Windows.
-- [ ] T011 [P] Create `internal/store/admit.go`: `gate.enter(ctx) (release func(), opCtx context.Context, err error)`.
+- [ ] T011 [P] **Blocked in part: the `enterDeep` slot waits for parked finding P6.** Create `internal/store/admit.go`: `gate.enter(ctx) (release func(), opCtx context.Context, err error)`.
   - A semaphore of 16 active slots, with an atomic count of waiters.
   - If 64 are already waiting, return `ErrBusy` immediately; otherwise wait at most 5 s or until the caller's
     deadline, whichever is earlier.
@@ -621,6 +639,9 @@ every time.
 
 ## Phase 6: User Story 4 - The tools find chats, contacts and messages (Priority: P1)
 
+**⛔ Blocked**: no task in this phase starts until parked finding P1 is resolved and reviewed (see Parked
+findings).
+
 **Goal**: every query that tools 005/006 need, correct and deterministic, fast on 100,000 messages.
 
 **Independent Test**: seed known chats, contacts and messages, and compare every query's result against
@@ -644,7 +665,7 @@ expected rows.
     are returned, and `DirectChat` returns P.
   - **Paging rules:** limit 0, limit 201, offset -1 and offset 100,001 are `*ValidationError`; a page beyond the
     end is empty.
-- [ ] T040 [P] [US4] `internal/store/queries_messages_test.go`:
+- [ ] T040 [P] [US4] **Blocked: parked findings P1, P5.** `internal/store/queries_messages_test.go`:
   - **Filters:** `ListMessages` with every combination of strict after, strict before, chat, sender (given as
     "+49 151 1234567", as the phone JID and as the mapped LID, each matching messages stored under both
     identities) and query, newest first, ties by `(chat_jid, id)` desc. Paging never
@@ -712,7 +733,7 @@ expected rows.
     - `ByLastActivity` is `ORDER BY last_message_time IS NULL, last_message_time DESC, jid`;
     - `ByName` is `ORDER BY name_quality = 0, name_fold, jid`, so unnamed chats come last even though their
       `name_fold` is `''`.
-- [ ] T044 [US4] Implement `ListMessages`, `MessageContext` and `LastInteraction` in `internal/store/queries.go`:
+- [ ] T044 [US4] **Blocked: parked findings P1, P5.** Implement `ListMessages`, `MessageContext` and `LastInteraction` in `internal/store/queries.go`:
   - filters are built from fixed SQL fragments with bound values;
   - `MessageFilter.Sender` and `LastInteraction` resolve the contact with `resolveContact` (T045) and match
     `sender_phone = ? OR sender_jid = ?`, leaving out the half whose value is empty;
@@ -768,7 +789,7 @@ expected rows.
   lookup in the current device's `whatsmeow_lid_map` by `pn` or by `lid` to fill the other identity. Without a
   device or a mapping, the contact keeps the one identity it was given. Test it in `contacts_test.go`: phone, phone
   JID and LID inputs, with and without a mapping, and with no device.
-- [ ] T046 [P] [US4] Create `internal/store/bench_test.go`: `BenchmarkQueries` seeds 100,000 messages across
+- [ ] T046 [P] [US4] **Blocked: parked findings P1, P2, P3.** Create `internal/store/bench_test.go`: `BenchmarkQueries` seeds 100,000 messages across
   1,000 chats once (through `StoreMessages` in batches of 1,000, cached per process in a temp dir). It has
   sub-benchmarks for each US4 query: `ListChats` (both sorts, with search),
   `GetChat`, `DirectChat`, `ContactChats` (by phone and by LID), `SearchContacts`, `ListMessages` (no filter,
@@ -814,7 +835,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
 
 ### Tests for User Story 7 ⚠️
 
-- [ ] T047 [P] [US7] `internal/store/limits_test.go` (SC-009). For every constant in `limits.go`, a test at the
+- [ ] T047 [P] [US7] **Blocked: parked finding P4.** `internal/store/limits_test.go` (SC-009). For every constant in `limits.go`, a test at the
   boundary (accepted) and one beyond it (rejected, with no row written: compare table dumps). Log for each case:
   - elapsed time;
   - result bytes;
@@ -855,7 +876,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
     shorter list;
   - ambiguous-ID chats (101 chats → `ErrResourceLimit`);
   - overflowing offsets and context (`math.MaxInt`).
-- [ ] T048 [P] [US7] `internal/store/admission_test.go`, with the real store:
+- [ ] T048 [P] [US7] **Blocked: parked finding P6.** `internal/store/admission_test.go`, with the real store:
   - 16 blocking operations (hold the writer with an open `BEGIN IMMEDIATE` on a separate raw connection) plus 64
     waiting, then one more gets `ErrBusy` at once;
   - waiting ends at 5 s;
