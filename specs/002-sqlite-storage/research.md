@@ -8,9 +8,9 @@ were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-202
 ## R1. Driver, DSN and pragmas
 
 - **Decision:** `modernc.org/sqlite v1.61.0`, driver name `sqlite`. The read-write DSN is
-  `file:<path>?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)&_pragma=journal_size_limit(67108864)&_txlock=immediate`.
+  `file:<path>?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)&_pragma=journal_size_limit(67108864)&_pragma=hard_heap_limit(268435456)&_txlock=immediate`.
   The read DSN is a separate string, not the write DSN with an extra pragma:
-  `file:<path>?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)&_pragma=query_only(1)`.
+  `file:<path>?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)&_pragma=hard_heap_limit(268435456)&_pragma=query_only(1)`.
   It has no `_txlock`, so its transactions are the default `BEGIN DEFERRED`, and no `journal_mode`,
   `synchronous` or `journal_size_limit`, which only the writer needs.
 - **Rationale:** the S1 spike proved this DSN with whatsmeow's `sqlstore` (dialect `"sqlite"`), including 16×100
@@ -18,8 +18,8 @@ were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-202
   handler instead of failing on lock upgrade. `synchronous(NORMAL)` is the documented safe setting for WAL: a
   committed transaction survives a process crash (SC-007); only an OS crash or power loss can lose the last
   commits, never corrupt the file. `temp_store(MEMORY)` keeps SQLite's temporary files (sorts, statement
-  journals) out of the system temp directory, which is not private (FR-040); their size is bounded by the
-  result limits. `journal_size_limit` implements the approved 64 MiB WAL truncation. The read DSN must not
+  journals) out of the system temp directory, which is not private (FR-040); their memory is bounded by the
+  hard heap limit (R16). `journal_size_limit` implements the approved 64 MiB WAL truncation. The read DSN must not
   inherit `_txlock=immediate`: `BEGIN IMMEDIATE` asks for the write lock, which a `query_only` connection refuses,
   so every transaction on the reader (ours, and dbutil's through `ReadOnlyDB`) would fail.
 - **Alternatives:** `mattn/go-sqlite3` (needs CGO, forbidden by Principle II); `synchronous(FULL)` (slower on every
@@ -78,15 +78,23 @@ were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-202
 - **Decision:** before any read-write connection exists:
   1. `Lstat` the database and each sidecar name (`-wal`, `-shm`, `-journal`). Reject links, reparse points,
      non-regular files and hard links, and check ownership and access through `internal/private` (R6). A sidecar
-     without a main file is refused ("orphaned journal file").
-  2. If the main file is missing or has length 0, there is nothing to preflight: it is a fresh database.
+     next to a missing or empty main file is refused ("orphaned journal file"): SQLite deletes the log of a
+     database with no pages (`pagerOpenWalIfPresent`), so treating that state as fresh would delete it. Any
+     `-journal` is refused too ("rollback journal left behind"): the view cannot apply it, and the writer's open
+     would roll it back and delete it. Only a crash during a journal-mode change or another tool leaves one.
+  2. If the main file is missing, or has length 0 with no sidecar, there is nothing to preflight: it is a fresh
+     database.
   3. Otherwise read its first 100 bytes in Go and require the SQLite magic `SQLite format 3\0` and a valid page
      size. Anything else is "not a usable database" (US1 scenario 3) without SQLite ever opening the file.
   4. Build the **committed view** (below) and open one connection through it. Read whether `mcp_version`,
      `whatsmeow_version` and any other `mcp_`/`whatsmeow_` tables exist, the message version, and the device
      `version` and `compat`. Close the connection and unregister the view.
-  5. Refuse a newer message version, a device `compat` above the bundled table, a version table with zero or
-     more than one row, or schema tables present without their version table.
+  5. Refuse a newer message version, a device `compat` above the bundled table, a version table (either
+     `mcp_version` or `whatsmeow_version`) with zero or more than one row, or schema tables present without
+     their version table. dbutil reads `whatsmeow_version` with `LIMIT 1` and takes a missing row as version 0,
+     which would run the full schema over existing tables, so this check must be ours.
+  6. The view records the identity of the main file and `-wal` from the handles it read, and they must equal the
+     identities `checkArtifacts` recorded (R6).
 - **The committed view:** SQLite never opens the real files during the preflight. A read-only `io/fs.FS`
   (`internal/store/walview.go`) is registered with `modernc.org/sqlite/vfs.New`, and the preflight connects with
   `file:db?mode=ro&vfs=<name>`. Through that VFS SQLite can neither write nor create a file. The view exposes a
@@ -132,9 +140,9 @@ were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-202
     throwaway copy of the same files read-write.
   - **Fuzzing:** a fuzz target feeds arbitrary WAL bytes. The view may refuse or ignore the WAL, but it must
     never panic, read past either file's end, or index more pages than the WAL can hold.
-- **Not verified by the spike:** macOS (the binary builds; CI runs the gate there before anything is built on
-  it); big-endian checksums (magic `0x377f0683`, written only by big-endian hosts, covered by a synthetic
-  fixture); databases over 4 GiB (page numbers are 32-bit, so offsets are computed in `int64`).
+- **Verified since the spike:** the gate (T014) passed on Linux, Windows and macOS arm64 in CI run 40671433110 on
+  2026-10-28, and a synthetic big-endian log gives the same index as its little-endian twin.
+- **Still not verified:** databases over 4 GiB (page numbers are 32-bit, so offsets are computed in `int64`).
 - **Integrity:** the preflight does not run `PRAGMA integrity_check` on every start, which would cost seconds to
   minutes on a large history. Corruption in the header or schema pages is caught by steps 3–4. Corruption deeper
   in the file surfaces as `SQLITE_CORRUPT` on access and fails that operation safely. Full `integrity_check` and
@@ -185,8 +193,10 @@ were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-202
     the data-directory check read the extended security attribute with `unix.Getattrlist`
     (`ATTR_CMN_EXTENDED_SECURITY`) and refuse any artifact with an ACL entry, with the fix
     "run: chmod -N <path>". This is pure Go (`golang.org/x/sys/unix`). CI's macOS job tests it with `chmod +a`.
-  - **File identity after open:** the identities recorded before the open are compared with the files at the
-    same paths after the writer's first ping. A difference means a file was replaced between the check and
+  - **File identity after open:** `checkArtifacts` records each existing file's identity; for a new database,
+    `createDB` records it from the handle that created the file. The preflight's view checks the handles it
+    reads against these (R4 step 6). After the writer's first ping, the files at the same paths are compared
+    again. A difference means a file was replaced between the check and
     SQLite's open, and startup fails with `unsafe_artifact` before the device upgrade or any migration. This is
     the check abuse case 2 tests, with a test hook that swaps the file at that point.
 - **Rationale:** the data directory is owned by this user and nobody else can write it (`private` checks the
@@ -324,15 +334,25 @@ unreachable one is recorded as an exception in `verification.md` (Principle V, X
 
 - **Decision:** `resolveContact(ctx, s)` accepts any `NormalizePhone` form or a `@lid` JID and returns
   `{phone, phoneJID, lid}`.
-  - **From a phone number:** look up `whatsmeow_lid_map` for the current device by `pn`, to find the LID.
-  - **From a LID:** look it up by `lid`, to find the phone number. With no row, only the LID is known.
-  - **Queries:** messages match `sender_phone = :phone OR sender_jid = :lid`, with empty values skipped. The
-    direct chat is `jid = :phoneJID`, else `jid = :lid`. Each half of the `OR` uses its own index
-    (`messages_sender_time`, `messages_sender_jid`).
+  - **The map:** `whatsmeow_lid_map (lid TEXT PRIMARY KEY, pn TEXT UNIQUE)` holds bare user parts and is shared by
+    every device in the file (pinned `00-latest-schema.sql`, line 156). The store looks up user parts and adds
+    `@lid` or `@s.whatsapp.net` itself.
+  - **From a phone number:** look up `pn = <digits>`, to find the LID.
+  - **From a LID:** look up `lid = <user part>`, to find the phone number. With no row, only the LID is known.
+  - **Queries:** messages match `sender_phone = :phone OR sender_jid = :lidJID`, with empty values left out of
+    the SQL. Each half of the `OR` uses its own index (`messages_sender_time`, `messages_sender_jid`).
+  - **Direct chats:** `jid IN (:phoneJID, :lidJID)`. Before 004 merges a LID, live one-to-one messages often land
+    in the `@lid` chat while older history is in the phone chat, so `ContactChats` and `LastInteraction` use
+    both. `DirectChat` returns one chat: the phone chat, else the `@lid` chat.
+  - **Ordering:** the listing selects only the keys `(time, chat_jid, id)` under `ORDER BY ... LIMIT ...
+    OFFSET ...`, then reads the full rows for the page. An `OR` over two indexes needs a sort, and sorting keys
+    instead of rows of up to 512 KiB keeps that sort small (R16).
 
   `ContactChats`, `DirectChat`, `LastInteraction` and `MessageFilter.Sender` all go through it.
 - **Merge:** `MergeLID` first runs `UPDATE messages SET sender_jid = :phoneJID, sender_phone = :phone WHERE
-  sender_jid = :lid` across all chats, then merges the `@lid` chat if it exists. Rewriting makes the stored data
+  sender_jid = :lidJID` across all chats, then merges the `@lid` chat if it exists. The `@lid` chat's name is
+  offered to the phone chat only if it is saved or real: a fallback derived from the LID would name the person
+  after an opaque number (owner's decision, second design review). Rewriting makes the stored data
   canonical. Resolving at query time covers the time before 004 calls the merge, and LIDs whose mapping arrives
   while the process runs. The update is one indexed statement bounded by the 10 s operation deadline.
 - **Rationale:** M6 requires every contact tool to take a LID, and a person who writes in groups under a LID before
@@ -343,3 +363,21 @@ unreachable one is recorded as an exception in `verification.md` (Principle V, X
     query would depend on the map.
   - Rewriting only: queries made between a mapping's arrival and 004's merge would miss messages.
   - Narrowing M6: rejected by the owner (spec clarifications, design review session).
+
+## R16. SQLite's own memory
+
+- **Decision:** both DSNs set `_pragma=hard_heap_limit(268435456)`, the approved 256 MiB. The limit is
+  process-wide in SQLite and only ever lowered by the pragma, so setting it on every connection is harmless.
+  `mapDriverError` maps `SQLITE_NOMEM` to `ErrResourceLimit` with code `memory`, logged as `store.limit`.
+- **Why it is needed:** modernc's SQLite allocates through `modernc.org/memory`, outside the Go heap, so neither
+  Go's runtime nor the 32 MiB result budget sees it. With `temp_store(MEMORY)` a sort for `ORDER BY` holds every
+  row it sorts in that memory. A contact with many large messages, listed at a deep offset, could otherwise need
+  hundreds of megabytes before the first row is counted (second design review).
+- **Keeping normal queries far below it:** listings sort only keys and read full rows for the page (R15), and the
+  page cache stays at SQLite's default of 2,000 KiB per connection, about 10 MiB for the 5 connections.
+- **Measurement:** tests read SQLite's high-water mark with `sqlite3_memory_highwater` (through
+  `modernc.org/sqlite/lib` and a `libc.TLS`) before and after each boundary case, next to Go's heap growth.
+- **Shared with whatsmeow:** the limit covers the device store's queries too, since they run in the same SQLite.
+  Its queries are small and few, so our queries reaching the limit is what fails, not whatsmeow's.
+- **Alternatives:** `soft_heap_limit` alone (advisory; SQLite may exceed it); no limit (the review's finding);
+  temporary files on disk (`temp_store(FILE)`), which puts sensitive rows in the system temp directory (R1).

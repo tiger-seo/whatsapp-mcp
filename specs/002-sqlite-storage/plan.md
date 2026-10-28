@@ -25,7 +25,8 @@ The design follows [research.md](research.md):
 - a semaphore admission gate with deadlines (R9);
 - a free-space reserve (R10);
 - contacts found under a phone number or a LID, resolved through the device store's map, with the LID merge
-  rewriting senders in every chat (R15).
+  rewriting senders in every chat (R15);
+- a 256 MiB hard heap limit on SQLite's own memory, which Go cannot see (R16).
 
 `stdio`, `serve` and `pair` open the store after the lock. The operator guide starts as `OPERATIONS.md`.
 
@@ -96,7 +97,7 @@ Principle V recorded in Complexity Tracking. The design adds no settings and no 
 specs/002-sqlite-storage/
 ├── spec.md
 ├── plan.md              # this file
-├── research.md          # Phase 0: decisions R1–R15
+├── research.md          # Phase 0: decisions R1–R16
 ├── data-model.md        # Phase 1: tables, rules, transitions
 ├── quickstart.md        # Phase 1: validation guide
 ├── contracts/
@@ -165,4 +166,4 @@ The device-store container is handed out through `Store.Device()` for 003. `cmd/
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
-| Principle V: "New sensitive files are created through `internal/private`". SQLite's own VFS creates `whatsapp.db-wal` and `whatsapp.db-shm`, not `internal/private` | SQLite opens and creates its sidecars inside the driver; the store cannot intercept those calls without replacing the VFS | A custom SQLite VFS routing every open through `internal/private` duplicates the driver's file layer and its locking for no added protection. The sidecars are protected anyway: the data directory is private, so no other user can create or swap entries in it; on Unix SQLite gives sidecars the 0600 main file's mode and owner, and on Windows they inherit the directory's protected access list; every sidecar is checked through `private.CheckFile` before the open and again right after it, and an unsafe one stops startup (research R6, tasks T017, T018, T020, T024) |
+| Principle V: "New sensitive files are created through `internal/private`". SQLite's own VFS creates `whatsapp.db-wal` and `whatsapp.db-shm`, and briefly `whatsapp.db-journal` while it switches a new database to WAL, not `internal/private` | SQLite opens and creates its sidecars inside the driver; the store cannot intercept those calls without replacing the VFS | A custom SQLite VFS routing every open through `internal/private` duplicates the driver's file layer and its locking for no added protection. The sidecars are protected anyway: the data directory is private, so no other user can create or swap entries in it; on Unix SQLite gives sidecars the 0600 main file's mode and owner, and on Windows they inherit the directory's protected access list; every sidecar is checked through `private.CheckFile` before the open and again right after it, and an unsafe one stops startup. A `-journal` that outlives the switch (a crash) is refused at the next start rather than rolled back (research R6, tasks T017, T018, T020, T024) |

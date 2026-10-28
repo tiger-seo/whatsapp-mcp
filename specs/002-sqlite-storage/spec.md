@@ -116,6 +116,15 @@ tools themselves (005, 006): this feature provides the operations they call.
   sizes. Who handles it? → A: Feature 006. It must fit the context into the store's bounds, by trimming or paging
   it, instead of failing; the store keeps its limits and errors as they are.
 
+### Session 2026-10-28 (second design review)
+
+- Q: SQLite's own memory (sorts, temporary b-trees, page cache) sits outside Go's heap and no limit bounds it.
+  Should it get an approved hard limit? → A: Yes. A hard heap limit of 256 MiB for SQLite in the process, as a
+  fixed constant in the storage acceptance profile; an operation that needs more fails with a resource-limit error.
+- Q: After a LID merge, should a fallback name derived from the LID survive on the phone-number chat? → A: No. The
+  merge never carries a fallback name from the `@lid` chat over to the phone-number chat, because it would name
+  the person after an opaque LID number. Saved and real names are carried over by the name rule as before.
+
 ## User Scenarios & Testing *(mandatory)*
 
 The "users" of this feature are the operator, who sees one database file in the data directory, and the developers
@@ -309,8 +318,10 @@ the result; run the merge again and check nothing changes.
 
 1. **Given** a LID chat L and a phone-number chat P, **When** L is merged into P, **Then** all of L's messages belong
    to P, L no longer exists, P's last activity is the later of the two, and P's name is the better of the two by the
-   name rule (higher quality, then newer name time, then the byte-wise greater name).
-2. **Given** only L exists, **When** it is merged into P, **Then** P is created with L's name, time and messages.
+   name rule (higher quality, then newer name time, then the byte-wise greater name). L's name takes part only if
+   it is saved or real: a fallback name of L is never carried over, even when P's own fallback is older.
+2. **Given** only L exists, **When** it is merged into P, **Then** P is created with L's time and messages, and with
+   L's name if it is saved or real; if L only had a fallback name, P is created without a name.
 3. **Given** L and P both hold message ID X, **When** L is merged, **Then** P keeps its own copy of X, L's copy is
    dropped, and the merge completes.
 4. **Given** messages in L, and in two group chats, whose sender is the LID, **When** the LID is merged, **Then**
@@ -445,6 +456,11 @@ separate OS test identities. No real WhatsApp account or network connection is n
   safe `corrupt` error, and is handled through the restore procedure (FR-047). Errors MUST
   identify the schema and supported/observed versions when readable, without sensitive contents. A genuinely
   uninitialised schema is version zero; missing version metadata for already-present tables is not a fresh schema.
+  A version table counts as valid only with exactly one row, for the device schema as for the message schema.
+  Two file states MUST also be refused before SQLite opens anything, because SQLite would otherwise delete a
+  sidecar: a main file that is missing or empty while `-wal`, `-shm` or `-journal` exists, and any `-journal` next
+  to the database, which only a crash during a journal-mode change or another tool leaves behind. The refusal
+  names the files and points to the recovery procedure (FR-047); nothing is deleted.
 - **FR-011**: The device store's schema MUST be created or upgraded by whatsmeow's own mechanism when the database is
   opened, only after both compatibility checks pass and before message migrations (FR-041). Its version support
   and failure guarantees MUST be verified for the pinned dependency rather than inferred from message migrations.
@@ -509,17 +525,18 @@ separate OS test identities. No real WhatsApp account or network connection is n
   without a mapped phone number is reported with its LID JID and an empty phone number.
 - **FR-029**: Direct chat by contact: the contact is resolved by FR-035. The result is the direct chat whose phone
   number equals the contact's number exactly, else the contact's `@lid` chat if it still exists, or "not found".
-- **FR-030**: Contact chats: the contact is resolved by FR-035. The result is the direct chat with the contact plus
-  every group in which the contact sent a message under either identity, each once, newest activity first, each
-  with its real latest message.
+- **FR-030**: Contact chats: the contact is resolved by FR-035. The result is the contact's direct chats (the
+  phone-number chat and the `@lid` chat, while both exist before a merge) plus every group in which the contact
+  sent a message under either identity, each once, newest activity first, each with its real latest message.
 - **FR-031**: List messages: filter by strictly-after time, strictly-before time, chat JID, sender and search text,
   all optional and combined; newest first. The sender is a contact resolved by FR-035 and matches messages sent
   under either identity. The search text matches the text or the caption.
 - **FR-032**: Message context: given a message, up to N earlier and M later messages from the same chat, both oldest
   first. The same expansion MUST be available for every hit of a message listing, subject to per-side, aggregate
   row and result-byte limits in FR-043; checked arithmetic MUST precede expansion/allocation.
-- **FR-033**: Last interaction: the contact is resolved by FR-035. The result is the newest message in the direct
-  chat with the contact (from either side) or sent by the contact in any group under either identity, or none.
+- **FR-033**: Last interaction: the contact is resolved by FR-035. The result is the newest message in any of the
+  contact's direct chats as defined in FR-030 (from either side) or sent by the contact in any group under either
+  identity, or none.
 - **FR-034**: Text matching in every query MUST ignore case across scripts (not only ASCII), MUST compare the search
   text and the stored text after normalising both to Unicode NFC, MUST NOT ignore accents or other diacritics, and
   MUST treat wildcard and escape characters in the caller's text literally. Stored text is returned as originally
@@ -527,7 +544,8 @@ separate OS test identities. No real WhatsApp account or network connection is n
 - **FR-035**: The store MUST provide one phone-number normalisation used by every query and by storing: it accepts
   digits with an optional `+`, spaces, dashes, dots and parentheses, or a phone-number JID, and yields the digits.
   Every query that takes a contact MUST also accept a LID JID, and MUST resolve the contact to its identities: the
-  phone JID and number, the LID, or both, using the current device's LID-to-phone map in both directions. A
+  phone JID and number, the LID, or both, using the device store's LID-to-phone map (`whatsmeow_lid_map`, which is shared by all devices in the file) in
+  both directions. A
   contact with no mapping has the one identity it was given. What ingest stores as a sender, and which LIDs it
   merges, remain ingest's decision (004).
 
@@ -537,7 +555,8 @@ separate OS test identities. No real WhatsApp account or network connection is n
   every message whose sender is the LID, in every chat, to the phone JID with the phone number filled in. If the
   `@lid` chat exists, it also creates or updates the phone-number chat with the better name under FR-018 and the
   later last activity time, moves the messages, keeps the phone-number chat's copy when both hold the same message
-  ID, and deletes the LID chat.
+  ID, and deletes the LID chat. The LID chat's name is offered to the phone-number chat only if it is saved or
+  real; its fallback name is dropped.
 - **FR-037**: Merging MUST be idempotent: merging a LID with no chat and no messages left under it does nothing and
   reports no error. Merging a JID into itself, a source that is not `@lid`, or a target that is not a phone JID
   MUST be rejected.
@@ -664,7 +683,8 @@ after config loading or lock acquisition does not retroactively protect earlier 
   or silently sanitised; diagnostics encode it safely under FR-048.
 - **FR-043**: All direct store calls MUST enforce the approved storage acceptance profile: field/search byte lengths,
   batch count/aggregate bytes, list size/offset, per-side and total expanded context, aggregate result bytes
-  (including ambiguous-ID results), active/waiting work, database connections and wait/operation deadlines. Base
+  (including ambiguous-ID results), active/waiting work, database connections, SQLite's own memory and
+  wait/operation deadlines. Base
   list sizes MUST NOT exceed 200; tools still own their existing defaults and page-to-offset conversion (D9).
   Context rows have a separate aggregate bound, not an implicit exemption. Arithmetic for offsets, sizes and
   expansion MUST be checked before SQL/allocation. Reject oversized requests before expensive work where possible;
@@ -723,7 +743,7 @@ of 1024.
 | --- | --- |
 | Fields and metadata | JID ≤ 256 B; message ID ≤ 256 B; chat and contact names ≤ 1 KiB; text ≤ 256 KiB; caption ≤ 256 KiB; search text ≤ 1 KiB; URL ≤ 4 KiB; direct path ≤ 4 KiB; MIME type ≤ 255 B; original file name ≤ 1 KiB; media key, file hash and encrypted file hash exactly 32 B when present; file length 0 to 4 GiB; message times and time filters from 2000-01-01T00:00:00Z (inclusive) to 2100-01-01T00:00:00Z (exclusive). A value outside these is a validation error naming the field, with nothing stored |
 | Batch and results | Batch ≤ 1,000 messages and ≤ 16 MiB aggregate field bytes; chat-update batch ≤ 1,000 updates (their size is bounded by the field limits); list size 1–200; offset 0–100,000; context ≤ 20 rows per side and ≤ 2,000 context rows per call in total; ≤ 32 MiB of result bytes per call; an ambiguous-ID error lists ≤ 100 chats. Existing or upstream data that would exceed a result bound returns a resource-limit error, never a truncated or partial result |
-| Work and waits | 1 write connection and 4 read connections; ≤ 16 active and ≤ 64 waiting operations (beyond that: immediate busy error); admission wait ≤ 5 s; busy timeout 5 s; each query or write ≤ 10 s; resources released within 1 s of cancellation; startup schema upgrades ≤ 10 min in total; closing the store fits within the existing 10-second shutdown limit |
+| Work and waits | 1 write connection and 4 read connections; ≤ 16 active and ≤ 64 waiting operations (beyond that: immediate busy error); admission wait ≤ 5 s; busy timeout 5 s; each query or write ≤ 10 s; resources released within 1 s of cancellation; startup schema upgrades ≤ 10 min in total; closing the store fits within the existing 10-second shutdown limit; SQLite memory (page cache, sorts, temporary b-trees) ≤ 256 MiB per process as a hard heap limit, beyond which the operation fails with a resource-limit error (approved 2026-10-28, second design review) |
 | Disk and WAL | Free-space reserve 256 MiB, checked before each write transaction from a measurement at most 30 s old; once refused, writes resume when ≥ 512 MiB is free. The write-ahead log is truncated to ≤ 64 MiB after checkpoints; a long reader is bounded by the 10 s query deadline. Nothing (keys, messages, journals, backups) is deleted automatically |
 | Platform and recovery | Local filesystems only (NTFS on Windows; ext4 and other local POSIX filesystems; APFS). UNC/network paths (including mapped and `subst` drive letters that resolve to one), `\\?\` and `\\.\` device paths and alternate data streams are rejected. On Windows the access list is limited to the user, SYSTEM and Administrators (constitution Principle V). Upstream device-migration guarantees, backup/restore steps and the isolated cross-identity test procedure are verified and documented under FR-011, FR-041, FR-047 and FR-039 |
 

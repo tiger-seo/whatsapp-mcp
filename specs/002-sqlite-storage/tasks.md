@@ -90,7 +90,7 @@ R4, spike S2).
   - **Work and waits:** "1 write connection and 4 read connections; ≤ 16 active and ≤ 64 waiting operations;
     admission wait ≤ 5 s; busy timeout 5 s; each query or write ≤ 10 s; resources released within 1 s of
     cancellation; startup schema upgrades ≤ 10 min". `Close` gives running operations a 2 s grace period before
-    it cancels them (research R9).
+    it cancels them (research R9). SQLite's hard heap limit is 256 MiB (research R16).
   - **Disk:** "Free-space reserve 256 MiB … measurement at most 30 s old; … writes resume when ≥ 512 MiB is free";
     WAL limit 64 MiB.
   - Every limit is defined in bytes, with KiB = 1024.
@@ -101,7 +101,8 @@ R4, spike S2).
     `SchemaError{Schema, Observed, Supported}`, `MigrationError{Schema, Step, Completed}`,
     `StorageError{Artifact, Code, Fix}`, each with `Is`/`Unwrap` to its sentinel;
   - `mapDriverError(err) error`, which converts modernc/SQLite errors to `ErrIO` with a code (`disk_full`,
-    `readonly`, `corrupt`, `busy`, `io`). It keeps the SQLite result code and never the driver's message text.
+    `readonly`, `corrupt`, `busy`, `io`), and `SQLITE_NOMEM` to `ErrResourceLimit` with code `memory`. It keeps
+    the SQLite result code and never the driver's message text.
 
   Test the `errors.Is`/`errors.As` mapping and that `Error()` never contains the inputs it was given beyond
   identifiers, in `internal/store/errors_test.go`.
@@ -293,7 +294,13 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
   - **Artifacts:** `whatsapp.db`, `-wal`, `-shm` or `-journal` as a symlink (and as a junction or reparse point
     on Windows), a hard link, a directory or a FIFO (Unix) is refused before mutation, and a sentinel target
     outside the directory is unchanged (SHA-256).
-  - **Orphans:** a `-wal`/`-shm`/`-journal` without `whatsapp.db` is refused ("orphaned journal file").
+  - **Orphans:** a `-wal`/`-shm`/`-journal` without `whatsapp.db`, or next to a 0-byte `whatsapp.db`, is refused
+    ("orphaned journal file"), and every file is byte-for-byte unchanged afterwards (`snapshotDir`): in
+    particular the `-wal` is not deleted.
+  - **Rollback journal:** a `-journal` (empty or not) next to a valid `whatsapp.db` is refused ("rollback
+    journal left behind") with the directory unchanged.
+  - **Created file swapped:** a test hook after `createDB` and before the writer opens renames another file over
+    the new `whatsapp.db`; `Open` fails with `unsafe_artifact`.
   - **Permissions:** an existing `whatsapp.db` with mode 0644 is refused with the chmod fix and left at 0644.
 - [ ] T018 [P] [US1] `internal/store/open_test.go`:
   - **Fresh directory:** opening creates `whatsapp.db`; `whatsmeow_version` = 16; `mcp_version` = latest; the
@@ -303,7 +310,8 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
   - **Not a database:** a `whatsapp.db` of 4 KiB of random bytes, or a valid database truncated to 1,000 bytes,
     gives `ErrNotDatabase`, and the file's SHA-256 is unchanged.
   - **Old files:** `store/whatsapp.db` and `store/messages.db` files are ignored and unchanged.
-  - **Zero-length file:** an empty `whatsapp.db` (0 bytes) is treated as fresh.
+  - **Zero-length file:** an empty `whatsapp.db` (0 bytes) with no sidecar is treated as fresh.
+  - **Memory limit:** `PRAGMA hard_heap_limit` returns 268435456 on the writer and on every reader connection.
   - **Reader pool:** with all 4 reader connections forced open at once (4 concurrent queries held by a test
     hook), each can call `mcp_fold`, and each can `BeginTx` with `ReadOnly: true` and run a query. A write on any
     reader connection fails as read-only.
@@ -334,13 +342,15 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
     - Unix: no-op;
   - `artifactNames(db)` returns `db`, `db-wal`, `db-shm`, `db-journal`;
   - `checkArtifacts(dir) (found map[string]private.FileID, err error)`: `Lstat` each name, refuse links, reparse
-    points, non-regular files, hard links and orphans, and call `private.CheckFile` on each existing one,
-    keeping its identity;
+    points, non-regular files, hard links, any `-journal`, and orphans (a sidecar next to a missing or 0-byte main
+    file), and call `private.CheckFile` on each existing one, keeping its identity;
   - `sameArtifacts(before, after map[string]private.FileID) error`: every name in `before` must have the same
     identity in `after`; otherwise `unsafe_artifact`;
-  - `createDB(path)`: `private.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL)`, then close.
+  - `createDB(path) (private.FileID, error)`: `private.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL)`, record
+    the identity from that handle, then close. `Open` adds it to the identities `sameArtifacts` compares.
 
-  Errors are `*StorageError` with code `unsafe_artifact`, `orphan_sidecar`, `unsupported_path` or `not_private`,
+  Errors are `*StorageError` with code `unsafe_artifact`, `orphan_sidecar`, `rollback_journal`, `unsupported_path`
+  or `not_private`,
   plus the `private` fix text.
 - [ ] T021 [P] [US1] Create `internal/store/migrations/0001_init.sql` exactly as data-model.md specifies:
   - `CREATE TABLE mcp_version (version INTEGER NOT NULL) STRICT`, and `INSERT INTO mcp_version VALUES (1)`.
@@ -369,7 +379,7 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
     - `messages_chat_time (chat_jid, time DESC, id DESC)`;
     - `messages_sender_time (sender_phone, time DESC)`;
     - `messages_sender_jid (sender_jid, time DESC)`;
-    - `messages_time (time DESC, chat_jid, id)`.
+    - `messages_time (time DESC, chat_jid DESC, id DESC)`, the listing order exactly.
 - [ ] T022 [US1] Create `internal/store/migrate.go`:
   - `type migration struct{ version int; name string; sql string }`;
   - `loadMigrations(fs.FS)` parses `NNNN_<name>.sql` from `//go:embed migrations/*.sql`, requiring a contiguous
@@ -384,6 +394,8 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
     to 65536 (stored value 1 = 65536); otherwise `ErrNotDatabase`;
   - `preflight(ctx, path) (pf preflightResult, err error)` opens one connection on the DSN from
     `openCommittedView` (T014), and closes the connection then calls `release` before returning on every path.
+    Extend `openCommittedView` to return the `private.FileID` of the main file and `-wal` from its own handles,
+    and refuse with `unsafe_artifact` unless they equal the identities `checkArtifacts` recorded;
     It never opens `path` itself through SQLite;
   - it reads `sqlite_master` for the presence of `mcp_version`, `chats`, `messages`, `whatsmeow_version` and any
     other `whatsmeow_%` table;
@@ -393,7 +405,8 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
   Refusal rules (US2 tests them in depth):
   - messages version > latest bundled → `ErrSchemaTooNew`;
   - device `compat` (or `version` when `compat` is NULL or 0) > `len(upgrades.Table)` → `ErrSchemaTooNew`;
-  - `mcp_version` row count ≠ 1 → `ErrSchemaInvalid`;
+  - `mcp_version` row count ≠ 1, or `whatsmeow_version` row count ≠ 1 when the table exists → `ErrSchemaInvalid`
+    (dbutil would read a missing row as version 0 and rerun the full schema);
   - `chats`/`messages` without `mcp_version`, or `whatsmeow_*` tables without `whatsmeow_version` →
     `ErrSchemaInvalid`.
 - [ ] T024 [US1] Create `internal/store/store.go` with `type Store`, `Open`, `Close` and `Device`, following
@@ -403,12 +416,12 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
   3. `createDB` if missing, or `checkHeader` + `preflight` if non-empty;
   4. `registerFold()`, before any pool exists, so every connection either pool opens has `mcp_fold`;
   5. open the writer `*sql.DB` with the write DSN from research R1, verbatim:
-     `file:<path>?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)&_pragma=journal_size_limit(67108864)&_txlock=immediate`,
+     `file:<path>?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)&_pragma=journal_size_limit(67108864)&_pragma=hard_heap_limit(268435456)&_txlock=immediate`,
      with `SetMaxOpenConns(1)`;
   6. `PingContext`, then re-run `checkArtifacts` (now `-wal`/`-shm` exist) and `sameArtifacts` against step 2;
      the test hook for T017's swap sits between steps 3 and 5;
   7. open the reader with the read DSN from research R1, verbatim:
-     `file:<path>?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)&_pragma=query_only(1)`,
+     `file:<path>?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)&_pragma=hard_heap_limit(268435456)&_pragma=query_only(1)`,
      with `SetMaxOpenConns(4)`, and `PingContext`. It has no `_txlock`;
   8. the device upgrade: `dbutil.NewWithDB(writer, "sqlite")`, set `VersionTable="whatsmeow_version"`,
      `UpgradeTable=upgrades.Table`, `ReadOnlyDB=reader`, then
@@ -458,6 +471,8 @@ directory.
   - `mcp_version` = latest+1 (`ErrSchemaTooNew`, error text names "message schema", 1+latest and latest);
   - `whatsmeow_version` compat = 17 (`ErrSchemaTooNew`, "device schema");
   - `mcp_version` with 0 rows and with 2 rows (`ErrSchemaInvalid`);
+  - `whatsmeow_version` with 0 rows and with 2 rows, next to `whatsmeow_*` tables (`ErrSchemaInvalid`, "device
+    schema");
   - `chats` present without `mcp_version`;
   - `whatsmeow_device` present without `whatsmeow_version`.
 - [ ] T028 [P] [US2] `internal/store/device_test.go`:
@@ -592,7 +607,8 @@ expected rows.
   - **`ContactChats`:** a contact with a direct chat who wrote in two groups, one of them under a mapped LID
     (seeded with `LIDs.PutLIDMapping`), gives three chats, each once, newest first, each with its latest
     message, whether asked by phone number or by LID. Without the mapping, asking by phone gives two chats and
-    asking by LID gives one.
+    asking by LID gives one. Before a merge, with both a phone chat P and a `@lid` chat L for the contact, both
+    are returned, and `DirectChat` returns P.
   - **Paging rules:** limit 0, limit 201, offset -1 and offset 100,001 are `*ValidationError`; a page beyond the
     end is empty.
 - [ ] T040 [P] [US4] `internal/store/queries_messages_test.go`:
@@ -607,7 +623,8 @@ expected rows.
     `(chat_jid, id)`.
   - **Last interaction:** `LastInteraction` returns the newest message of the direct chat (either side) or one
     sent by the contact in a group, or nil. When the newest is a group message sent under the mapped LID, it is
-    returned whether the contact is given by phone number or by LID.
+    returned whether the contact is given by phone number or by LID. With both P and L present, a newer message
+    in L (from either side) is the one returned.
   - **Fields:** every `MessageView` field is filled (scenario 9). The sender name follows the order full → first →
     push → business (device store), looked up under the sender JID and then its mapped counterpart, else the saved
     or real name of the direct chat with the sender, else ''. A contact with both a first name and a push name
@@ -620,7 +637,9 @@ expected rows.
   - the name is taken from the phone-number entry in the order full, first, push, business, and if that entry has
     none, from the LID entry's name in the same order;
   - a LID without a mapping is returned with its LID JID and an empty phone;
-  - no device (never paired) gives an empty result, not an error.
+  - no device (never paired) gives an empty result, not an error;
+  - a query with no phone number in it ("Alice", "Alice2") matches by name only: a contact named "Bob" is not
+    returned, whatever its phone number.
 
 ### Implementation for User Story 4
 
@@ -640,9 +659,9 @@ expected rows.
   - search uses `instr(name_fold, ?) > 0 OR instr(jid, ?) > 0` with the folded query;
   - the latest message uses the `messages_chat_time` index (`ORDER BY time DESC, id DESC LIMIT 1`);
   - `DirectChat` and `ContactChats` start with `resolveContact` (T045);
-  - `DirectChat` is the chat with `jid = phoneJID`, else `jid = lid`;
-  - `ContactChats` is that direct chat plus the distinct `chat_jid`s of `g.us` chats where
-    `sender_phone = phone OR sender_jid = lid` (empty values left out of the SQL, not bound as `''`), ordered by
+  - `DirectChat` is the chat with `jid = phoneJID`, else `jid = lidJID`;
+  - `ContactChats` is both direct chats that exist (`jid IN (phoneJID, lidJID)`) plus the distinct `chat_jid`s of
+    `g.us` chats where `sender_phone = phone OR sender_jid = lidJID` (empty values left out of the SQL, not bound as `''`), ordered by
     `last_message_time DESC, jid`;
   - the sort orders are exact:
     - `ByLastActivity` is `ORDER BY last_message_time IS NULL, last_message_time DESC, jid`;
@@ -652,9 +671,12 @@ expected rows.
   - filters are built from fixed SQL fragments with bound values;
   - `MessageFilter.Sender` and `LastInteraction` resolve the contact with `resolveContact` (T045) and match
     `sender_phone = ? OR sender_jid = ?`, leaving out the half whose value is empty;
-  - `LastInteraction` is the newest of the direct chat's latest message and the contact's newest group message;
+  - `LastInteraction` is the newest of the latest message in each direct chat that exists (phone and `@lid`) and
+    the contact's newest group message;
   - search is `(instr(text_fold, ?) > 0 OR instr(caption_fold, ?) > 0)`;
-  - order is `time DESC, chat_jid DESC, id DESC`;
+  - order is `time DESC, chat_jid DESC, id DESC`. The page's keys are selected first
+    (`SELECT time, chat_jid, id ... ORDER BY ... LIMIT ? OFFSET ?`), and the full rows are read for those keys
+    only, so any sort holds keys, not rows of up to 512 KiB (research R15, R16);
   - context: per hit, two queries on `messages_chat_time` (before: `time < t OR (time = t AND id < id)`, DESC then
     reversed; after: the mirror, ASC);
   - before any context query runs, check that `hits × (before+after) ≤ 2,000` with checked arithmetic, else
@@ -663,7 +685,10 @@ expected rows.
   § Derived values "Contact identity". One query over the current device's `whatsmeow_contacts`, left-joined
   with `whatsmeow_lid_map`:
   - person key = `coalesce(pn_jid, their_jid)`;
-  - filter `instr(mcp_fold(<name col>), ?) > 0` over the four names of both entries, or `instr(phone, digits)`;
+  - filter `instr(mcp_fold(<name col>), ?) > 0` over the four names of both entries; add `OR instr(phone, ?)`
+    only when `NormalizePhone` accepts the whole query, so a name never matches through an empty digit string;
+  - the LID map holds bare user parts: join `whatsmeow_lid_map.lid || '@lid'` and `pn || '@s.whatsapp.net'`
+    against the contacts' `their_jid`;
   - exclude `@g.us`;
   - group by person key, choosing the name per the rule (full, first, push, business);
   - order by name fold, then key; limit and offset; result budget.
@@ -681,8 +706,10 @@ expected rows.
   chat, sender, search, with context 5/5), `MessageContext` and `LastInteraction` (by phone and by LID).
 
   In the same file, `TestQueryPlans` runs `EXPLAIN QUERY PLAN` on the SQL of each of these queries (and of
-  T058's lookups) with representative bound values, on the seeded database, and fails if any plan has a
-  `SCAN messages` or `SCAN chats` step that is not on one of the indexes from T021. It runs in CI, unlike the
+  T058's lookups) with representative bound values, on the seeded database. Every lookup by key, chat, sender or
+  contact must use `SEARCH` on an index from T021. Only text search and a listing with no chat or sender filter may
+  use `SCAN messages USING INDEX messages_time`. Any other `SCAN`, and any `USE TEMP B-TREE` for the listing
+  order of the full rows, fails the test. It runs in CI, unlike the
   benchmark, so a partial or missing index is caught there.
 
 **Checkpoint**: US4 passes on its own (T039–T041). Run the benchmark locally (it is not a CI gate).
@@ -704,10 +731,15 @@ has no side effect. The recorded cross-identity and restore evidence passes.
   - elapsed time;
   - result bytes;
   - heap growth (`runtime.ReadMemStats` before and after);
+  - SQLite's own memory high-water mark (`sqlite3_memory_highwater`, research R16), which Go's heap does not
+    include;
   - the gate's active and waiting counts;
   - the size of the database and `-wal`.
 
-  The test asserts that heap growth stays below 2× the approved result budget. Cover:
+  The test asserts that heap growth stays below 2× the approved result budget and SQLite's high-water mark below
+  the 256 MiB limit. It also seeds one contact with 2,000 messages of 256 KiB and lists them by phone and LID at
+  offset 1,800: the call succeeds within the limit (keys-first sort), and a test-only lower heap limit makes the
+  same call fail with `ErrResourceLimit` code `memory`, not a crash. Cover:
   - every field size;
   - batch count and bytes;
   - list size and offset;
@@ -864,7 +896,9 @@ result, then merge again and check nothing changes.
 - [ ] T059 [P] [US6] `internal/store/merge_test.go`:
   1. L and P: after the merge P holds all messages, L is gone, P's activity is the later one, and P's name is the
      better "by the name rule (higher quality, then newer name time, then the byte-wise greater name)";
-  2. only L: P is created with L's name, time and messages;
+  2. only L: P is created with L's time and messages, and with L's name when it is saved or real; when L has only a
+     fallback, P is created without a name. With both chats, a newer fallback of L never replaces P's older
+     fallback;
   3. both hold X: P keeps its own copy and L's is dropped;
   4. messages whose sender is the LID, in L and in two group chats, get sender = phone JID and the phone filled
      in, in every chat; messages from other senders in those groups are unchanged;
@@ -885,13 +919,18 @@ result, then merge again and check nothing changes.
   1. `UPDATE messages SET sender_jid = P, sender_phone = <digits> WHERE sender_jid = L`, across all chats (uses
      `messages_sender_jid`);
   2. read chat L; if it is absent, commit here;
-  3. upsert P with the better name per FR-018 and `max` activity, with `phone` from the JID;
+  3. upsert P with `max` activity and `phone` from the JID; offer L's name by FR-018 only when its quality is saved
+     or real;
   4. `INSERT INTO messages (...) SELECT ... FROM messages WHERE chat_jid = L ON CONFLICT (chat_jid, id) DO NOTHING`,
      with `chat_jid = P`;
   5. `DELETE FROM messages WHERE chat_jid = L`;
   6. `DELETE FROM chats WHERE jid = L`.
 
   Report through `commitOutcome`.
+
+  Add a `MergeLID` sub-benchmark to `BenchmarkQueries` (T046): merge a seeded 20,000-message `@lid` chat into its
+  phone chat on the SC-004 database. Record the time in `verification.md`; above 5 s, half the 10 s operation
+  deadline, the merge needs to be split before 004 relies on it.
 
 **Checkpoint**: all stories are complete.
 

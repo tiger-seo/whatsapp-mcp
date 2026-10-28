@@ -36,6 +36,7 @@ Expected: exit 0. Every test uses `t.TempDir()`. The suites cover:
 ```sh
 go test ./internal/store -run '^$' -fuzz FuzzValidateMessage -fuzztime 60s
 go test ./internal/store -run '^$' -fuzz FuzzNormalizePhone -fuzztime 30s
+go test ./internal/store -run '^$' -fuzz FuzzWALScan -fuzztime 60s
 ```
 
 Expected: no failures. Any crasher is added to `testdata/fuzz` and fixed.

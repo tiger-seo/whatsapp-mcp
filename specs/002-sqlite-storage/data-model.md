@@ -15,7 +15,9 @@ histories:
 | Message store | `mcp_version (version)` | this feature's migrations (R5) | `mcp_version`, `chats`, `messages` |
 
 The store **reads** these whatsmeow tables and never writes them: `whatsmeow_device` (the current device's JID),
-`whatsmeow_contacts` and `whatsmeow_lid_map`.
+`whatsmeow_contacts` and `whatsmeow_lid_map (lid TEXT PRIMARY KEY, pn TEXT UNIQUE)`. The LID map is not per device,
+and it holds bare user parts: `lid` without `@lid`, `pn` without `@s.whatsapp.net`. The store adds the suffixes
+when it compares them with stored JIDs.
 
 All message-store tables are `STRICT`, so SQLite rejects a value of the wrong type instead of storing it.
 
@@ -94,12 +96,15 @@ Indexes (S3, FR-020):
 - `messages_sender_time (sender_phone, time DESC)`: sender filters, contact chats and last interaction by phone
   number
 - `messages_sender_jid (sender_jid, time DESC)`: the same three by LID, and the LID merge's sender rewrite
-- `messages_time (time DESC, chat_jid, id)`: listing across chats, `after`/`before`
+- `messages_time (time DESC, chat_jid DESC, id DESC)`: listing across chats, `after`/`before`, in exactly the
+  listing's order, so no sort step is needed
 
-A query plan test (`EXPLAIN QUERY PLAN`) checks that every lookup in FR-021–FR-033 uses one of these indexes and
-never scans `messages`.
+A query plan test (`EXPLAIN QUERY PLAN`) checks every query in FR-021–FR-033. Every lookup by key, chat, sender or
+contact must be a `SEARCH` on one of these indexes. Only a text search, and a listing with no chat or sender filter,
+may walk `messages_time` newest first (`SCAN messages USING INDEX messages_time`), stopping once the page is full. No
+plan may scan a table without an index or add a `TEMP B-TREE` for the listing order.
 
-The order of every list is deterministic: messages by `(time, chat_jid, id)`; chats by `(last_message_time, jid)`
+The order of every list is deterministic: messages by `(time, chat_jid, id)`, newest first; chats by `(last_message_time, jid)`
 or `(name_fold, jid)`. Rows without a name or time come last.
 
 ### Re-store rule (FR-015)
@@ -127,11 +132,11 @@ escaped only when they appear in diagnostics.
 
 | Value | Definition |
 | --- | --- |
-| Sender name (FR-024) | For `from_me = 0`: the device-store contact for `sender_jid`, then for its counterpart in `whatsmeow_lid_map` (`full_name`, then `first_name`, `push_name`, `business_name`), else the saved or real name (`name_quality >= 2`) of the chat whose `jid = sender_jid`, else `''`. For `from_me = 1`: `''` (the tools render "Me"). |
+| Sender name (FR-024) | For `from_me = 0`: the device-store contact for `sender_jid`, then for its counterpart through `whatsmeow_lid_map` (user part looked up, suffix added) (`full_name`, then `first_name`, `push_name`, `business_name`), else the saved or real name (`name_quality >= 2`) of the chat whose `jid = sender_jid`, else `''`. For `from_me = 1`: `''` (the tools render "Me"). |
 | Chat name on a message | `chats.name` of `chat_jid` |
 | Latest message of a chat | the first row of `messages_chat_time` for that chat |
 | Contact identity (FR-028) | the device's `whatsmeow_contacts` rows, joined with `whatsmeow_lid_map (lid, pn)`. A LID row with a mapped phone and the phone row are one person, keyed by the phone JID. The name comes from the phone row, else from the LID row, each in the order full, first, push, business. Groups (`g.us`) are excluded. |
-| Resolved contact (FR-035) | the input as a phone number, phone JID or LID JID, plus its counterpart from `whatsmeow_lid_map` (`pn → lid` or `lid → pn`) for the current device: `{phone, phoneJID, lid}`, any of which may be empty but not all. Message matches use `sender_phone = phone OR sender_jid = lid`; the direct chat is `jid = phoneJID`, else `jid = lid`. |
+| Resolved contact (FR-035) | the input as a phone number, phone JID or LID JID, plus its counterpart from `whatsmeow_lid_map` (`pn = <digits>` gives `lid`, `lid = <user part>` gives `pn`): `{phone, phoneJID, lidJID}`, where `phoneJID = phone || '@s.whatsapp.net'` and `lidJID = lid || '@lid'`; any may be empty but not all. Message matches use `sender_phone = phone OR sender_jid = lidJID`. The direct chats are `jid IN (phoneJID, lidJID)`: both exist only before a merge. `DirectChat` returns the phone chat, else the `@lid` chat. |
 | Current device | the single row of `whatsmeow_device`. If there is none (never paired, or logged out), contact queries return no rows and sender names fall back to chat names. |
 
 ## State transitions
@@ -146,4 +151,5 @@ ready ──Close──▶ closed (WAL checkpointed by SQLite on last close)
 
 A LID moves through the merge as follows, in one transaction: every message with `sender_jid = L`, in any chat,
 gets `sender_jid = P` and the phone filled in; then, if chat `L` exists, `P` takes every message and `L` is gone.
+`L`'s name is offered to `P` by the name rule only when its quality is saved or real; a fallback is dropped.
 Repeating the merge once nothing is left under `L` does nothing.

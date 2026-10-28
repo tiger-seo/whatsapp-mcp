@@ -103,6 +103,7 @@ type ChatSort int // ByLastActivity (newest first), ByName (ascending, unnamed l
 func (s *Store) ListChats(ctx context.Context, query string, sort ChatSort, withLatest bool, p Page) ([]ChatView, error)
 func (s *Store) GetChat(ctx context.Context, jid string) (ChatView, error)          // with Latest
 func (s *Store) DirectChat(ctx context.Context, contact string) (ChatView, error)   // exact phone, else the @lid chat
+// ContactChats and LastInteraction cover both direct chats (phone and @lid) while both exist, before a merge.
 func (s *Store) ContactChats(ctx context.Context, contact string, p Page) ([]ChatView, error)
 func (s *Store) SearchContacts(ctx context.Context, query string, p Page) ([]Contact, error)
 
@@ -150,7 +151,7 @@ text, captions, keys, SQL or raw driver messages.
 | `*NotFoundError` (`ErrNotFound`) | no chat or message | chat JID, message ID |
 | `*AmbiguousIDError` | the ID exists in more than one chat | matching chat JIDs (≤ 100; more is `ErrResourceLimit`) |
 | `ErrNotMedia` | `MediaInfo` on a message without media | — |
-| `ErrResourceLimit` | a batch, result, context or byte budget is exceeded | the limit's name |
+| `ErrResourceLimit` | a batch, result, context or byte budget is exceeded, or SQLite's 256 MiB heap limit is reached | the limit's name (`memory` for the heap) |
 | `ErrBusy` | 64 operations already waiting, or the 5 s admission wait expired | — |
 | `ErrClosed` | the call was made during or after `Close` | — |
 | `ErrDiskLow` | free space below the reserve | free bytes, reserve |
