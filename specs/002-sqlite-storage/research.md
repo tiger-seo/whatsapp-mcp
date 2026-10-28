@@ -266,8 +266,10 @@ were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-202
 - **Result bytes:** query code accounts the bytes of each scanned row against the 32 MiB budget, and the context
   rows against the 2,000-row budget. Crossing either aborts with `ErrResourceLimit`, never a truncated result.
 - **Deep sorted listings:** a `ListMessages` call with a sender filter whose `offset + size` is above 10,000 also
-  takes one of 2 slots of a second semaphore, inside its admission and within the same 5 s wait; if none frees in
-  time it gets `ErrBusy`. This bounds SQLite's sort memory (R16).
+  needs one of 2 slots of a second semaphore. It takes that slot first and only then enters admission, within one
+  5 s wait for both; if either does not free in time it gets `ErrBusy`. A caller waiting for a deep slot counts
+  toward the 64-waiter cap and holds none of the 16 admission slots, so a burst of deep listings cannot keep ingest
+  or whatsmeow-driven operations out. This bounds SQLite's sort memory (R16).
 - **Close:** every `opCtx` also derives from a store-wide context that `Close` cancels. `Close` first marks the
   gate closed, so new and waiting callers get `ErrClosed` at once. It then waits up to 2 s for running
   operations, cancels the store-wide context, waits up to 1 s for them to release (the approved cancellation
@@ -422,6 +424,11 @@ unreachable one is recorded as an exception in `verification.md` (Principle V, X
 - **`LastInteraction` reads O(1):** it is the newest of up to four `LIMIT 1` queries, each on one index (the
   latest message of the phone chat and of the `@lid` chat on `messages_chat_time`, the newest message by
   `sender_phone` and by `sender_jid` on the two sender indexes). One query over the `OR` would collect the
-  contact's whole history first (1.35 s and 26 MB for a million messages in the review's measurement).
+  contact's whole history first (1.35 s and 26 MB for a million messages in the review's measurement). Every
+  message the account sent carries the account's own JID as sender, so for any other contact the sender queries
+  match only what that contact sent, in their direct chat or a group. For the account's own number or LID (from
+  `whatsmeow_device`), the sender queries are skipped and only the own direct chat counts (FR-033). The sender
+  indexes end in `chat_jid DESC, id DESC`, so each query's `ORDER BY time DESC, chat_jid DESC, id DESC LIMIT 1` reads
+  one index entry with no sort, and the four candidates are compared in Go by the same three keys.
 - **Alternatives:** `soft_heap_limit` alone (advisory; SQLite may exceed it); no limit (the review's finding);
   temporary files on disk (`temp_store(FILE)`), which puts sensitive rows in the system temp directory (R1).

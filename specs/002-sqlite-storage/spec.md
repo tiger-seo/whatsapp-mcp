@@ -145,6 +145,14 @@ tools themselves (005, 006): this feature provides the operations they call.
   from one contact (realistic identifiers). Accept that bound? → A: Yes, with a measured test and
   `LastInteraction` reading in constant time.
 
+### Session 2026-10-28 (fifth design review)
+
+- Q: For the account's own number, the sender queries of `LastInteraction` match every message the account sent,
+  in anyone's chat. What should it return? → A: Its own direct chat ("message yourself") only. For the own number
+  the sender queries are skipped; for every other contact they match only messages the contact sent.
+- Q: The reviews keep finding queries that are fast on the benchmark's small chats and slow on large ones. Add a CI
+  test over a large seeded database with a time limit per query? → A: Yes.
+
 ## User Scenarios & Testing *(mandatory)*
 
 The "users" of this feature are the operator, who sees one database file in the data directory, and the developers
@@ -561,7 +569,9 @@ separate OS test identities. No real WhatsApp account or network connection is n
   row and result-byte limits in FR-043; checked arithmetic MUST precede expansion/allocation.
 - **FR-033**: Last interaction: the contact is resolved by FR-035. The result is the newest message in any of the
   contact's direct chats as defined in FR-030 (from either side) or sent by the contact in any group under either
-  identity, or none.
+  identity, or none. For the account's own number or LID, it is the newest message of the account's own direct
+  chat, or none: the messages the account sent to others are not interactions with itself. Ties at the same time
+  are broken by chat JID, then message ID, as in every listing.
 - **FR-034**: Text matching in every query MUST ignore case across scripts (not only ASCII), MUST compare the search
   text and the stored text after normalising both to Unicode NFC, MUST NOT ignore accents or other diacritics, and
   MUST treat wildcard and escape characters in the caller's text literally. Stored text is returned as originally

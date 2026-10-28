@@ -191,7 +191,8 @@ R4, spike S2).
     deadline, whichever is earlier.
   - `opCtx` is the caller's context with a 10 s timeout, also cancelled when the gate's store-wide context is.
   - `gate.enterDeep(ctx) (release func(), err error)`: one of 2 slots for a deep sorted listing (research R9),
-    waited for within the same admission deadline, else `ErrBusy`. Callers take it before any database
+    taken before `enter` (admission), within one deadline for both, else `ErrBusy`; a caller waiting for it counts
+    toward the 64-waiter cap and holds no admission slot. Callers take it before any database
     connection (T044). A test hook can hold a slot, so tests never rely on sleeps.
   - `gate.close(ctx) error` (research R9): mark the gate closed, so new and waiting callers get `ErrClosed`; wait
     up to 2 s for active operations; cancel the store-wide context; wait up to 1 s more. `ctx` can shorten both
@@ -395,8 +396,8 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
     - `chats_name ((name_quality = 0), name_fold, jid)`;
     - `chats_phone (phone)`;
     - `messages_chat_time (chat_jid, time DESC, id DESC)`;
-    - `messages_sender_time (sender_phone, time DESC)`;
-    - `messages_sender_jid (sender_jid, time DESC)`;
+    - `messages_sender_time (sender_phone, time DESC, chat_jid DESC, id DESC)`;
+    - `messages_sender_jid (sender_jid, time DESC, chat_jid DESC, id DESC)`;
     - `messages_time (time DESC, chat_jid DESC, id DESC)`, the listing order exactly;
     - `messages_id (id)`, for `GetMessageByID`.
 - [ ] T022 [US1] Create `internal/store/migrate.go`:
@@ -650,7 +651,9 @@ expected rows.
   - **Last interaction:** `LastInteraction` returns the newest message of the direct chat (either side) or one
     sent by the contact in a group, or nil. When the newest is a group message sent under the mapped LID, it is
     returned whether the contact is given by phone number or by LID. With both P and L present, a newer message
-    in L (from either side) is the one returned.
+    in L (from either side) is the one returned. For the account's own number, with a newer message sent to Alice
+    and an older one in the "message yourself" chat, the older one is returned; with no own chat, nil. Two
+    candidates at the same second are ordered by chat JID, then ID.
   - **Fields:** every `MessageView` field is filled (scenario 9). The sender name follows the order full → first →
     push → business (device store), looked up under the sender JID and then its mapped counterpart, else the saved
     or real name of the direct chat with the sender, else ''. A contact with both a first name and a push name
@@ -675,7 +678,9 @@ expected rows.
   - the shared message SELECT, joining chat name and sender name. The sender name is a correlated subquery on
     `whatsmeow_contacts` for the current device (`our_jid` = the single `whatsmeow_device.jid`), using
     `coalesce(nullif(full_name,''), nullif(first_name,''), nullif(push_name,''), nullif(business_name,''))`, first
-    for `their_jid = sender_jid` and then for its counterpart in `whatsmeow_lid_map`, then the direct chat's
+    for `their_jid = sender_jid` and then for its counterpart in `whatsmeow_lid_map` (looked up by
+    `lid = <sender's user part>` or `pn = <sender_phone>`, so the map's key is searched, never computed), then the
+    direct chat's
     saved or real name (`name_quality >= 2`), else '';
   - a `resultBudget` that adds each row's byte size and returns `ErrResourceLimit` above 32 MiB.
 
@@ -699,18 +704,23 @@ expected rows.
     `sender_phone = ? OR sender_jid = ?`, leaving out the half whose value is empty;
   - `LastInteraction` is the newest of up to four `LIMIT 1` queries, each on a single index (research R16): the
     latest message of the phone chat and of the `@lid` chat (`messages_chat_time`), and the newest message with
-    `sender_phone = phone` (`messages_sender_time`) and with `sender_jid = lidJID` (`messages_sender_jid`). It never
-    runs one query over the `OR`, which would read the contact's whole history;
+    `sender_phone = phone` (`messages_sender_time`) and with `sender_jid = lidJID` (`messages_sender_jid`), each
+    `ORDER BY time DESC, chat_jid DESC, id DESC LIMIT 1` with no sort step. The newest of the candidates is chosen in
+    Go by `(time, chat_jid, id)`. It never runs one query over the `OR`, which would read the contact's whole
+    history. When the contact is the account itself (its phone or LID from `whatsmeow_device`), the two sender
+    queries are skipped, and the result is the latest message of the own direct chat;
   - search is `(instr(text_fold, ?) > 0 OR instr(caption_fold, ?) > 0)`;
   - order is `time DESC, chat_jid DESC, id DESC`. The page's keys are selected first
     (`SELECT time, chat_jid, id ... ORDER BY ... LIMIT ? OFFSET ?`), and the full rows are read for those keys
     only, so any sort holds keys, not rows of up to 512 KiB (research R15, R16). A listing with a sender filter
-    and `offset + size` above 10,000 also takes `gate.enterDeep` (T011). It takes the slot right after admission
-    and before it uses any connection, `resolveContact` included: the decision needs only the filter and
+    and `offset + size` above 10,000 also takes `gate.enterDeep` (T011). It takes the slot before admission and
+    before it uses any connection, `resolveContact` included: the decision needs only the filter and
     `offset + size`. A listing that held a reader while waiting for a slot could leave the 2 slot holders with no
     reader to run on;
-  - context: per hit, two queries on `messages_chat_time` (before: `time < t OR (time = t AND id < id)`, DESC then
-    reversed; after: the mirror, ASC);
+  - context: per hit, two queries on `messages_chat_time` with the hit's position as a row value, so the index
+    seeks straight to it: before is `chat_jid = ? AND (time, id) < (?, ?) ORDER BY time DESC, id DESC LIMIT ?`,
+    then reversed; after is `chat_jid = ? AND (time, id) > (?, ?) ORDER BY time, id LIMIT ?`. Never the
+    `time < ? OR (time = ? AND id < ?)` form, which binds only `chat_jid` and walks the chat from one end;
   - before any context query runs, check that `hits × (before+after) ≤ 2,000` with checked arithmetic, else
     `ErrResourceLimit`.
 - [ ] T045 [US4] Create `internal/store/contacts.go` with `SearchContacts`. The rules are in data-model.md
@@ -719,8 +729,10 @@ expected rows.
   - person key = `coalesce(pn_jid, their_jid)`;
   - filter `instr(mcp_fold(<name col>), ?) > 0` over the four names of both entries; add `OR instr(phone, ?)`
     only when `NormalizePhone` accepts the whole query, so a name never matches through an empty digit string;
-  - the LID map holds bare user parts: join `whatsmeow_lid_map.lid || '@lid'` and `pn || '@s.whatsapp.net'`
-    against the contacts' `their_jid`;
+  - the LID map holds bare user parts. Join it with its key on its own side, so each contact is one index search:
+    `m.lid = substr(c.their_jid, 1, length(c.their_jid) - 4) AND c.their_jid LIKE '%@lid'` for a LID contact, and
+    `m.pn = substr(c.their_jid, 1, instr(c.their_jid, '@') - 1) AND c.their_jid LIKE '%@s.whatsapp.net'` for a
+    phone contact. Never `m.lid || '@lid' = c.their_jid`, which scans the whole map for every contact;
   - exclude `@g.us`;
   - group by person key, choosing the name per the rule (full, first, push, business);
   - order by name fold, then key; limit and offset; result budget.
@@ -744,6 +756,17 @@ expected rows.
   `SCAN chats USING INDEX chats_last_activity` or `chats_name` for the chat listings; and a temporary b-tree only
   where that table lists one. Any other plan fails the test. It runs in CI, unlike the
   benchmark, so a partial or missing index is caught there.
+
+  Also add `TestQueryScale` in `internal/store/scale_test.go`, which runs in CI on all three OSes (not skipped by
+  `-short`). It seeds, once, through raw batched inserts on a test-only hook so seeding stays under a minute: a
+  group of 300,000 messages, 120,000 of them from one contact under both its phone number and a mapped LID;
+  5,000 contacts in the device store with 10,000 LID mappings; and 1,000 small chats. Then it runs every query of
+  US4 and US5 against the oldest, a middle and the newest message where that matters. Cases include: a search
+  with 100 hits and 10/10 context in the big group; `MessageContext` on its oldest message; `SearchContacts` for a
+  name and for a number; `ContactChats`, `LastInteraction` and a sender listing at offset 0 and at offset 99,800
+  for the big contact; `GetMessageByID`. Each must finish in under 1 s on the CI runner, a limit that an O(chat
+  size) or O(contacts × mappings) plan breaks by an order of magnitude. The test records each duration in its
+  output for `verification.md`.
 
 **Checkpoint**: US4 passes on its own (T039–T041). Run the benchmark locally (it is not a CI gate).
 
@@ -775,11 +798,20 @@ has no side effect. The recorded cross-identity and restore evidence passes.
   lowered limit set with `sqlite3_hard_heap_limit64` makes the same call fail with `ErrResourceLimit` code `memory`,
   not a crash; the limit never changes in the test binary itself. Three concurrent deep sender listings (page end
   above 10,000), with the two slots held by the test hook: the third waits, then gets `ErrBusy` after the admission
-  wait (shortened for the test). Per-contact memory: seed one contact with 200,000 messages under both identities
-  (phone and mapped LID), run 2 deep and 2 shallow sender-filtered listings at once, and record SQLite's
-  high-water mark. Assert it stays below 108 MB + 96 B per message of that contact plus 10% (research R16), and
-  record the figure next to the extrapolation to 1 million in `verification.md`. `LastInteraction` for the same
-  contact must stay below 1 MB of SQLite memory and 50 ms. Cover:
+  wait (shortened for the test). Per-contact memory, in a child process with no parallel tests (as T008), with
+  identifiers of realistic length so that keys are about 300 B (chat JIDs of 120 B, message IDs of 150 B):
+  1. seed one contact with 50,000 messages under both identities (phone and mapped LID); reset the high-water
+     mark (`sqlite3_memory_highwater(1)`); run one shallow sender-filtered listing at offset 0 and record the peak;
+  2. add 150,000 more (200,000), reset, run the same listing, and record the peak. The slope is the difference
+     divided by 150,000; assert it is at most 96 B × 1.1 per message;
+  3. reset, then run 2 deep (offset 99,800) and 2 shallow listings at once, with a test hook that holds all four
+     statements open until each has read its first row, so the peaks overlap. Assert the peak minus 200,000 × the
+     measured slope is at most 108 MB × 1.1;
+  4. record both measured terms and the extrapolation to 1 million messages in `verification.md`, which must stay
+     at least 60 MB below 256 MiB;
+  5. reset, then run `LastInteraction` for the same contact: below 1 MB of SQLite memory and 50 ms.
+
+  Cover:
   - every field size;
   - batch count and bytes;
   - list size and offset;
@@ -868,7 +900,8 @@ has no side effect. The recorded cross-identity and restore evidence passes.
   - **Recovering from a refused start:** for each refusal code, what it means and what to do, never deleting
     anything first:
     - `rollback_journal`: stop; copy the whole file set to a private place; open the database once with an SQLite
-      shell (`sqlite3 whatsapp.db "PRAGMA integrity_check"`), which rolls back a journal that holds a transaction.
+      shell (`sqlite3 whatsapp.db "PRAGMA integrity_check"` on the live file in the data directory, not on the
+      copy), which rolls back a journal that holds a transaction.
       SQLite leaves an empty or zeroed journal where it is, because it is not "hot", so then move any
       `whatsapp.db-journal` that is still there into the private copy; start again. T054 follows this step once
       with a 0-byte and once with a zeroed journal and checks that the next start succeeds;
@@ -896,10 +929,13 @@ has no side effect. The recorded cross-identity and restore evidence passes.
   3. Open the copy offline with a raw read-only connection and run `integrity_check` = `ok`, `foreign_key_check` =
      no rows, both versions, and the counts.
   4. Open it with `store.Open` and compare the dumps with the original.
-  5. Journal recovery: next to a closed database, put a 0-byte `-journal`, and in a second run a zeroed 512-byte
-     one. `store.Open` refuses with `rollback_journal`. Follow T053's `rollback_journal` step through the driver
-     (open the copy once, then move any journal left into the private copy). The next `store.Open` succeeds and
-     the data is unchanged.
+  5. Journal recovery, with three journals in turn: a 0-byte `-journal`; a zeroed 512-byte one; and a hot one,
+     made by a child process that opens a copy of the database in `journal_mode=DELETE` with a small cache,
+     updates enough rows inside one transaction to spill pages to the journal, and is killed before it commits.
+     Each time `store.Open` refuses with `rollback_journal`. Then follow T053's `rollback_journal` step on the live
+     `whatsapp.db`, not on the copy: copy the file set aside, open `whatsapp.db` once through the driver, then
+     move any journal left into the private copy. The next `store.Open` succeeds, and the data equals the state
+     before the killed transaction, which shows the hot journal was rolled back.
 
   Also follow the `OPERATIONS.md` procedure manually once on Windows and once on Linux, and record the result.
 - [ ] T055 [P] [US7] Create `internal/store/testdata/cmd/bumpversion/main.go` (sets `mcp_version` or
@@ -1002,7 +1038,9 @@ result, then merge again and check nothing changes.
 
 - [ ] T061 Run `go mod tidy` and `go mod verify`. Confirm no `mattn/go-sqlite3` or `litestream` in `go list -m all`.
   Run `CGO_ENABLED=0` builds for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64, and
-  record the binary sizes.
+  record the binary sizes. Check that `go list -m modernc.org/libc` equals the libc version that
+  `modernc.org/sqlite`'s own `go.mod` requires (`go mod graph | grep '^modernc.org/sqlite@'`), and add the same
+  check as a step of CI's `check` job, so a bump that moves libc alone fails there.
 - [ ] T062 Run `gofmt -l .` (empty), `go vet ./...`, `go test ./...` (read each exit code directly, not through a
   pipe) and `govulncheck ./...`. Record the results. Record any unreachable finding as an exception in
   `verification.md` with owner, compensating controls and expiry; a reachable one blocks the feature.
