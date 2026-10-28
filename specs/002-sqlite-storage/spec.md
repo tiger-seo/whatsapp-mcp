@@ -137,6 +137,14 @@ tools themselves (005, 006): this feature provides the operations they call.
   size) next to an intact database: ignore it or refuse? → A: Ignore it, as SQLite does. Such a log holds no valid
   commit, so nothing is lost.
 
+### Session 2026-10-28 (fourth design review)
+
+- Q: The review returned CONCERNS: a journal recovery step that loops, and memory figures with the wrong terms.
+  Accept and fix before implementation, or block? → A: Accept and fix before implementation.
+- Q: With the corrected figures, SQLite's 256 MiB budget keeps 60 MB free for writes up to about 1 million messages
+  from one contact (realistic identifiers). Accept that bound? → A: Yes, with a measured test and
+  `LastInteraction` reading in constant time.
+
 ## User Scenarios & Testing *(mandatory)*
 
 The "users" of this feature are the operator, who sees one database file in the data directory, and the developers

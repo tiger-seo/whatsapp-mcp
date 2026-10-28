@@ -191,7 +191,8 @@ R4, spike S2).
     deadline, whichever is earlier.
   - `opCtx` is the caller's context with a 10 s timeout, also cancelled when the gate's store-wide context is.
   - `gate.enterDeep(ctx) (release func(), err error)`: one of 2 slots for a deep sorted listing (research R9),
-    waited for within the same admission deadline, else `ErrBusy`.
+    waited for within the same admission deadline, else `ErrBusy`. Callers take it before any database
+    connection (T044). A test hook can hold a slot, so tests never rely on sleeps.
   - `gate.close(ctx) error` (research R9): mark the gate closed, so new and waiting callers get `ErrClosed`; wait
     up to 2 s for active operations; cancel the store-wide context; wait up to 1 s more. `ctx` can shorten both
     waits. It returns once every slot is free or the waits are over.
@@ -696,13 +697,18 @@ expected rows.
   - filters are built from fixed SQL fragments with bound values;
   - `MessageFilter.Sender` and `LastInteraction` resolve the contact with `resolveContact` (T045) and match
     `sender_phone = ? OR sender_jid = ?`, leaving out the half whose value is empty;
-  - `LastInteraction` is the newest of the latest message in each direct chat that exists (phone and `@lid`) and
-    the contact's newest group message;
+  - `LastInteraction` is the newest of up to four `LIMIT 1` queries, each on a single index (research R16): the
+    latest message of the phone chat and of the `@lid` chat (`messages_chat_time`), and the newest message with
+    `sender_phone = phone` (`messages_sender_time`) and with `sender_jid = lidJID` (`messages_sender_jid`). It never
+    runs one query over the `OR`, which would read the contact's whole history;
   - search is `(instr(text_fold, ?) > 0 OR instr(caption_fold, ?) > 0)`;
   - order is `time DESC, chat_jid DESC, id DESC`. The page's keys are selected first
     (`SELECT time, chat_jid, id ... ORDER BY ... LIMIT ? OFFSET ?`), and the full rows are read for those keys
     only, so any sort holds keys, not rows of up to 512 KiB (research R15, R16). A listing with a sender filter
-    and `offset + size` above 10,000 also takes `gate.enterDeep` (T011);
+    and `offset + size` above 10,000 also takes `gate.enterDeep` (T011). It takes the slot right after admission
+    and before it uses any connection, `resolveContact` included: the decision needs only the filter and
+    `offset + size`. A listing that held a reader while waiting for a slot could leave the 2 slot holders with no
+    reader to run on;
   - context: per hit, two queries on `messages_chat_time` (before: `time < t OR (time = t AND id < id)`, DESC then
     reversed; after: the mirror, ASC);
   - before any context query runs, check that `hits × (before+after) ≤ 2,000` with checked arithmetic, else
@@ -768,7 +774,12 @@ has no side effect. The recorded cross-identity and restore evidence passes.
   offset 1,800: the call succeeds within the limit (keys-first sort). In a child process (as T008 and T036), a
   lowered limit set with `sqlite3_hard_heap_limit64` makes the same call fail with `ErrResourceLimit` code `memory`,
   not a crash; the limit never changes in the test binary itself. Three concurrent deep sender listings (page end
-  above 10,000): two run and the third waits, then gets `ErrBusy` after the admission wait. Cover:
+  above 10,000), with the two slots held by the test hook: the third waits, then gets `ErrBusy` after the admission
+  wait (shortened for the test). Per-contact memory: seed one contact with 200,000 messages under both identities
+  (phone and mapped LID), run 2 deep and 2 shallow sender-filtered listings at once, and record SQLite's
+  high-water mark. Assert it stays below 108 MB + 96 B per message of that contact plus 10% (research R16), and
+  record the figure next to the extrapolation to 1 million in `verification.md`. `LastInteraction` for the same
+  contact must stay below 1 MB of SQLite memory and 50 ms. Cover:
   - every field size;
   - batch count and bytes;
   - list size and offset;
@@ -857,14 +868,21 @@ has no side effect. The recorded cross-identity and restore evidence passes.
   - **Recovering from a refused start:** for each refusal code, what it means and what to do, never deleting
     anything first:
     - `rollback_journal`: stop; copy the whole file set to a private place; open the database once with an SQLite
-      shell (`sqlite3 whatsapp.db "PRAGMA integrity_check"`), which rolls the journal back; start again;
+      shell (`sqlite3 whatsapp.db "PRAGMA integrity_check"`), which rolls back a journal that holds a transaction.
+      SQLite leaves an empty or zeroed journal where it is, because it is not "hot", so then move any
+      `whatsapp.db-journal` that is still there into the private copy; start again. T054 follows this step once
+      with a 0-byte and once with a zeroed journal and checks that the next start succeeds;
     - `orphan_sidecar` (a sidecar next to a missing or empty `whatsapp.db`): move the sidecars to a private place
       and restore `whatsapp.db` from backup; with no backup, keep the moved files and start fresh, which pairs a
       new device;
     - `schema_too_new`, `schema_invalid`, `not_database`: keep the files, use the binary that wrote them or
       restore from backup;
     - `unsafe_artifact`, `not_private`, `unsupported_path`: fix ownership, access or the path as the error's fix
-      text says.
+      text says;
+    - `memory_limit_unavailable`: the binary could not switch on SQLite's memory limit. It is a build or
+      packaging defect, not a data problem: keep the files and use an official release;
+    - `corrupt` (an operation reached a damaged page): stop, keep the file set, and follow "Restore" with
+      `PRAGMA integrity_check` on a copy before deciding what to restore.
   - **Decommissioning (FR-050):** stop; inventory only this installation's database, sidecars, logs and backups;
     unlinking does not guarantee erasure on SSDs, snapshots or backups; key destruction depends on the operator's
     storage.
@@ -878,6 +896,10 @@ has no side effect. The recorded cross-identity and restore evidence passes.
   3. Open the copy offline with a raw read-only connection and run `integrity_check` = `ok`, `foreign_key_check` =
      no rows, both versions, and the counts.
   4. Open it with `store.Open` and compare the dumps with the original.
+  5. Journal recovery: next to a closed database, put a 0-byte `-journal`, and in a second run a zeroed 512-byte
+     one. `store.Open` refuses with `rollback_journal`. Follow T053's `rollback_journal` step through the driver
+     (open the copy once, then move any journal left into the private copy). The next `store.Open` succeeds and
+     the data is unchanged.
 
   Also follow the `OPERATIONS.md` procedure manually once on Windows and once on Linux, and record the result.
 - [ ] T055 [P] [US7] Create `internal/store/testdata/cmd/bumpversion/main.go` (sets `mcp_version` or

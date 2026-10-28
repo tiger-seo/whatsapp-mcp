@@ -333,6 +333,7 @@ were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-202
 | `modernc.org/sqlite v1.61.0` | the driver (S1, D2) | yes | proven by spike S1 |
 | `go.mau.fi/whatsmeow` (pinned pseudo-version above) | device store `sqlstore`, `types.ParseJID` | yes | the client itself is used from 003; never import `dbutil/litestream` |
 | `golang.org/x/text` | Unicode case folding and NFC (R7) | yes | Go team module |
+| `modernc.org/libc` (direct import; already required by the driver) | the `libc.TLS` and varargs for `sqlite3_config` and `sqlite3_memory_highwater` (R16) | yes | must stay at the version `modernc.org/sqlite v1.61.0` requires (v1.79.0): the generated code is built against one libc, and a `go get -u` that moves it alone is a known break. Bump the two together |
 
 Transitive additions (zerolog, protobuf, `go.mau.fi/util`, `filippo.io/edwards25519` and others) are pure Go. CI's
 module verification and `govulncheck` run on the new graph. A reachable vulnerability blocks the feature, and an
@@ -342,7 +343,7 @@ unreachable one is recorded as an exception in `verification.md` (Principle V, X
 
 - **Decision:** `resolveContact(ctx, s)` accepts any `NormalizePhone` form or a `@lid` JID and returns
   `{phone, phoneJID, lid}`.
-  - **The map:** `whatsmeow_lid_map (lid TEXT PRIMARY KEY, pn TEXT UNIQUE)` holds bare user parts and is shared by
+  - **The map:** `whatsmeow_lid_map (lid TEXT PRIMARY KEY, pn TEXT UNIQUE NOT NULL)` holds bare user parts and is shared by
     every device in the file (pinned `00-latest-schema.sql`, line 156). The store looks up user parts and adds
     `@lid` or `@s.whatsapp.net` itself.
   - **From a phone number:** look up `pn = <digits>`, to find the LID.
@@ -396,16 +397,31 @@ unreachable one is recorded as an exception in `verification.md` (Principle V, X
   `modernc.org/sqlite/lib` and a `libc.TLS`) before and after each boundary case, next to Go's heap growth. It
   reads 0 unless statistics are on, so a test first asserts that an allocation over a lowered limit fails.
 - **One budget for the process:** the allocation that crosses the limit fails, whichever connection makes it, so
-  an ingest write or a whatsmeow write could fail while a reader holds the memory. The store therefore keeps its
-  own queries far below the limit:
-  - a key sort holds at most `offset + size` keys of at most about 530 B (two 256-byte identifiers and a time),
-    because SQLite keeps only the top rows a `LIMIT` needs;
-  - only a listing with a sender filter sorts keys at all. At most 2 such listings with a page end above 10,000
-    run at once (a second semaphore in the admission gate, R9): 2 × 100,200 keys × 530 B ≈ 106 MB;
-  - the other 14 admitted operations each sort at most 10,000 keys, ≈ 5.3 MB each, ≈ 74 MB together;
-  - the page cache is about 10 MiB.
+  an ingest write or a whatsmeow write could fail while a reader holds the memory. The store keeps its own queries
+  below the limit, and the figures below say how far (fourth design review, measured with statistics on):
+  - **At most 4 queries run SQL at once,** one per reader connection, however many operations are admitted.
+  - **Key sorts:** a sender-filtered listing sorts at most `offset + size` keys, because SQLite keeps only the top
+    rows a `LIMIT` needs. A key is a time and two identifiers, so at most about 530 B with 256-byte identifiers
+    chosen by a hostile sender, and about 300 B with realistic ones. The temporary b-tree costs about 1.46 × the
+    raw key bytes. A deep listing (page end up to 100,200) therefore needs about 44 MB with realistic keys and
+    77 MB with hostile ones; a shallow one (page end ≤ 10,000) a tenth of that. At most 2 deep listings run at once
+    (R9).
+  - **Row-ID sets:** every query that matches a contact under both identities (`sender_phone = ? OR sender_jid =
+    ?`, a `MULTI-INDEX OR`) first collects the row IDs of all of that contact's messages, about 24 B each. This
+    does not depend on offset or size, and the deep-listing slots do not bound it. Four such queries over one
+    contact hold about 96 MB per million of that contact's messages.
+  - **The page cache** is about 10 MiB.
 
-  The worst case is therefore about 190 MB of the 256 MiB, leaving more than 60 MB for writes and the device store.
-  With identifiers of normal length (about 70 B a key) it is under 40 MB.
+  With 4 sender-filtered reads of one contact (2 deep, 2 shallow) and realistic keys, the total is about
+  108 MB + 96 MB per million of that contact's messages. More than 60 MB stays free for writes and the device store
+  up to about 1 million messages from one contact, and the 256 MiB limit is reached at about 1.6 million. With
+  hostile 256-byte identifiers the fixed part is about 180 MB, and the 60 MB margin holds to about 0.3 million. The
+  owner accepted this (fourth design review): beyond it, a write can fail with `ErrResourceLimit` code `memory`
+  while those reads run, and nothing is corrupted. T047 measures the per-message term with a contact of 200,000
+  messages.
+- **`LastInteraction` reads O(1):** it is the newest of up to four `LIMIT 1` queries, each on one index (the
+  latest message of the phone chat and of the `@lid` chat on `messages_chat_time`, the newest message by
+  `sender_phone` and by `sender_jid` on the two sender indexes). One query over the `OR` would collect the
+  contact's whole history first (1.35 s and 26 MB for a million messages in the review's measurement).
 - **Alternatives:** `soft_heap_limit` alone (advisory; SQLite may exceed it); no limit (the review's finding);
   temporary files on disk (`temp_store(FILE)`), which puts sensitive rows in the system temp directory (R1).

@@ -106,14 +106,13 @@ Indexes (S3, FR-020):
 A query plan test (`EXPLAIN QUERY PLAN`) holds the expected plan of every query in FR-021–FR-033 and fails on any
 other. Every lookup by key, chat, sender or contact is a `SEARCH` on one of these indexes. A text search, and a
 listing with no chat or sender filter, walk `messages_time` newest first (`SCAN messages USING INDEX messages_time`)
-and stop once the page is full. A temporary b-tree is expected in three places only, and never holds full message
+and stop once the page is full. A temporary b-tree is expected in two places only, and never holds full message
 rows:
 
 | Query | Expected sort | Why |
 | --- | --- | --- |
-| `ListMessages` with a sender filter | `USE TEMP B-TREE FOR ORDER BY` (or `FOR LAST 2 TERMS OF ORDER BY` with only a phone number) in the key subquery | an `OR` over two indexes, or the index's order on `(sender_phone, time)` only; the sort holds keys (R15, R16) |
+| `ListMessages` with a sender filter | `USE TEMP B-TREE FOR ORDER BY` in the key subquery when the contact has both identities (`MULTI-INDEX OR`); `USE TEMP B-TREE FOR LAST 2 TERMS OF ORDER BY` when it has only a phone number or only a LID | an `OR` over two indexes, or one sender index ordered by `(sender, time)` only; the sort holds keys (R15, R16) |
 | `ContactChats` | `USE TEMP B-TREE FOR DISTINCT` and for its `ORDER BY` | one row per chat from the contact's messages; holds chat JIDs |
-| `LastInteraction` | `USE TEMP B-TREE FOR ORDER BY` with `LIMIT 1` | the newest across both sender indexes; holds one key |
 
 The order of every list is deterministic: messages by `(time, chat_jid, id)`, newest first; chats by `(last_message_time, jid)`
 or `(name_fold, jid)`. Rows without a name or time come last.
