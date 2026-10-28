@@ -43,6 +43,14 @@ jobs:
       - name: go mod verify
         if: ${{ !cancelled() }}
         run: go mod verify
+      # modernc.org/sqlite is generated against one libc version; a bump that moves libc alone breaks it at run time.
+      - name: modernc libc matches the driver
+        if: ${{ !cancelled() }}
+        run: |
+          want=$(go mod graph | awk '$1 ~ /^modernc[.]org[/]sqlite@/ && $2 ~ /^modernc[.]org[/]libc@/ {print $2; exit}')
+          have="modernc.org/libc@$(go list -m -f '{{.Version}}' modernc.org/libc)"
+          echo "driver wants $want, build uses $have"
+          [ -n "$want" ] && [ "$want" = "$have" ]
       # Fails only on a vulnerability that the code can reach. Ones in unused parts of a dependency or of the
       # standard library are listed in the log but do not fail the run.
       - name: govulncheck
