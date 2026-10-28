@@ -87,3 +87,40 @@ func unwrapPath(err error) error {
 	}
 	return err
 }
+
+// FileID identifies a file by the volume and index the file system gives it, so two values are equal only for
+// the same file. A file renamed over another one gives a different FileID.
+type FileID struct{ A, B, C uint64 }
+
+// CheckFile checks that path is a private regular file, without creating or changing anything, and returns its
+// identity. It applies OpenFile's checks to an existing file, plus a stricter rule where the platform allows it:
+// on Unix no group or other permission bits at all, and on macOS no extended ACL entry either.
+func CheckFile(path string) (FileID, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return FileID{}, unwrapPath(err)
+	}
+	if fi.Mode()&fs.ModeSymlink != 0 || isReparse(fi) {
+		return FileID{}, errLinkF
+	}
+	if !fi.Mode().IsRegular() {
+		return FileID{}, errIrreg
+	}
+	f, err := openFile(path, os.O_RDONLY)
+	if err != nil {
+		return FileID{}, err
+	}
+	defer f.Close()
+	if err := checkFile(f); err != nil {
+		return FileID{}, err
+	}
+	if err := checkFileStrict(f); err != nil {
+		return FileID{}, err
+	}
+	return fileID(f)
+}
+
+// FileIDOf returns the identity of a file the caller already opened.
+func FileIDOf(f *os.File) (FileID, error) {
+	return fileID(f)
+}

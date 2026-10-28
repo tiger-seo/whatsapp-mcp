@@ -155,3 +155,38 @@ func TestShellQuote(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckFileModes(t *testing.T) {
+	dir := privateTemp(t)
+	f := filepath.Join(dir, "db")
+	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CheckFile(f); err != nil {
+		t.Errorf("0600: %v, want nil", err)
+	}
+	for _, mode := range []os.FileMode{0o640, 0o644, 0o604} {
+		if err := os.Chmod(f, mode); err != nil {
+			t.Fatal(err)
+		}
+		_, err := CheckFile(f)
+		var pe *Error
+		if !errors.As(err, &pe) || !strings.Contains(pe.Fix, "chmod 600") {
+			t.Errorf("mode %04o: %v, want the chmod 600 fix", mode, err)
+		}
+	}
+	if fi, err := os.Stat(f); err != nil || fi.Mode().Perm() != 0o604 {
+		t.Errorf("CheckFile changed the mode to %v, %v", fi.Mode().Perm(), err)
+	}
+}
+
+func TestCheckFileFIFO(t *testing.T) {
+	dir := privateTemp(t)
+	p := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(p, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CheckFile(p); err != errIrreg {
+		t.Errorf("FIFO: %v, want %v", err, errIrreg)
+	}
+}

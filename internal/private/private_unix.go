@@ -48,6 +48,9 @@ func checkDir(dir string) error {
 			Fix:     fmt.Sprintf("run: chmod 700 %s", shellQuote(dir)),
 		}
 	}
+	if err := checkDirACL(dir); err != nil {
+		return err
+	}
 	return checkParent(filepath.Dir(dir))
 }
 
@@ -136,4 +139,32 @@ func shellQuote(s string) string {
 		}
 	}
 	return s
+}
+
+// checkFileStrict is the stricter rule for the database and its sidecars: no group or other permission bits,
+// and on macOS no ACL entry.
+func checkFileStrict(f *os.File) error {
+	fi, err := f.Stat()
+	if err != nil {
+		return unwrapPath(err)
+	}
+	if perm := fi.Mode().Perm(); perm&0o077 != 0 {
+		return &Error{
+			Problem: fmt.Sprintf("other users can read it (mode %04o)", perm),
+			Fix:     fmt.Sprintf("run: chmod 600 %s", shellQuote(f.Name())),
+		}
+	}
+	return checkACL(f)
+}
+
+func fileID(f *os.File) (FileID, error) {
+	fi, err := f.Stat()
+	if err != nil {
+		return FileID{}, unwrapPath(err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return FileID{}, &Error{Problem: "its identity cannot be read"}
+	}
+	return FileID{A: uint64(st.Dev), B: uint64(st.Ino)}, nil
 }
