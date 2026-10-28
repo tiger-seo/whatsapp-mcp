@@ -202,7 +202,7 @@ R4, spike S2).
 - [ ] T013 [P] In `cmd/whatsapp-mcp/commands.go` `startup`, add a `slog.HandlerOptions.ReplaceAttr` that renders
   the `time` attribute in UTC, keeping the text handler and level. Test in `cmd/whatsapp-mcp/cli_test.go` that a
   log line's time ends in `Z`.
-- [ ] T014 **Gate**: the committed view (research R4), test first.
+- [X] T014 **Gate**: the committed view (research R4), test first.
   1. Create `internal/store/gate_test.go` with `TestCommittedViewChangesNothing`, which must fail before step 2.
      Build each fixture from a source database created with modernc in WAL mode with
      `PRAGMA wal_autocheckpoint=0`: rows checkpointed into the main file, then rows committed one per transaction
