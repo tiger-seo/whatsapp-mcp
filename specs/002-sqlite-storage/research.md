@@ -366,6 +366,10 @@ unreachable one is recorded as an exception in `verification.md` (Principle V, X
   after an opaque number (owner's decision, second design review). Rewriting makes the stored data
   canonical. Resolving at query time covers the time before 004 calls the merge, and LIDs whose mapping arrives
   while the process runs. The update is one indexed statement bounded by the 10 s operation deadline.
+- **Chat and sender together:** two more indexes, `(chat_jid, sender_phone, time DESC, id DESC)` and
+  `(chat_jid, sender_jid, time DESC, id DESC)`, make that combination an index search; without them it reads every
+  row of the chat (0.37 s for 300,000 messages in the sixth review's measurement). They add two index writes per
+  stored message, which the owner accepted.
 - **Rationale:** M6 requires every contact tool to take a LID, and a person who writes in groups under a LID before
   their number is known must still be found by that number. Doing both keeps the queries right whether or not
   the merge has run yet.

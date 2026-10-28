@@ -153,6 +153,13 @@ tools themselves (005, 006): this feature provides the operations they call.
 - Q: The reviews keep finding queries that are fast on the benchmark's small chats and slow on large ones. Add a CI
   test over a large seeded database with a time limit per query? → A: Yes.
 
+### Session 2026-10-28 (sixth design review)
+
+- Q: A listing filtered by both a chat and a sender reads every row of the chat (about 0.37 s for 300,000
+  messages, 1.2 s for a million). Add indexes for that combination, or accept the cost? → A: Add two indexes, on
+  chat and phone sender and on chat and LID sender, each followed by time, at the cost of two more index writes
+  per stored message. The scale test checks how each query grows with the database rather than a fixed time.
+
 ## User Scenarios & Testing *(mandatory)*
 
 The "users" of this feature are the operator, who sees one database file in the data directory, and the developers

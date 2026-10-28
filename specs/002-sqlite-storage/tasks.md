@@ -207,6 +207,9 @@ R4, spike S2).
   - cancellation releases the slot within 1 s;
   - `close` with 16 operations that block until their `opCtx` is cancelled returns within 3 s; the waiting
     callers and every later `enter` get `ErrClosed`;
+  - with both deep slots held by the test hook and 10 deep callers waiting for them, the gate's active count is 2
+    (the holders), and a `StoreMessage` caller is admitted at once; each waiting deep caller counts once toward
+    the 64-waiter cap; a deep caller still waiting at `close` gets `ErrClosed`;
   - no goroutine leaks (count before and after).
 - [ ] T012 [P] Create `internal/store/disk.go`, `disk_unix.go` (`unix.Statfs`, `Bavail*uint64(Bsize)`) and
   `disk_windows.go` (`windows.GetDiskFreeSpaceEx`).
@@ -399,7 +402,10 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
     - `messages_sender_time (sender_phone, time DESC, chat_jid DESC, id DESC)`;
     - `messages_sender_jid (sender_jid, time DESC, chat_jid DESC, id DESC)`;
     - `messages_time (time DESC, chat_jid DESC, id DESC)`, the listing order exactly;
-    - `messages_id (id)`, for `GetMessageByID`.
+    - `messages_id (id)`, for `GetMessageByID`;
+    - `messages_chat_sender_phone (chat_jid, sender_phone, time DESC, id DESC)` and
+      `messages_chat_sender_jid (chat_jid, sender_jid, time DESC, id DESC)`, for a listing filtered by chat and
+      sender.
 - [ ] T022 [US1] Create `internal/store/migrate.go`:
   - `type migration struct{ version int; name string; sql string }`;
   - `loadMigrations(fs.FS)` parses `NNNN_<name>.sql` from `//go:embed migrations/*.sql`, requiring a contiguous
@@ -652,8 +658,13 @@ expected rows.
     sent by the contact in a group, or nil. When the newest is a group message sent under the mapped LID, it is
     returned whether the contact is given by phone number or by LID. With both P and L present, a newer message
     in L (from either side) is the one returned. For the account's own number, with a newer message sent to Alice
-    and an older one in the "message yourself" chat, the older one is returned; with no own chat, nil. Two
-    candidates at the same second are ordered by chat JID, then ID.
+    and an older one in the "message yourself" chat, the older one is returned; with no own chat, nil. The same
+    holds when the account is given by its own LID, and when `whatsmeow_device.jid` carries a device part
+    (`490000000001:7@s.whatsapp.net`). With no device row (logged out), asking for the former own number still
+    never returns a message the account sent to someone else. Two candidates at the same second are ordered by
+    chat JID, then ID.
+  - **Chat and sender together:** `ListMessages` with a chat and a sender (by phone, by LID, and by a contact with
+    both) returns only that sender's messages in that chat, newest first.
   - **Fields:** every `MessageView` field is filled (scenario 9). The sender name follows the order full → first →
     push → business (device store), looked up under the sender JID and then its mapped counterpart, else the saved
     or real name of the direct chat with the sender, else ''. A contact with both a first name and a push name
@@ -668,7 +679,9 @@ expected rows.
   - a LID without a mapping is returned with its LID JID and an empty phone;
   - no device (never paired) gives an empty result, not an error;
   - a query with no phone number in it ("Alice", "Alice2") matches by name only: a contact named "Bob" is not
-    returned, whatever its phone number.
+    returned, whatever its phone number;
+  - a person whose phone entry has full name "Bob" and whose mapped LID entry has push name "Alice": a search for
+    "alice" returns them once, with the phone JID and the name "Bob"; a search for "bob" returns the same row.
 
 ### Implementation for User Story 4
 
@@ -679,7 +692,8 @@ expected rows.
     `whatsmeow_contacts` for the current device (`our_jid` = the single `whatsmeow_device.jid`), using
     `coalesce(nullif(full_name,''), nullif(first_name,''), nullif(push_name,''), nullif(business_name,''))`, first
     for `their_jid = sender_jid` and then for its counterpart in `whatsmeow_lid_map` (looked up by
-    `lid = <sender's user part>` or `pn = <sender_phone>`, so the map's key is searched, never computed), then the
+    `pn = <sender_phone>` for an `@s.whatsapp.net` sender and `lid = <sender's user part>` for an `@lid` sender,
+    never both for one sender, so the map's key is searched, never computed), then the
     direct chat's
     saved or real name (`name_quality >= 2`), else '';
   - a `resultBudget` that adds each row's byte size and returns `ErrResourceLimit` above 32 MiB.
@@ -707,8 +721,15 @@ expected rows.
     `sender_phone = phone` (`messages_sender_time`) and with `sender_jid = lidJID` (`messages_sender_jid`), each
     `ORDER BY time DESC, chat_jid DESC, id DESC LIMIT 1` with no sort step. The newest of the candidates is chosen in
     Go by `(time, chat_jid, id)`. It never runs one query over the `OR`, which would read the contact's whole
-    history. When the contact is the account itself (its phone or LID from `whatsmeow_device`), the two sender
-    queries are skipped, and the result is the latest message of the own direct chat;
+    history. Both sender queries also require `from_me = 0`, which costs nothing for another contact (every
+    message the account sent carries the account's own JID) and keeps the result right when the own number is
+    unknown. The own number and LID are the user parts of `whatsmeow_device.jid` and `.lid`, with any device part
+    (`:7`) removed; when the contact's phone or LID equals one of them, the two sender queries are skipped, and the
+    result is the latest message of the own direct chat. With no device row, the queries run with `from_me = 0`;
+    for the former own number that walks only the account's own messages in the sender index, which is accepted
+    for the logged-out state;
+  - a chat filter together with a sender filter uses `messages_chat_sender_phone` and `messages_chat_sender_jid`
+    (T021), with the same keys-first page as every sender listing;
   - search is `(instr(text_fold, ?) > 0 OR instr(caption_fold, ?) > 0)`;
   - order is `time DESC, chat_jid DESC, id DESC`. The page's keys are selected first
     (`SELECT time, chat_jid, id ... ORDER BY ... LIMIT ? OFFSET ?`), and the full rows are read for those keys
@@ -727,14 +748,18 @@ expected rows.
   § Derived values "Contact identity". One query over the current device's `whatsmeow_contacts`, left-joined
   with `whatsmeow_lid_map`:
   - person key = `coalesce(pn_jid, their_jid)`;
-  - filter `instr(mcp_fold(<name col>), ?) > 0` over the four names of both entries; add `OR instr(phone, ?)`
-    only when `NormalizePhone` accepts the whole query, so a name never matches through an empty digit string;
+  - build one row per person first, then match: group the contact rows (each joined to the map) by person key
+    and choose the name per the rule; the text then matches the person if `instr(mcp_fold(<name col>), ?) > 0`
+    for any of the four names of either entry, as a `HAVING max(...)` over the group (or an equivalent join of
+    the counterpart entry). Filtering rows before grouping is wrong: a person matched only through the LID entry
+    would get that entry's name. Add `OR instr(phone, ?)` only when `NormalizePhone` accepts the whole query, so a
+    name never matches through an empty digit string;
   - the LID map holds bare user parts. Join it with its key on its own side, so each contact is one index search:
     `m.lid = substr(c.their_jid, 1, length(c.their_jid) - 4) AND c.their_jid LIKE '%@lid'` for a LID contact, and
     `m.pn = substr(c.their_jid, 1, instr(c.their_jid, '@') - 1) AND c.their_jid LIKE '%@s.whatsapp.net'` for a
     phone contact. Never `m.lid || '@lid' = c.their_jid`, which scans the whole map for every contact;
   - exclude `@g.us`;
-  - group by person key, choosing the name per the rule (full, first, push, business);
+  - the name per the rule (full, first, push, business), from the phone entry, else from the LID entry;
   - order by name fold, then key; limit and offset; result budget.
 
   If the device has no row, return an empty result.
@@ -764,9 +789,16 @@ expected rows.
   US4 and US5 against the oldest, a middle and the newest message where that matters. Cases include: a search
   with 100 hits and 10/10 context in the big group; `MessageContext` on its oldest message; `SearchContacts` for a
   name and for a number; `ContactChats`, `LastInteraction` and a sender listing at offset 0 and at offset 99,800
-  for the big contact; `GetMessageByID`. Each must finish in under 1 s on the CI runner, a limit that an O(chat
-  size) or O(contacts × mappings) plan breaks by an order of magnitude. The test records each duration in its
-  output for `verification.md`.
+  for the big contact; a listing with the big group and a sender who has 2 messages there; `GetMessageByID`.
+
+  The check is how each query grows, not a fixed time, so it holds on any runner. The test seeds the same
+  shapes twice, at one tenth (30,000 messages, 500 contacts, 1,000 mappings) and at full size, and times each
+  query as the median of 5 runs on each. A query whose cost should not grow with the database (every case above
+  except text search and the unfiltered listing) fails if its full-size median is more than 3 times its small
+  median; an O(chat size) or O(contacts × mappings) plan grows about 10 times. Text search and the unfiltered
+  listing, which are linear by design, only get a backstop of 5 s at full size. `database/sql` does not expose
+  the statement handle that SQLite's per-statement step counters need, so the ratio stands in for them. The test
+  records each median in its output for `verification.md`.
 
 **Checkpoint**: US4 passes on its own (T039–T041). Run the benchmark locally (it is not a CI gate).
 
@@ -803,12 +835,14 @@ has no side effect. The recorded cross-identity and restore evidence passes.
   1. seed one contact with 50,000 messages under both identities (phone and mapped LID); reset the high-water
      mark (`sqlite3_memory_highwater(1)`); run one shallow sender-filtered listing at offset 0 and record the peak;
   2. add 150,000 more (200,000), reset, run the same listing, and record the peak. The slope is the difference
-     divided by 150,000; assert it is at most 96 B × 1.1 per message;
-  3. reset, then run 2 deep (offset 99,800) and 2 shallow listings at once, with a test hook that holds all four
-     statements open until each has read its first row, so the peaks overlap. Assert the peak minus 200,000 × the
-     measured slope is at most 108 MB × 1.1;
-  4. record both measured terms and the extrapolation to 1 million messages in `verification.md`, which must stay
-     at least 60 MB below 256 MiB;
+     divided by 150,000. This is the cost of one query, so assert it is at most 24 B × 1.1 per message
+     (research R16);
+  3. reset, then run 2 deep (offset 99,800) and 2 shallow (offset 9,800, page end 10,000) listings at once, with a
+     test hook that holds all four statements open until each has read its first row, so the peaks overlap.
+     Each of the four holds its own row-ID set, so assert that the peak minus 4 × 200,000 × the measured slope is
+     at most 108 MB × 1.1;
+  4. record both measured terms and the extrapolation to 1 million messages, fixed part + 4 × 1,000,000 × slope,
+     in `verification.md`; it must stay at least 60 MB below 256 MiB;
   5. reset, then run `LastInteraction` for the same contact: below 1 MB of SQLite memory and 50 ms.
 
   Cover:

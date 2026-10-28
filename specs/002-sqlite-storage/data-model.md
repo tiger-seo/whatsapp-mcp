@@ -103,6 +103,10 @@ Indexes (S3, FR-020):
   listing's order, so no sort step is needed
 
 - `messages_id (id)`: a lookup by message ID alone (FR-022), which the `(chat_jid, id)` key cannot serve
+- `messages_chat_sender_phone (chat_jid, sender_phone, time DESC, id DESC)` and
+  `messages_chat_sender_jid (chat_jid, sender_jid, time DESC, id DESC)`: a listing filtered by both a chat and a
+  sender, which would otherwise read every row of the chat. With both identities the plan is a `MULTI-INDEX OR`
+  over these two (owner's decision, sixth design review; they add two index writes per stored message)
 
 A query plan test (`EXPLAIN QUERY PLAN`) holds the expected plan of every query in FR-021–FR-033 and fails on any
 other. Every lookup by key, chat, sender or contact is a `SEARCH` on one of these indexes. A text search, and a
@@ -111,14 +115,15 @@ and stop once the page is full. Context queries bind the hit's position as a row
 `> (?, ?)`, so their plan is `SEARCH messages USING INDEX messages_chat_time (chat_jid=? AND (time,id)<(?,?))`; a
 plan with only `(chat_jid=?)` walks the chat from one end and is rejected. Joins to `whatsmeow_lid_map` always put
 the map's key on its own side (`m.lid = <expression on the contact>`, `m.pn = ...`), so the plan is a `SEARCH` on
-the map's key; a `SCAN m` is rejected. A temporary b-tree is expected in three places only, and never holds full
+the map's key; a `SCAN m` is rejected. A temporary b-tree is expected only in the places this table lists, and never holds full
 message rows:
 
 | Query | Expected sort | Why |
 | --- | --- | --- |
 | `ListMessages` with a sender filter | `USE TEMP B-TREE FOR ORDER BY` in the key subquery when the contact has both identities (`MULTI-INDEX OR`); none when it has only a phone number or only a LID, since the sender indexes carry the full listing order | an `OR` over two indexes; the sort holds keys (R15, R16) |
 | `ContactChats` | `USE TEMP B-TREE FOR DISTINCT` and for its `ORDER BY` | one row per chat from the contact's messages; holds chat JIDs |
-| `SearchContacts` | `USE TEMP B-TREE FOR GROUP BY` and for its `ORDER BY` | one row per person from the matching contacts; holds contact rows, bounded by the device store's contact count |
+| `SearchContacts` | `USE TEMP B-TREE FOR GROUP BY` and for its `ORDER BY` | one row per person, built from both of the person's entries before the text is matched; holds contact rows, bounded by the device store's contact count |
+| `ListMessages` with a chat and a sender filter under both identities | `USE TEMP B-TREE FOR ORDER BY` over the `MULTI-INDEX OR` of the two chat-and-sender indexes | the sort holds the keys of that sender's messages in that chat only |
 
 The order of every list is deterministic: messages by `(time, chat_jid, id)`, newest first; chats by `(last_message_time, jid)`
 or `(name_fold, jid)`. Rows without a name or time come last.
