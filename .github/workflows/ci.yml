@@ -82,18 +82,20 @@ jobs:
         env: { GOOS: darwin, GOARCH: arm64 }
         run: go vet ./... && go build -o /dev/null ./cmd/whatsapp-mcp
 
-  # The lock and signal handling differ per OS, so pull requests and main are tested on all three. Other branch
-  # pushes run Linux only, for quick feedback while work is in progress.
+  # The lock, signal handling, file access checks and the store's read-only database view differ per OS, so
+  # every push and pull request is tested on all three. A feature's platform gates have to pass on a branch,
+  # before its pull request exists.
   test:
     name: test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON((github.event_name == 'pull_request' || github.ref == 'refs/heads/main') && '["ubuntu-latest", "windows-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - run: go test ./...
+      # The store's tests include concurrency and crash tests; the default 10 min is too tight for the slowest runner.
+      - run: go test -timeout 15m ./...
