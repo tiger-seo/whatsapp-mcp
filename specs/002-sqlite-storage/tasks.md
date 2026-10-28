@@ -48,7 +48,7 @@ hardens all of them); the P2 stories US5 and US6 follow.
 
   Never import `go.mau.fi/util/dbutil/litestream`. The requirements stay in `go.mod` once T005–T009 import them;
   run `go mod tidy` after T009.
-- [ ] T002 [P] Create `internal/store/doc.go`. Its package comment states:
+- [X] T002 [P] Create `internal/store/doc.go`. Its package comment states:
   - the store owns `<data dir>/whatsapp.db`, and no other package issues database queries;
   - `Device()` is the only shared handle;
   - the store is safe for concurrent use.
@@ -62,9 +62,11 @@ hardens all of them); the P2 stories US5 and US6 follow.
   - "Backup/restore rehearsal (SC-010)";
   - "govulncheck and exceptions";
   - "Limitations / not verified".
-- [ ] T004 [P] Read `.github/workflows/ci.yml`. Confirm that `go test ./...` runs with `CGO_ENABLED=0` on Linux,
+- [X] T004 [P] Read `.github/workflows/ci.yml`. Confirm that `go test ./...` runs with `CGO_ENABLED=0` on Linux,
   Windows and macOS, that `govulncheck` runs, and that the five cross-builds are present. If `go test` has no
-  `-timeout`, add `-timeout 15m`, because the store tests include concurrency and crash tests.
+  `-timeout`, add `-timeout 15m`, because the store tests include concurrency and crash tests. Run the test job
+  on all three OSes for every push, not only for pull requests and `main`, so that T014 and the other platform
+  gates can pass on the feature branch before a pull request exists.
 
 ---
 
