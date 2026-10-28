@@ -72,16 +72,16 @@ tests, in one package and small changes to `cmd/whatsapp-mcp` and `internal/priv
 | I. Spec is the source of truth | S1–S4, S6, D2, D16 and D18 are implemented as specified; the clarifications of 2026-10-28 are in the spec; nothing in D1–D18 is reopened | Pass |
 | II. One self-contained binary | modernc, whatsmeow and x/text are pure Go; no `dbutil/litestream`; five cross-builds in CI | Pass |
 | III. One process owns the data | one file, opened only after the data-directory lock; embedded migrations; no working-directory paths | Pass |
-| IV. Clean protocol channel | the store logs only through the stderr `slog` logger. It never logs message bodies at any level, stricter than "debug only" | Pass |
-| V. Secure by default | input validated and bounded before use; limits on bytes, rows, time, concurrency and disk; private files through `internal/private`; links refused, handles checked; no silent permission changes; govulncheck on the new graph | Pass |
+| IV. Clean protocol channel | the store logs only through the stderr `slog` logger. It never logs message bodies at any level, stricter than "debug only". whatsmeow's device-store logs are bridged into the same logger by `walog.go`, which forwards the level, module and format string but not the arguments (R3) | Pass |
+| V. Secure by default | input validated and bounded before use; limits on bytes, rows, time, concurrency and disk; the database file is created through `internal/private`; links refused, handles checked; no silent permission changes; govulncheck on the new graph. SQLite creates `-wal`/`-shm` itself: justified deviation, see Complexity Tracking | Pass with justified deviation |
 | VI. Testable, and tested | store tested against SQLite in temp dirs with no network; whatsmeow's *client* is not used here; gofmt, vet and test gate the feature | Pass |
 | VII. Correct MCP tools | the store gives `(chat_jid, id)` lookups and ambiguous-ID errors, a 200 cap and distinct not-found/invalid errors that 005/006 map to tool errors | Pass |
 | VIII. Real accounts handled with care | synthetic devices only; no pairing or connection; restored copies never connect | Pass |
 | IX. Simplicity | three justified pure-Go dependencies (R14); own 60-line migration runner instead of a framework; no settings added (limits are constants) | Pass |
 | X. Security planned per feature | the spec's Security section takes up F03, F05, F09–F13 and F16 and defers the others to named features; abuse cases are tests; evidence goes to `verification.md`. High findings for capabilities this feature enables: F03, F05 and F09 are addressed, and F15 is covered by existing CI. None open, no exceptions | Pass |
 
-Post-design re-check (after data model and contracts): unchanged, all Pass. The design adds no settings and no
-services. The only new package outside `internal/store` is a function added to `internal/private`.
+Post-design re-check (after data model and contracts): unchanged. All Pass, with the one justified deviation under
+Principle V recorded in Complexity Tracking. The design adds no settings and no services. The only new package outside `internal/store` is a function added to `internal/private`.
 
 ## Project Structure
 
@@ -132,6 +132,7 @@ internal/store/
 ├── merge.go             # MergeLIDChat
 ├── errors.go            # error types (contract)
 ├── events.go            # typed, secret-free event logging (R12)
+├── walog.go             # whatsmeow waLog → slog bridge: level, module, format string only (R3)
 ├── *_test.go            # unit, integration, fuzz, benchmark
 └── testdata/cmd/{bumpversion,seed}/          # test helpers used by quickstart
 
@@ -156,4 +157,6 @@ The device-store container is handed out through `Store.Device()` for 003. `cmd/
 
 ## Complexity Tracking
 
-No constitution violations to justify.
+| Violation | Why Needed | Simpler Alternative Rejected Because |
+|-----------|------------|-------------------------------------|
+| Principle V: "New sensitive files are created through `internal/private`". SQLite's own VFS creates `whatsapp.db-wal` and `whatsapp.db-shm`, not `internal/private` | SQLite opens and creates its sidecars inside the driver; the store cannot intercept those calls without replacing the VFS | A custom SQLite VFS routing every open through `internal/private` duplicates the driver's file layer and its locking for no added protection. The sidecars are protected anyway: the data directory is private, so no other user can create or swap entries in it; on Unix SQLite gives sidecars the 0600 main file's mode and owner, and on Windows they inherit the directory's protected access list; every sidecar is checked through `private.CheckFile` before the open and again right after it, and an unsafe one stops startup (research R6, tasks T017, T018, T020, T024) |

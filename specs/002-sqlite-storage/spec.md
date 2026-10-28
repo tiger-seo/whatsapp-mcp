@@ -394,8 +394,11 @@ separate OS test identities. No real WhatsApp account or network connection is n
   committed steps remain committed as specified in FR-041.
 - **FR-010**: Before enabling write-affecting pragmas, recovering/checkpointing WAL or upgrading either schema,
   existing storage MUST undergo read-only compatibility preflight for both schema versions, including committed
-  state in an existing WAL. Unsupported newer versions, invalid/unrecognised version metadata or corruption MUST
-  stop opening without modifying the main file or existing sidecars, or creating/deleting sidecars. Errors MUST
+  state in an existing WAL. Unsupported newer versions, invalid/unrecognised version metadata, or corruption found
+  by the preflight (a file that is not SQLite, a damaged header, unreadable schema or version tables) MUST stop
+  opening without modifying the main file or existing sidecars, or creating/deleting sidecars. A full integrity
+  check is not run on every start. Corruption elsewhere in the file fails the operation that reaches it, with a
+  safe `corrupt` error, and is handled through the restore procedure (FR-047). Errors MUST
   identify the schema and supported/observed versions when readable, without sensitive contents. A genuinely
   uninitialised schema is version zero; missing version metadata for already-present tables is not a fresh schema.
 - **FR-011**: The device store's schema MUST be created or upgraded by whatsmeow's own mechanism when the database is
@@ -404,7 +407,8 @@ separate OS test identities. No real WhatsApp account or network connection is n
 
 **Chats and messages (S3, S4, D18, §3.2)**
 
-- **FR-012**: A chat MUST record its full JID, its name, the quality of that name (real or fallback), the time that
+- **FR-012**: A chat MUST record its full JID, its name, the quality of that name (real, fallback, or none while the
+  chat has no name yet), the time that
   name was seen, and its last activity time. Whether it is a group or a direct chat follows from the JID.
 - **FR-013**: A message MUST record its ID, chat JID, full sender JID (without the device part), normalised sender
   phone number (empty when the sender is an unresolved LID), time, whether it is from me, text, caption, media type,
@@ -489,7 +493,8 @@ separate OS test identities. No real WhatsApp account or network connection is n
 **Layout and tests (A4, Q3)**
 
 - **FR-038**: The store MUST live in `internal/store` in the single module, behind operations that the ingest, MCP and
-  media features call; no other package issues database queries.
+  media features call; no other package issues database queries. The one exception is whatsmeow's device store,
+  which queries the same file through the container the store exposes to the WhatsApp client (003).
 - **FR-039**: Automated tests MUST cover, against a database in a temporary directory: the migrations (fresh,
   incremental, failing and too-new), upserts, the last activity time never going back, name quality, the LID merge,
   every query in FR-021–FR-034, and opening a database that holds both schemas. Tests MUST also cover FR-040–FR-050:
@@ -660,7 +665,7 @@ of 1024.
 | Parameter group | Approved values |
 | --- | --- |
 | Fields and metadata | JID ≤ 256 B; message ID ≤ 256 B; chat and contact names ≤ 1 KiB; text ≤ 256 KiB; caption ≤ 256 KiB; search text ≤ 1 KiB; URL ≤ 4 KiB; direct path ≤ 4 KiB; MIME type ≤ 255 B; original file name ≤ 1 KiB; media key, file hash and encrypted file hash exactly 32 B when present; file length 0 to 4 GiB; message times and time filters from 2000-01-01T00:00:00Z (inclusive) to 2100-01-01T00:00:00Z (exclusive). A value outside these is a validation error naming the field, with nothing stored |
-| Batch and results | Batch ≤ 1,000 messages and ≤ 16 MiB aggregate field bytes; list size 1–200; offset 0–100,000; context ≤ 20 rows per side and ≤ 2,000 context rows per call in total; ≤ 32 MiB of result bytes per call; an ambiguous-ID error lists ≤ 100 chats. Existing or upstream data that would exceed a result bound returns a resource-limit error, never a truncated or partial result |
+| Batch and results | Batch ≤ 1,000 messages and ≤ 16 MiB aggregate field bytes; chat-update batch ≤ 1,000 updates (their size is bounded by the field limits); list size 1–200; offset 0–100,000; context ≤ 20 rows per side and ≤ 2,000 context rows per call in total; ≤ 32 MiB of result bytes per call; an ambiguous-ID error lists ≤ 100 chats. Existing or upstream data that would exceed a result bound returns a resource-limit error, never a truncated or partial result |
 | Work and waits | 1 write connection and 4 read connections; ≤ 16 active and ≤ 64 waiting operations (beyond that: immediate busy error); admission wait ≤ 5 s; busy timeout 5 s; each query or write ≤ 10 s; resources released within 1 s of cancellation; startup schema upgrades ≤ 10 min in total; closing the store fits within the existing 10-second shutdown limit |
 | Disk and WAL | Free-space reserve 256 MiB, checked before each write transaction from a measurement at most 30 s old; once refused, writes resume when ≥ 512 MiB is free. The write-ahead log is truncated to ≤ 64 MiB after checkpoints; a long reader is bounded by the 10 s query deadline. Nothing (keys, messages, journals, backups) is deleted automatically |
 | Platform and recovery | Local filesystems only (NTFS on Windows; ext4 and other local POSIX filesystems; APFS). UNC/network paths, `\\?\` and `\\.\` device paths and alternate data streams are rejected. On Windows the access list is limited to the user, SYSTEM and Administrators (constitution Principle V). Upstream device-migration guarantees, backup/restore steps and the isolated cross-identity test procedure are verified and documented under FR-011, FR-041, FR-047 and FR-039 |

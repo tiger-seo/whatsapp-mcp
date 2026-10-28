@@ -110,8 +110,16 @@ fallback described in it before Phase 3.
   - `safePath(s string) string` bounds a path to 512 bytes and escapes control characters and invalid UTF-8;
   - `store.limit` is rate-limited to one event per limit per 10 s, with a suppressed counter.
 
-  Test in `internal/store/events_test.go`, with a capturing `slog.Handler` helper in
-  `internal/store/helpers_test.go`.
+  Also create `internal/store/walog.go`: `newWALog(logger *slog.Logger) waLog.Logger`, which implements
+  `Debugf`, `Infof`, `Warnf`, `Errorf` and `Sub`.
+  - Each call logs at the matching `slog` level with `event=whatsmeow.log`, `module=<Sub path>` and
+    `msg=<format string>`.
+  - The format arguments are **never** formatted or logged, because they can carry JIDs, keys or upstream error
+    text.
+
+  Test in `internal/store/events_test.go` and `internal/store/walog_test.go`, with a capturing `slog.Handler`
+  helper in `internal/store/helpers_test.go`. The `walog` test checks that an argument holding a secret marker
+  never appears in the output, and that `Sub` nests module paths.
 - [ ] T008 [P] Create `internal/store/fold.go`:
   - `fold(s string) string` = `cases.Fold().String(norm.NFC.String(s))`;
   - `registerFold()` registers it once (`sync.Once`) as the deterministic SQL function `mcp_fold(text)` via
@@ -175,10 +183,15 @@ fallback described in it before Phase 3.
   the `time` attribute in UTC, keeping the text handler and level. Test in `cmd/whatsapp-mcp/cli_test.go` that a
   log line's time ends in `Z`.
 - [ ] T014 **Gate**: create `internal/store/gate_test.go` with `TestReadOnlyPreflightChangesNothing`.
-  1. Create a WAL database with modernc. Commit a row and keep the WAL un-checkpointed: hold a second connection
-     open, and use `PRAGMA wal_autocheckpoint=0`.
-  2. Close the writer cleanly enough that `-wal` remains (copy the three files while it is open into a fresh dir
-     to get a "crashed" set). Produce cases: main+wal+shm, main+wal without shm, and main only.
+  1. In a source directory, create a WAL database with modernc on one connection with
+     `PRAGMA wal_autocheckpoint=0`, and commit a row, so that it exists only in `-wal`.
+  2. While that connection is still open, build three case directories:
+     - A: copy the main file, `-wal` and `-shm`;
+     - B: copy only the main file and `-wal`;
+     - C: copy nothing yet.
+
+     Then close the source connection cleanly (SQLite checkpoints and deletes `-wal`/`-shm`), and copy the main
+     file alone into C. The committed row must be readable in all three.
   3. For each case, snapshot every file in the directory (name, size, mtime, SHA-256; helper `snapshotDir` in
      `internal/store/helpers_test.go`).
   4. Open `file:<path>?mode=ro&readonly_shm=1&_pragma=query_only(1)`, read the committed row, close, and
@@ -239,12 +252,19 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
     gives `ErrNotDatabase`, and the file's SHA-256 is unchanged.
   - **Old files:** `store/whatsapp.db` and `store/messages.db` files are ignored and unchanged.
   - **Zero-length file:** an empty `whatsapp.db` (0 bytes) is treated as fresh.
+  - **No temporary files on disk:** `PRAGMA temp_store` returns 2 (MEMORY) on the writer and on every reader
+    connection. A query that forces a large sort (`ORDER BY` on an unindexed expression over 50,000 seeded rows)
+    and a `CREATE INDEX` on a scratch table create no new file in the data directory, in `os.TempDir()` or in
+    `SQLITE_TMPDIR`; compare directory listings before and after.
 - [ ] T019 [P] [US1] `cmd/whatsapp-mcp/e2e_test.go`:
   - `stdio` with closed stdin on an empty `--data-dir` exits 0, creates `whatsapp.db`, and logs `store.ready`;
   - a second run logs no `store.migrate`;
   - `pair` opens and closes the store, then still reports "not implemented" with its existing exit code;
   - `status` and `version` never create `whatsapp.db`;
-  - a `whatsapp.db` of random bytes makes `stdio` exit 1 with "is not a usable SQLite database".
+  - a `whatsapp.db` of random bytes makes `stdio` exit 1 with "is not a usable SQLite database";
+  - **graceful shutdown under load:** start `stdio` in-process with a body that writes messages in a loop, then
+    request a stop. The store close step finishes, the whole shutdown takes less than the 10 s limit, the exit
+    code is 0, and on reopen every acknowledged write is present.
 
 ### Implementation for User Story 1
 
@@ -322,7 +342,7 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
   5. `PingContext`, then re-run `checkArtifacts` (now `-wal`/`-shm` exist);
   6. the device upgrade: `dbutil.NewWithDB(writer, "sqlite")`, set `VersionTable="whatsmeow_version"`,
      `UpgradeTable=upgrades.Table`, `ReadOnlyDB=reader`, then
-     `sqlstore.NewWithWrappedDB(wrapped, waLog.Noop).Upgrade(ctx)`, logging `store.upgrade`; a failure is a
+     `sqlstore.NewWithWrappedDB(wrapped, newWALog(logger)).Upgrade(ctx)`, logging `store.upgrade`; a failure is a
      `*MigrationError{Schema: "device"}`;
   7. `migrate`;
   8. open the reader with the same DSN plus `&_pragma=query_only(1)` and `SetMaxOpenConns(4)`;
@@ -542,7 +562,11 @@ expected rows.
   - search uses `instr(name_fold, ?) > 0 OR instr(jid, ?) > 0` with the folded query;
   - the latest message uses the `messages_chat_time` index (`ORDER BY time DESC, id DESC LIMIT 1`);
   - `ContactChats` is the direct chat with phone `p` plus the distinct `chat_jid`s of `g.us` chats where
-    `sender_phone = p`, ordered by `last_message_time DESC, jid`.
+    `sender_phone = p`, ordered by `last_message_time DESC, jid`;
+  - the sort orders are exact:
+    - `ByLastActivity` is `ORDER BY last_message_time IS NULL, last_message_time DESC, jid`;
+    - `ByName` is `ORDER BY name_quality = 0, name_fold, jid`, so unnamed chats come last even though their
+      `name_fold` is `''`.
 - [ ] T044 [US4] Implement `ListMessages`, `MessageContext` and `LastInteraction` in `internal/store/queries.go`:
   - filters are built from fixed SQL fragments with bound values;
   - search is `(instr(text_fold, ?) > 0 OR instr(caption_fold, ?) > 0)`;
@@ -563,7 +587,7 @@ expected rows.
   If the device has no row, return an empty result.
 - [ ] T046 [P] [US4] Create `internal/store/bench_test.go`: `BenchmarkQueries` seeds 100,000 messages across
   1,000 chats once (through `StoreMessages` in batches of 1,000, cached per process in a temp dir). It has
-  sub-benchmarks for each of: `GetMessage`, `GetMessageByID`, `MediaInfo`, `ListChats` (both sorts, with search),
+  sub-benchmarks for each US4 query: `ListChats` (both sorts, with search),
   `GetChat`, `DirectChatByPhone`, `ContactChats`, `SearchContacts`, `ListMessages` (no filter, chat, sender,
   search, with context 5/5), `MessageContext` and `LastInteraction`.
 
@@ -582,8 +606,14 @@ has no side effect. The recorded cross-identity and restore evidence passes.
 ### Tests for User Story 7 ⚠️
 
 - [ ] T047 [P] [US7] `internal/store/limits_test.go` (SC-009). For every constant in `limits.go`, a test at the
-  boundary (accepted) and one beyond it (rejected, with no row written: compare table dumps), recording elapsed
-  time and result bytes with `testing.B`-style measurements in the log. Cover:
+  boundary (accepted) and one beyond it (rejected, with no row written: compare table dumps). Log for each case:
+  - elapsed time;
+  - result bytes;
+  - heap growth (`runtime.ReadMemStats` before and after);
+  - the gate's active and waiting counts;
+  - the size of the database and `-wal`.
+
+  The test asserts that heap growth stays below 2× the approved result budget. Cover:
   - every field size;
   - batch count and bytes;
   - list size and offset;
@@ -609,6 +639,12 @@ has no side effect. The recorded cross-identity and restore evidence passes.
     keeps working after the limit is raised.
   - **Read-only database:** on Unix, make the file read-only by `chmod 0400` after close; on Windows, set the
     read-only attribute. Then `Open` fails with a safe `ErrIO`/`readonly` reason, and nothing is deleted.
+  - **WAL bound:** write more than 64 MiB of messages in batches, then let an automatic checkpoint run, or force
+    one with `PRAGMA wal_checkpoint(TRUNCATE)` through the test hook. The `-wal` file is then ≤ 64 MiB, the
+    approved limit, and every row is readable.
+  - **Long reader:** hold a read transaction open on the reader pool through a test hook while writes continue.
+    The reader's operation ends with a deadline error at the 10 s operation limit (use a shortened test limit).
+    After it ends, a checkpoint brings `-wal` back within 64 MiB.
 - [ ] T050 [P] [US7] `internal/store/abuse_test.go`: one subtest per abuse case 1–12 in spec.md § Security → Abuse
   cases that is automatable, each asserting "no side effect" (table dumps unchanged, sentinel file outside the
   data directory unchanged):
@@ -627,7 +663,8 @@ has no side effect. The recorded cross-identity and restore evidence passes.
   Seed secret markers: a 32-byte media key, a device key read from `whatsmeow_device`, the message text
   "SECRET-BODY-7f3a", a caption, a name containing `\x1b[31m` and `\x07`, and a search string. Assert:
   - none of the markers appears in any record or error string, whether raw, hex or base64;
-  - every event has `time` in UTC, `event`, `op_id`, `outcome` and `code`;
+  - every `store.*` event has `time` in UTC, `event`, `op_id`, `outcome` and `code`;
+  - `whatsmeow.log` records carry only `time`, `level`, `module` and the format string;
   - paths are ≤ 512 bytes with control characters escaped.
 
 ### Implementation for User Story 7
@@ -709,7 +746,9 @@ has no side effect. The recorded cross-identity and restore evidence passes.
 - [ ] T058 [US5] Implement `GetMessage`, `GetMessageByID` and `MediaInfo` in `internal/store/queries.go`:
   - `GetMessageByID` selects `chat_jid` for `id = ?` with `LIMIT 102` to detect more than 101 matches without an
     unbounded read;
-  - `MediaInfo` returns `MediaMeta` with nil length when NULL, and `ErrNotMedia` when `media_type = ''`.
+  - `MediaInfo` returns `MediaMeta` with nil length when NULL, and `ErrNotMedia` when `media_type = ''`;
+  - add sub-benchmarks for `GetMessage`, `GetMessageByID` and `MediaInfo` to `BenchmarkQueries` in
+    `internal/store/bench_test.go` (from T046), so that SC-004 covers FR-021–FR-023.
 
 **Checkpoint**: US5 passes on its own.
 

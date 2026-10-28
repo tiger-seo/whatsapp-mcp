@@ -47,6 +47,10 @@ All events are emitted at `info`, or at `warn`/`error` for failures, through the
 | `store.io_error` | a runtime I/O, disk-full, disk-low or corruption failure | `op`, `sqlite_code` |
 | `store.limit` | an operation was refused for a limit or for busy (at most one per limit per 10 s, then a count) | `limit`, `suppressed` |
 
+whatsmeow's device-store logs arrive as `event=whatsmeow.log`, with `module` (the `Sub` path) and the message
+set to the upstream format string. Their arguments are never logged (research R3), and they carry no `op_id`,
+`outcome` or `code`.
+
 `outcome` is one of `ok`, `refused`, `failed` or `indeterminate`. `code` is a stable snake_case reason. The full list
 is fixed by the implementation and asserted by tests.
 

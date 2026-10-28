@@ -51,8 +51,12 @@ were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-202
     `whatsmeow_version (version, compat)` itself, and refuses `compat > len(upgrades.Table)` (today 16) before
     `Upgrade` is called.
   - `Upgrade` refuses to run unless `PRAGMA foreign_keys` is on (the DSN sets it).
-  - `dbutil.NewWithDB` sets `Log: NoopLogger`, so dbutil never logs SQL or parameters (FR-048). whatsmeow's own
-    `waLog.Logger` is given `waLog.Noop` in this feature; the slog bridge is feature 003's (M10).
+  - `dbutil.NewWithDB` sets `Log: NoopLogger`, so dbutil never logs SQL or parameters (FR-048).
+  - whatsmeow's own `waLog.Logger` for the container is bridged into the process `slog` logger (constitution
+    Principle IV) by a small adapter, `internal/store/walog.go`. It forwards the level, the module path from `Sub`
+    and the **format string only**. The arguments are dropped, because they can carry JIDs, keys or upstream error
+    text (FR-048).
+  - Feature 003 may widen the bridge for the client's logs. The rule of forwarding only the template stays.
   - A future whatsmeow bump must re-run this check. The transaction mode is not exported, so
     `TestDeviceUpgradeStepsAreTransactional` finds the pinned module's directory with `go list -m -f {{.Dir}}`. It
     then asserts that no file in `store/sqlstore/upgrades` has a `-- transaction:` header other than `on`, and that
