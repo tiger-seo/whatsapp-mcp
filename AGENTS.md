@@ -52,9 +52,18 @@ Add the row the agent ends with to the "Owner reviews" table in `specs/NNN-*/ver
 ```
 
 The last row of a stage counts. `BLOCK` means fix and review again; `CONCERNS` needs the user's decision in
-the last column. `.claude/hooks/owner-review-gate.sh` (wired in `.claude/settings.json`) refuses
+the last column.
+
+After 3 `BLOCK` rounds of one stage the user may park the last round's findings (constitution, Development
+Workflow). Only the user decides this. List each parked finding in the feature's `tasks.md` under
+`## Parked findings`, with the review, its commit, the finding and the task or phase it blocks, and mark those
+tasks blocked. Commit that change on its own, then put `Parked at <that commit>: <finding titles>` in the
+review's last column. A parked finding is resolved and reviewed before the task it blocks starts, and before the
+code review at the latest. High-severity findings about data loss, security or a real WhatsApp account cannot be
+parked. `.claude/hooks/owner-review-gate.sh` (wired in `.claude/settings.json`) refuses
 `/speckit-implement` without a passing design review and `gh pr create` / `gh pr merge` without a passing
-code review, and treats a review as stale once anything it covered changed after the recorded commit.
+code review, and treats a review as stale once anything it covered changed after the recorded commit (after
+the parking commit, for a parked `BLOCK`).
 Changing `verification.md` never makes a review stale. On a branch without a feature directory the hook
 asks for confirmation instead; put the verdict in the pull request. The hook needs `bash` and `jq`.
 

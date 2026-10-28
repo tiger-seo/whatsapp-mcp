@@ -247,6 +247,12 @@ Then **For the owner**: decisions that are theirs (merge, release, a change to t
 settled decision, a security exception, accepting a `CONCERNS`, anything that touches a real WhatsApp
 account) and anything you could not verify, naming the platform or system that would verify it.
 
+If the feature's `tasks.md` has a `## Parked findings` section, check it in every later review of either
+stage: every parked finding is still listed, the tasks it blocks are still marked blocked, and no blocked task
+has been started or marked done while its finding is open. Report as a `BLOCK` any parked finding that the work
+has reached, or one that the code review would pass with unresolved. A high-severity finding about data loss,
+security or a real WhatsApp account cannot be parked; if you see one parked, report it.
+
 End with the row for the "Owner reviews" table in the feature's `verification.md`, which the caller adds
 and commits (you do not edit files). The commit is the one you reviewed; the last column stays empty for
 the owner's decision on a `CONCERNS`:

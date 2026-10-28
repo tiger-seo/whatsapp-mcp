@@ -13,6 +13,11 @@
 # filled in, and nothing it covers has changed since the commit it names. verification.md itself is never
 # covered, so recording a verdict does not make it stale.
 #
+# A BLOCK also passes when the owner parked its findings (constitution, Development Workflow): the stage has at
+# least 3 BLOCK rows, the decision reads "Parked at <commit>: <findings>", that commit changed nothing the
+# review covers except the feature's tasks.md, where the parked findings are listed, and staleness is then
+# measured from that commit.
+#
 # Wired as a PreToolUse hook (Skill, Bash) and a UserPromptSubmit hook in .claude/settings.json. It reads the
 # hook's JSON on stdin and answers with JSON on stdout; it never changes anything.
 
@@ -111,7 +116,16 @@ case "$verdict" in
     [[ -z $owner || $owner == - || $owner == — ]] &&
       decide deny "the last $stage review is CONCERNS and the owner's decision is not recorded in $record."
     ;;
-  BLOCK) decide deny "the last $stage review in $record is BLOCK. Fix the findings and review again." ;;
+  BLOCK)
+    [[ $owner == Parked* ]] ||
+      decide deny "the last $stage review in $record is BLOCK. Fix the findings and review again."
+    blocks=$(grep -cE "^\|[[:space:]]*$stage[[:space:]]*\|[^|]*\|[^|]*\|[[:space:]]*BLOCK[[:space:]]*\|" "$record")
+    ((blocks >= 3)) ||
+      decide deny "the last $stage review is BLOCK with parked findings after only $blocks BLOCK rounds; parking needs at least 3."
+    [[ $owner =~ ^Parked[[:space:]]+at[[:space:]]+\`?([0-9a-f]{7,40})\`?:[[:space:]]*[^[:space:]] ]] ||
+      decide deny "the parked $stage review's decision must read \"Parked at <commit>: <findings>\", naming the commit that lists them in tasks.md."
+    parked_at=${BASH_REMATCH[1]}
+    ;;
   *) decide deny "the last $stage review in $record has verdict \"$verdict\"; expected PASS, CONCERNS or BLOCK." ;;
 esac
 
@@ -123,8 +137,20 @@ if [[ $stage == design ]]; then
 else
   paths=("." ":(exclude)specs/*/verification.md")
 fi
-changed=$( { git diff --name-only "$commit" -- "${paths[@]}"; git ls-files --others --exclude-standard -- "${paths[@]}"; } | head -n 5)
+base=$commit
+if [[ -n ${parked_at:-} ]]; then
+  git rev-parse --verify --quiet "$parked_at^{commit}" >/dev/null && git merge-base --is-ancestor "$commit" "$parked_at" ||
+    decide deny "the parking commit $parked_at is not in this repository or does not follow the reviewed commit $commit."
+  # The parking commit may only list the parked findings; anything else it changes is unreviewed.
+  extra=$(git diff --name-only "$commit" "$parked_at" -- "${paths[@]}" | grep -vxF "$feature_dir/tasks.md" | head -n 5)
+  [[ -z $extra ]] ||
+    decide deny "the parking commit $parked_at changes more than $feature_dir/tasks.md since the review: $(tr '\n' ' ' <<<"$extra")"
+  grep -q '^## Parked findings' "$feature_dir/tasks.md" ||
+    decide deny "findings are parked, but $feature_dir/tasks.md has no \"## Parked findings\" section."
+  base=$parked_at
+fi
+changed=$( { git diff --name-only "$base" -- "${paths[@]}"; git ls-files --others --exclude-standard -- "${paths[@]}"; } | head -n 5)
 [[ -z $changed ]] ||
-  decide deny "files changed since the reviewed commit $commit, so the review is stale: $(tr '\n' ' ' <<<"$changed")$how"
+  decide deny "files changed since the reviewed commit $base, so the review is stale: $(tr '\n' ' ' <<<"$changed")$how"
 
 decide allow ""

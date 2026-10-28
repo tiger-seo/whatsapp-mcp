@@ -173,6 +173,21 @@ user from being made inside a feature.
   the user's decision recorded beside it. A change to what was reviewed makes the verdict stale and needs
   a new review. A hook in `.claude/settings.json` enforces both gates; a change without a feature directory
   carries the code review's verdict in its pull request.
+- Parking findings after repeated `BLOCK` verdicts:
+  - Rounds are counted per feature and per stage (design or code), from the "Owner reviews" table.
+  - Once at least 3 rounds of one stage have returned `BLOCK`, the user may park the open findings of the
+    last round instead of fixing them before the next step. Parking is the user's decision alone, recorded
+    in the "Owner decision" column of that round's row as `Parked at <commit>: <finding titles>`, where the
+    commit is the one that lists the findings in `tasks.md` and changes nothing else the review covered.
+    Without that entry, `BLOCK` still stops the next step.
+  - Every parked finding is listed in the feature's `tasks.md` under "Parked findings", naming the review,
+    the commit reviewed, the finding, and the task or phase that must not start until it is resolved. Those
+    tasks are marked as blocked on it.
+  - A parked finding is deferred, not dropped. It is resolved, and a review of that part clears it, before
+    the task it blocks starts, and in any case before the feature's code review. A design finding is never
+    parked past the code review.
+  - A high-severity finding about data loss, security, or acting on a real WhatsApp account cannot be
+    parked; it still blocks.
 
 ## Governance
 
@@ -189,6 +204,12 @@ user from being made inside a feature.
 
 **Amendments:**
 
+- 1.3.0 (2026-10-28): Development Workflow expanded so that, after 3 `BLOCK` rounds of one review stage,
+  the user may park the open findings against the tasks they block, except high-severity data-loss,
+  security or real-account findings. Reason: on feature 002 the design review returned `BLOCK` seven times
+  in a row; each round fixed the previous findings and found new ones that only show up when the SQL
+  actually runs, so a design review could not reach `PASS` before the implementation that would show them
+  for real.
 - 1.2.0 (2026-10-28): Development Workflow expanded with two owner reviews per feature, one of the design
   before implementation and one of the code before a pull request, each recorded in `verification.md` and
   enforced by a hook. Reason: a wrong design is cheapest to fix before it is built, and the author's own
@@ -197,4 +218,4 @@ user from being made inside a feature.
   secret handling and supply-chain rules, replacing the Unix-only "0600" rule; Principle X added. Reason:
   the security review of 2026-10-27 and the hardening of feature 001 that followed it.
 
-**Version**: 1.2.0 | **Ratified**: 2026-10-27 | **Last Amended**: 2026-10-28
+**Version**: 1.3.0 | **Ratified**: 2026-10-27 | **Last Amended**: 2026-10-28
