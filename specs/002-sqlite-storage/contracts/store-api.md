@@ -152,7 +152,7 @@ text, captions, keys, SQL or raw driver messages.
 | `*AmbiguousIDError` | the ID exists in more than one chat | matching chat JIDs (≤ 100; more is `ErrResourceLimit`) |
 | `ErrNotMedia` | `MediaInfo` on a message without media | — |
 | `ErrResourceLimit` | a batch, result, context or byte budget is exceeded, or SQLite's 256 MiB heap limit is reached | the limit's name (`memory` for the heap) |
-| `ErrBusy` | 64 operations already waiting, or the 5 s admission wait expired | — |
+| `ErrBusy` | 64 operations already waiting, or the 5 s admission wait expired (including the wait for one of the 2 deep sorted listing slots) | — |
 | `ErrClosed` | the call was made during or after `Close` | — |
 | `ErrDiskLow` | free space below the reserve | free bytes, reserve |
 | `ErrIndeterminate` | the commit outcome cannot be established | — |

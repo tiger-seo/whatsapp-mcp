@@ -92,7 +92,11 @@ were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-202
   5. Refuse a newer message version, a device `compat` above the bundled table, a version table (either
      `mcp_version` or `whatsmeow_version`) with zero or more than one row, or schema tables present without
      their version table. dbutil reads `whatsmeow_version` with `LIMIT 1` and takes a missing row as version 0,
-     which would run the full schema over existing tables, so this check must be ours.
+     which would run the full schema over existing tables, so this check must be ours. One state is not
+     refused: an empty `whatsmeow_version` with no other `whatsmeow_*` table. dbutil creates the version table
+     in its own statement, outside the transaction of step v0→v16 (`dbutil/upgrades.go`:52-70, :204-241), so a
+     first start killed between the two leaves exactly that. It is device version 0, and the next start runs
+     the first step.
   6. The view records the identity of the main file and `-wal` from the handles it read, and they must equal the
      identities `checkArtifacts` recorded (R6).
 - **The committed view:** SQLite never opens the real files during the preflight. A read-only `io/fs.FS`
@@ -101,11 +105,12 @@ were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-202
   single name, `db`, and no `-wal`, `-shm` or `-journal` names.
   - **WAL scan:** the view opens the main file and `-wal` read-only with `os.Open` and scans the WAL once, in a
     stream, as SQLite's recovery does:
-    - The header must have magic `0x377f0682` or `0x377f0683`, which selects the checksum byte order, and
-      format version 3007000. A different version is refused as "not a usable database".
-    - The WAL's page size must be a power of two from 512 to 65536 and equal the main header's page size. A
-      mismatch is also refused as "not a usable database".
-    - If the header checksum is wrong, the WAL holds no commit and is ignored, as SQLite would ignore it.
+    - A header that SQLite's `walIndexRecover` would ignore makes the view ignore the log too: a magic other
+      than `0x377f0682` or `0x377f0683`, a page size that is not a power of two from 512 to 65536, or a header
+      checksum that does not match. Such a log holds no commit; a header of zeros after a power loss is one.
+    - The magic selects the checksum byte order. A format version other than 3007000 is refused as "not a
+      usable database", as SQLite refuses it.
+    - A valid header whose page size differs from the main file's is also refused as "not a usable database".
     - A frame counts only if its salts equal the header's, its page number is not 0, and the running checksum
       matches. The first frame that fails ends the scan.
     - Frames apply only up to the last commit frame. That frame's commit field sets the database size in pages.
@@ -260,6 +265,9 @@ were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-202
   `(chat_jid, id)`, which is idempotent. Any other failure is reported as rolled back.
 - **Result bytes:** query code accounts the bytes of each scanned row against the 32 MiB budget, and the context
   rows against the 2,000-row budget. Crossing either aborts with `ErrResourceLimit`, never a truncated result.
+- **Deep sorted listings:** a `ListMessages` call with a sender filter whose `offset + size` is above 10,000 also
+  takes one of 2 slots of a second semaphore, inside its admission and within the same 5 s wait; if none frees in
+  time it gets `ErrBusy`. This bounds SQLite's sort memory (R16).
 - **Close:** every `opCtx` also derives from a store-wide context that `Close` cancels. `Close` first marks the
   gate closed, so new and waiting callers get `ErrClosed` at once. It then waits up to 2 s for running
   operations, cancels the store-wide context, waits up to 1 s for them to release (the approved cancellation
@@ -369,6 +377,15 @@ unreachable one is recorded as an exception in `verification.md` (Principle V, X
 - **Decision:** both DSNs set `_pragma=hard_heap_limit(268435456)`, the approved 256 MiB. The limit is
   process-wide in SQLite and only ever lowered by the pragma, so setting it on every connection is harmless.
   `mapDriverError` maps `SQLITE_NOMEM` to `ErrResourceLimit` with code `memory`, logged as `store.limit`.
+- **Memory statistics must be switched on.** modernc.org/sqlite v1.61.0 is built with
+  `-DSQLITE_DEFAULT_MEMSTATUS=0`, and SQLite checks the hard limit only in `mallocWithAlarm`, which runs only with
+  statistics on (`lib/sqlite_g_000000000001ffff.go`:9445). Without them the pragma is accepted and nothing is
+  limited; the third design review showed a sort far over a 4 MiB limit succeeding with a high-water mark of 0.
+  So a package `init` in `internal/store/sqlite.go` calls `sqlite3_config(SQLITE_CONFIG_MEMSTATUS, 1)` through
+  `modernc.org/sqlite/lib`, which works only before SQLite initialises, that is before any connection exists. The
+  result code is kept: if it is not `SQLITE_OK`, `Open` refuses with `ErrIO` code `memory_limit_unavailable`
+  rather than run without the limit. Statistics add a process-wide mutex to every SQLite allocation; the owner
+  accepted that, and the SC-004 benchmark runs with them on.
 - **Why it is needed:** modernc's SQLite allocates through `modernc.org/memory`, outside the Go heap, so neither
   Go's runtime nor the 32 MiB result budget sees it. With `temp_store(MEMORY)` a sort for `ORDER BY` holds every
   row it sorts in that memory. A contact with many large messages, listed at a deep offset, could otherwise need
@@ -376,8 +393,19 @@ unreachable one is recorded as an exception in `verification.md` (Principle V, X
 - **Keeping normal queries far below it:** listings sort only keys and read full rows for the page (R15), and the
   page cache stays at SQLite's default of 2,000 KiB per connection, about 10 MiB for the 5 connections.
 - **Measurement:** tests read SQLite's high-water mark with `sqlite3_memory_highwater` (through
-  `modernc.org/sqlite/lib` and a `libc.TLS`) before and after each boundary case, next to Go's heap growth.
-- **Shared with whatsmeow:** the limit covers the device store's queries too, since they run in the same SQLite.
-  Its queries are small and few, so our queries reaching the limit is what fails, not whatsmeow's.
+  `modernc.org/sqlite/lib` and a `libc.TLS`) before and after each boundary case, next to Go's heap growth. It
+  reads 0 unless statistics are on, so a test first asserts that an allocation over a lowered limit fails.
+- **One budget for the process:** the allocation that crosses the limit fails, whichever connection makes it, so
+  an ingest write or a whatsmeow write could fail while a reader holds the memory. The store therefore keeps its
+  own queries far below the limit:
+  - a key sort holds at most `offset + size` keys of at most about 530 B (two 256-byte identifiers and a time),
+    because SQLite keeps only the top rows a `LIMIT` needs;
+  - only a listing with a sender filter sorts keys at all. At most 2 such listings with a page end above 10,000
+    run at once (a second semaphore in the admission gate, R9): 2 × 100,200 keys × 530 B ≈ 106 MB;
+  - the other 14 admitted operations each sort at most 10,000 keys, ≈ 5.3 MB each, ≈ 74 MB together;
+  - the page cache is about 10 MiB.
+
+  The worst case is therefore about 190 MB of the 256 MiB, leaving more than 60 MB for writes and the device store.
+  With identifiers of normal length (about 70 B a key) it is under 40 MB.
 - **Alternatives:** `soft_heap_limit` alone (advisory; SQLite may exceed it); no limit (the review's finding);
   temporary files on disk (`temp_store(FILE)`), which puts sensitive rows in the system temp directory (R1).

@@ -90,7 +90,8 @@ R4, spike S2).
   - **Work and waits:** "1 write connection and 4 read connections; ≤ 16 active and ≤ 64 waiting operations;
     admission wait ≤ 5 s; busy timeout 5 s; each query or write ≤ 10 s; resources released within 1 s of
     cancellation; startup schema upgrades ≤ 10 min". `Close` gives running operations a 2 s grace period before
-    it cancels them (research R9). SQLite's hard heap limit is 256 MiB (research R16).
+    it cancels them (research R9). SQLite's hard heap limit is 256 MiB, and at most 2
+    sender-filtered listings with a page end above 10,000 run at once (research R16).
   - **Disk:** "Free-space reserve 256 MiB … measurement at most 30 s old; … writes resume when ≥ 512 MiB is free";
     WAL limit 64 MiB.
   - Every limit is defined in bytes, with KiB = 1024.
@@ -131,6 +132,14 @@ R4, spike S2).
   - `registerFold()` registers it once (`sync.Once`) as the deterministic SQL function `mcp_fold(text)` via
     `sqlite.RegisterDeterministicScalarFunction`.
 
+  Also create `internal/store/sqlite.go` (research R16): a package `init` that calls
+  `sqlite3_config(SQLITE_CONFIG_MEMSTATUS, 1)` through `modernc.org/sqlite/lib` with its own `libc.TLS`, before
+  any connection exists, and keeps the result code for `Open` (T024), which refuses with `ErrIO` code
+  `memory_limit_unavailable` when it is not `SQLITE_OK`. Test in `internal/store/sqlite_test.go`, in a child
+  process re-executed as T036 does, so that the lowered limit cannot leak into other tests: with
+  `sqlite3_hard_heap_limit64` set to 4 MiB, a query sorting 2,000 rows of 64 KiB fails with `SQLITE_NOMEM`, and
+  `sqlite3_memory_highwater` reads more than 0.
+
   `internal/store/fold_test.go` adds a golden table: "ПРИВІТ"→"привіт", "ÉTÉ"→"été", composed é = decomposed é,
   "ß"→"ss", Greek final sigma, "ete"≠fold("été"), `%`/`_` unchanged. A change in x/text that alters any row fails
   the test.
@@ -165,19 +174,24 @@ R4, spike S2).
     with the fix "run: chmod -N <path>". The data-directory check in `private` gets the same macOS rule;
   - on Windows the existing DACL rule applies;
   - `FileID` is the file's identity from the same handle: device and inode on Unix, volume serial number and file
-    index (`GetFileInformationByHandle`) on Windows. It is comparable with `==`.
+    index (`GetFileInformationByHandle`) on Windows. It is comparable with `==`;
+  - exported `FileIDOf(f *os.File) (FileID, error)` returns the identity of a file the caller already opened, for
+    the preflight's own handles (T023).
 
   `OpenFile` behaviour is unchanged. Tests in `internal/private/private_unix_test.go`, `private_darwin_test.go`
   and `private_windows_test.go`:
   - 0600 passes; 0640 and 0644 fail with the fix text; symlink, hard link, FIFO or directory fail;
   - on macOS, a 0600 file and a 0700 directory with `chmod +a "everyone allow read"` fail with the fix text;
   - on Windows an extra ACE for Everyone fails, and a junction or reparse point fails;
-  - two calls on the same file return equal `FileID`s, and a file renamed over it gives a different one.
+  - two calls on the same file return equal `FileID`s, and a file renamed over it gives a different one;
+  - `FileIDOf` on an open handle equals `CheckFile` on its path, on Unix and Windows.
 - [ ] T011 [P] Create `internal/store/admit.go`: `gate.enter(ctx) (release func(), opCtx context.Context, err error)`.
   - A semaphore of 16 active slots, with an atomic count of waiters.
   - If 64 are already waiting, return `ErrBusy` immediately; otherwise wait at most 5 s or until the caller's
     deadline, whichever is earlier.
   - `opCtx` is the caller's context with a 10 s timeout, also cancelled when the gate's store-wide context is.
+  - `gate.enterDeep(ctx) (release func(), err error)`: one of 2 slots for a deep sorted listing (research R9),
+    waited for within the same admission deadline, else `ErrBusy`.
   - `gate.close(ctx) error` (research R9): mark the gate closed, so new and waiting callers get `ErrClosed`; wait
     up to 2 s for active operations; cancel the store-wide context; wait up to 1 s more. `ctx` can shorten both
     waits. It returns once every slot is free or the waits are over.
@@ -299,6 +313,8 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
     particular the `-wal` is not deleted.
   - **Rollback journal:** a `-journal` (empty or not) next to a valid `whatsapp.db` is refused ("rollback
     journal left behind") with the directory unchanged.
+  - **Refusal text:** each refusal above names every file involved (bounded and escaped) and the "Recovering from
+    a refused start" section of `OPERATIONS.md`.
   - **Created file swapped:** a test hook after `createDB` and before the writer opens renames another file over
     the new `whatsapp.db`; `Open` fails with `unsafe_artifact`.
   - **Permissions:** an existing `whatsapp.db` with mode 0644 is refused with the chmod fix and left at 0644.
@@ -311,7 +327,8 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
     gives `ErrNotDatabase`, and the file's SHA-256 is unchanged.
   - **Old files:** `store/whatsapp.db` and `store/messages.db` files are ignored and unchanged.
   - **Zero-length file:** an empty `whatsapp.db` (0 bytes) with no sidecar is treated as fresh.
-  - **Memory limit:** `PRAGMA hard_heap_limit` returns 268435456 on the writer and on every reader connection.
+  - **Memory limit:** `PRAGMA hard_heap_limit` returns 268435456 on the writer and on every reader connection, and
+    T008's child-process test shows the limit is enforced, not just set.
   - **Reader pool:** with all 4 reader connections forced open at once (4 concurrent queries held by a test
     hook), each can call `mcp_fold`, and each can `BeginTx` with `ReadOnly: true` and run a query. A write on any
     reader connection fails as read-only.
@@ -373,13 +390,14 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
     - `file_length INTEGER`, `mime_type TEXT`, `file_name TEXT`;
     - `PRIMARY KEY (chat_jid, id)`.
   - Indexes, none of them partial (data-model.md explains why):
-    - `chats_last_activity (last_message_time DESC, jid)`;
-    - `chats_name (name_fold, jid)`;
+    - `chats_last_activity ((last_message_time IS NULL), last_message_time DESC, jid)`;
+    - `chats_name ((name_quality = 0), name_fold, jid)`;
     - `chats_phone (phone)`;
     - `messages_chat_time (chat_jid, time DESC, id DESC)`;
     - `messages_sender_time (sender_phone, time DESC)`;
     - `messages_sender_jid (sender_jid, time DESC)`;
-    - `messages_time (time DESC, chat_jid DESC, id DESC)`, the listing order exactly.
+    - `messages_time (time DESC, chat_jid DESC, id DESC)`, the listing order exactly;
+    - `messages_id (id)`, for `GetMessageByID`.
 - [ ] T022 [US1] Create `internal/store/migrate.go`:
   - `type migration struct{ version int; name string; sql string }`;
   - `loadMigrations(fs.FS)` parses `NNNN_<name>.sql` from `//go:embed migrations/*.sql`, requiring a contiguous
@@ -395,7 +413,8 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
   - `preflight(ctx, path) (pf preflightResult, err error)` opens one connection on the DSN from
     `openCommittedView` (T014), and closes the connection then calls `release` before returning on every path.
     Extend `openCommittedView` to return the `private.FileID` of the main file and `-wal` from its own handles,
-    and refuse with `unsafe_artifact` unless they equal the identities `checkArtifacts` recorded;
+    using `private.FileIDOf` (T010), and refuse with `unsafe_artifact` unless they equal the identities
+    `checkArtifacts` recorded. A `-wal` that `checkArtifacts` did not see but the view finds is a mismatch too;
     It never opens `path` itself through SQLite;
   - it reads `sqlite_master` for the presence of `mcp_version`, `chats`, `messages`, `whatsmeow_version` and any
     other `whatsmeow_%` table;
@@ -405,8 +424,10 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
   Refusal rules (US2 tests them in depth):
   - messages version > latest bundled → `ErrSchemaTooNew`;
   - device `compat` (or `version` when `compat` is NULL or 0) > `len(upgrades.Table)` → `ErrSchemaTooNew`;
-  - `mcp_version` row count ≠ 1, or `whatsmeow_version` row count ≠ 1 when the table exists → `ErrSchemaInvalid`
-    (dbutil would read a missing row as version 0 and rerun the full schema);
+  - `mcp_version` row count ≠ 1 → `ErrSchemaInvalid`;
+  - `whatsmeow_version` with more than 1 row, or with 0 rows while another `whatsmeow_*` table exists →
+    `ErrSchemaInvalid` (dbutil would read a missing row as version 0 and rerun the full schema). 0 rows and no
+    other `whatsmeow_*` table is device version 0, an interrupted first start, and is not refused;
   - `chats`/`messages` without `mcp_version`, or `whatsmeow_*` tables without `whatsmeow_version` →
     `ErrSchemaInvalid`.
 - [ ] T024 [US1] Create `internal/store/store.go` with `type Store`, `Open`, `Close` and `Device`, following
@@ -418,7 +439,9 @@ file (plus its sidecars) exists and holds both schemas, and all artifacts are pr
   5. open the writer `*sql.DB` with the write DSN from research R1, verbatim:
      `file:<path>?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)&_pragma=journal_size_limit(67108864)&_pragma=hard_heap_limit(268435456)&_txlock=immediate`,
      with `SetMaxOpenConns(1)`;
-  6. `PingContext`, then re-run `checkArtifacts` (now `-wal`/`-shm` exist) and `sameArtifacts` against step 2;
+  6. `PingContext`, then re-run `checkArtifacts` and `sameArtifacts` against step 2. On a new database `-wal` and
+     `-shm` do not exist yet at this point; they appear at the reader's ping or the first write, so the same
+     re-check runs again after step 7 and after step 8, and every sidecar is checked before the store is ready;
      the test hook for T017's swap sits between steps 3 and 5;
   7. open the reader with the read DSN from research R1, verbatim:
      `file:<path>?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)&_pragma=hard_heap_limit(268435456)&_pragma=query_only(1)`,
@@ -473,6 +496,8 @@ directory.
   - `mcp_version` with 0 rows and with 2 rows (`ErrSchemaInvalid`);
   - `whatsmeow_version` with 0 rows and with 2 rows, next to `whatsmeow_*` tables (`ErrSchemaInvalid`, "device
     schema");
+  - not a refusal: `whatsmeow_version` with 0 rows and no other `whatsmeow_*` table (an interrupted first start)
+    opens, and the device schema is upgraded to 16;
   - `chats` present without `mcp_version`;
   - `whatsmeow_device` present without `whatsmeow_version`.
 - [ ] T028 [P] [US2] `internal/store/device_test.go`:
@@ -676,7 +701,8 @@ expected rows.
   - search is `(instr(text_fold, ?) > 0 OR instr(caption_fold, ?) > 0)`;
   - order is `time DESC, chat_jid DESC, id DESC`. The page's keys are selected first
     (`SELECT time, chat_jid, id ... ORDER BY ... LIMIT ? OFFSET ?`), and the full rows are read for those keys
-    only, so any sort holds keys, not rows of up to 512 KiB (research R15, R16);
+    only, so any sort holds keys, not rows of up to 512 KiB (research R15, R16). A listing with a sender filter
+    and `offset + size` above 10,000 also takes `gate.enterDeep` (T011);
   - context: per hit, two queries on `messages_chat_time` (before: `time < t OR (time = t AND id < id)`, DESC then
     reversed; after: the mirror, ASC);
   - before any context query runs, check that `hits × (before+after) ≤ 2,000` with checked arithmetic, else
@@ -706,10 +732,11 @@ expected rows.
   chat, sender, search, with context 5/5), `MessageContext` and `LastInteraction` (by phone and by LID).
 
   In the same file, `TestQueryPlans` runs `EXPLAIN QUERY PLAN` on the SQL of each of these queries (and of
-  T058's lookups) with representative bound values, on the seeded database. Every lookup by key, chat, sender or
-  contact must use `SEARCH` on an index from T021. Only text search and a listing with no chat or sender filter may
-  use `SCAN messages USING INDEX messages_time`. Any other `SCAN`, and any `USE TEMP B-TREE` for the listing
-  order of the full rows, fails the test. It runs in CI, unlike the
+  T058's lookups) with representative bound values, on the seeded database. The test holds the expected plan of
+  each query, from data-model.md § Indexes: a `SEARCH` on a named index for every lookup by key, ID, chat, sender
+  or contact; `SCAN messages USING INDEX messages_time` only for text search and an unfiltered listing;
+  `SCAN chats USING INDEX chats_last_activity` or `chats_name` for the chat listings; and a temporary b-tree only
+  where that table lists one. Any other plan fails the test. It runs in CI, unlike the
   benchmark, so a partial or missing index is caught there.
 
 **Checkpoint**: US4 passes on its own (T039–T041). Run the benchmark locally (it is not a CI gate).
@@ -738,8 +765,10 @@ has no side effect. The recorded cross-identity and restore evidence passes.
 
   The test asserts that heap growth stays below 2× the approved result budget and SQLite's high-water mark below
   the 256 MiB limit. It also seeds one contact with 2,000 messages of 256 KiB and lists them by phone and LID at
-  offset 1,800: the call succeeds within the limit (keys-first sort), and a test-only lower heap limit makes the
-  same call fail with `ErrResourceLimit` code `memory`, not a crash. Cover:
+  offset 1,800: the call succeeds within the limit (keys-first sort). In a child process (as T008 and T036), a
+  lowered limit set with `sqlite3_hard_heap_limit64` makes the same call fail with `ErrResourceLimit` code `memory`,
+  not a crash; the limit never changes in the test binary itself. Three concurrent deep sender listings (page end
+  above 10,000): two run and the third waits, then gets `ErrBusy` after the admission wait. Cover:
   - every field size;
   - batch count and bytes;
   - list size and offset;
@@ -825,6 +854,17 @@ has no side effect. The recorded cross-identity and restore evidence passes.
     must never connect beside its original; live account checks or re-pairing need separate permission.
   - **Recovery after a failed upgrade:** read the error's completed steps; restart with the same binary to retry;
     there is no downgrade; restore from backup if needed.
+  - **Recovering from a refused start:** for each refusal code, what it means and what to do, never deleting
+    anything first:
+    - `rollback_journal`: stop; copy the whole file set to a private place; open the database once with an SQLite
+      shell (`sqlite3 whatsapp.db "PRAGMA integrity_check"`), which rolls the journal back; start again;
+    - `orphan_sidecar` (a sidecar next to a missing or empty `whatsapp.db`): move the sidecars to a private place
+      and restore `whatsapp.db` from backup; with no backup, keep the moved files and start fresh, which pairs a
+      new device;
+    - `schema_too_new`, `schema_invalid`, `not_database`: keep the files, use the binary that wrote them or
+      restore from backup;
+    - `unsafe_artifact`, `not_private`, `unsupported_path`: fix ownership, access or the path as the error's fix
+      text says.
   - **Decommissioning (FR-050):** stop; inventory only this installation's database, sidecars, logs and backups;
     unlinking does not guarantee erasure on SSDs, snapshots or backups; key destruction depends on the operator's
     storage.
@@ -873,7 +913,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
 ### Implementation for User Story 5
 
 - [ ] T058 [US5] Implement `GetMessage`, `GetMessageByID` and `MediaInfo` in `internal/store/queries.go`:
-  - `GetMessageByID` selects `chat_jid` for `id = ?` with `LIMIT 102` to detect more than 101 matches without an
+  - `GetMessageByID` selects `chat_jid` for `id = ?` on `messages_id` with `LIMIT 102` to detect more than 101 matches without an
     unbounded read;
   - `MediaInfo` returns `MediaMeta` with nil length when NULL, and `ErrNotMedia` when `media_type = ''`;
   - add sub-benchmarks for `GetMessage`, `GetMessageByID` and `MediaInfo` to `BenchmarkQueries` in

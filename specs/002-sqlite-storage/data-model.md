@@ -15,7 +15,7 @@ histories:
 | Message store | `mcp_version (version)` | this feature's migrations (R5) | `mcp_version`, `chats`, `messages` |
 
 The store **reads** these whatsmeow tables and never writes them: `whatsmeow_device` (the current device's JID),
-`whatsmeow_contacts` and `whatsmeow_lid_map (lid TEXT PRIMARY KEY, pn TEXT UNIQUE)`. The LID map is not per device,
+`whatsmeow_contacts` and `whatsmeow_lid_map (lid TEXT PRIMARY KEY, pn TEXT UNIQUE NOT NULL)`. The LID map is not per device,
 and it holds bare user parts: `lid` without `@lid`, `pn` without `@s.whatsapp.net`. The store adds the suffixes
 when it compares them with stored JIDs.
 
@@ -42,7 +42,9 @@ The preflight refuses zero rows, more than one row, a version above the latest b
 | `name_time` | INTEGER | Unix ms when the name was seen; `NULL` while `name_quality = 0` |
 | `last_message_time` | INTEGER | Unix ms; `NULL` = no activity known |
 
-Indexes: `chats_last_activity (last_message_time DESC, jid)`, `chats_name (name_fold, jid)`, `chats_phone (phone)`.
+Indexes: `chats_last_activity ((last_message_time IS NULL), last_message_time DESC, jid)`,
+`chats_name ((name_quality = 0), name_fold, jid)`, `chats_phone (phone)`. The first two are on the exact `ORDER BY`
+expressions of the two chat sorts, so listing chats needs no sort step.
 
 No index is partial. SQLite uses a partial index for `col = ?` only when it can prove from the query that the bound
 value satisfies the index's condition, which it cannot for a parameter, so a partial index would leave those
@@ -99,10 +101,19 @@ Indexes (S3, FR-020):
 - `messages_time (time DESC, chat_jid DESC, id DESC)`: listing across chats, `after`/`before`, in exactly the
   listing's order, so no sort step is needed
 
-A query plan test (`EXPLAIN QUERY PLAN`) checks every query in FR-021–FR-033. Every lookup by key, chat, sender or
-contact must be a `SEARCH` on one of these indexes. Only a text search, and a listing with no chat or sender filter,
-may walk `messages_time` newest first (`SCAN messages USING INDEX messages_time`), stopping once the page is full. No
-plan may scan a table without an index or add a `TEMP B-TREE` for the listing order.
+- `messages_id (id)`: a lookup by message ID alone (FR-022), which the `(chat_jid, id)` key cannot serve
+
+A query plan test (`EXPLAIN QUERY PLAN`) holds the expected plan of every query in FR-021–FR-033 and fails on any
+other. Every lookup by key, chat, sender or contact is a `SEARCH` on one of these indexes. A text search, and a
+listing with no chat or sender filter, walk `messages_time` newest first (`SCAN messages USING INDEX messages_time`)
+and stop once the page is full. A temporary b-tree is expected in three places only, and never holds full message
+rows:
+
+| Query | Expected sort | Why |
+| --- | --- | --- |
+| `ListMessages` with a sender filter | `USE TEMP B-TREE FOR ORDER BY` (or `FOR LAST 2 TERMS OF ORDER BY` with only a phone number) in the key subquery | an `OR` over two indexes, or the index's order on `(sender_phone, time)` only; the sort holds keys (R15, R16) |
+| `ContactChats` | `USE TEMP B-TREE FOR DISTINCT` and for its `ORDER BY` | one row per chat from the contact's messages; holds chat JIDs |
+| `LastInteraction` | `USE TEMP B-TREE FOR ORDER BY` with `LIMIT 1` | the newest across both sender indexes; holds one key |
 
 The order of every list is deterministic: messages by `(time, chat_jid, id)`, newest first; chats by `(last_message_time, jid)`
 or `(name_fold, jid)`. Rows without a name or time come last.

@@ -125,6 +125,18 @@ tools themselves (005, 006): this feature provides the operations they call.
   merge never carries a fallback name from the `@lid` chat over to the phone-number chat, because it would name
   the person after an opaque LID number. Saved and real names are carried over by the name rule as before.
 
+### Session 2026-10-28 (third design review)
+
+- Q: The pinned driver builds SQLite without memory statistics, so the hard heap limit is not enforced unless the
+  store switches them on, which adds a process-wide lock to every SQLite allocation. Accept that lock? → A: Yes,
+  with the SC-004 benchmark re-run with statistics on.
+- Q: The heap limit is one budget for the whole process, so deep sender-filtered listings could make an ingest or
+  device-store write fail. Bound the listings, or accept write failures at the limit? → A: Bound them: at most 2
+  sender-filtered listings deeper than 10,000 rows run at once, so their sorts can never fill the budget.
+- Q: A `-wal` whose header SQLite would ignore (all zeros after a power loss, an unknown magic, an invalid page
+  size) next to an intact database: ignore it or refuse? → A: Ignore it, as SQLite does. Such a log holds no valid
+  commit, so nothing is lost.
+
 ## User Scenarios & Testing *(mandatory)*
 
 The "users" of this feature are the operator, who sees one database file in the data directory, and the developers
@@ -456,11 +468,16 @@ separate OS test identities. No real WhatsApp account or network connection is n
   safe `corrupt` error, and is handled through the restore procedure (FR-047). Errors MUST
   identify the schema and supported/observed versions when readable, without sensitive contents. A genuinely
   uninitialised schema is version zero; missing version metadata for already-present tables is not a fresh schema.
-  A version table counts as valid only with exactly one row, for the device schema as for the message schema.
+  A version table counts as valid only with exactly one row, for the device schema as for the message schema,
+  with one exception: an empty `whatsmeow_version` and no other `whatsmeow_*` table is a device schema that was
+  never initialised (a first start interrupted between whatsmeow creating its version table and its first step),
+  and counts as device version 0, so the next start resumes it.
   Two file states MUST also be refused before SQLite opens anything, because SQLite would otherwise delete a
   sidecar: a main file that is missing or empty while `-wal`, `-shm` or `-journal` exists, and any `-journal` next
   to the database, which only a crash during a journal-mode change or another tool leaves behind. The refusal
-  names the files and points to the recovery procedure (FR-047); nothing is deleted.
+  names the files and points to the "Recovering from a refused start" steps of the operator guide (FR-047); nothing
+  is deleted. A `-wal` that SQLite itself would ignore (an unknown header, an invalid page size or a header checksum
+  that does not match) holds no commit and is ignored by the preflight too.
 - **FR-011**: The device store's schema MUST be created or upgraded by whatsmeow's own mechanism when the database is
   opened, only after both compatibility checks pass and before message migrations (FR-041). Its version support
   and failure guarantees MUST be verified for the pinned dependency rather than inferred from message migrations.
@@ -743,7 +760,7 @@ of 1024.
 | --- | --- |
 | Fields and metadata | JID ≤ 256 B; message ID ≤ 256 B; chat and contact names ≤ 1 KiB; text ≤ 256 KiB; caption ≤ 256 KiB; search text ≤ 1 KiB; URL ≤ 4 KiB; direct path ≤ 4 KiB; MIME type ≤ 255 B; original file name ≤ 1 KiB; media key, file hash and encrypted file hash exactly 32 B when present; file length 0 to 4 GiB; message times and time filters from 2000-01-01T00:00:00Z (inclusive) to 2100-01-01T00:00:00Z (exclusive). A value outside these is a validation error naming the field, with nothing stored |
 | Batch and results | Batch ≤ 1,000 messages and ≤ 16 MiB aggregate field bytes; chat-update batch ≤ 1,000 updates (their size is bounded by the field limits); list size 1–200; offset 0–100,000; context ≤ 20 rows per side and ≤ 2,000 context rows per call in total; ≤ 32 MiB of result bytes per call; an ambiguous-ID error lists ≤ 100 chats. Existing or upstream data that would exceed a result bound returns a resource-limit error, never a truncated or partial result |
-| Work and waits | 1 write connection and 4 read connections; ≤ 16 active and ≤ 64 waiting operations (beyond that: immediate busy error); admission wait ≤ 5 s; busy timeout 5 s; each query or write ≤ 10 s; resources released within 1 s of cancellation; startup schema upgrades ≤ 10 min in total; closing the store fits within the existing 10-second shutdown limit; SQLite memory (page cache, sorts, temporary b-trees) ≤ 256 MiB per process as a hard heap limit, beyond which the operation fails with a resource-limit error (approved 2026-10-28, second design review) |
+| Work and waits | 1 write connection and 4 read connections; ≤ 16 active and ≤ 64 waiting operations (beyond that: immediate busy error); admission wait ≤ 5 s; busy timeout 5 s; each query or write ≤ 10 s; resources released within 1 s of cancellation; startup schema upgrades ≤ 10 min in total; closing the store fits within the existing 10-second shutdown limit; SQLite memory (page cache, sorts, temporary b-trees) ≤ 256 MiB per process as a hard heap limit, beyond which the operation fails with a resource-limit error (approved 2026-10-28, second design review); ≤ 2 message listings with a sender filter and page end (offset + size) above 10,000 at once, the others waiting within the admission wait (approved 2026-10-28, third design review) |
 | Disk and WAL | Free-space reserve 256 MiB, checked before each write transaction from a measurement at most 30 s old; once refused, writes resume when ≥ 512 MiB is free. The write-ahead log is truncated to ≤ 64 MiB after checkpoints; a long reader is bounded by the 10 s query deadline. Nothing (keys, messages, journals, backups) is deleted automatically |
 | Platform and recovery | Local filesystems only (NTFS on Windows; ext4 and other local POSIX filesystems; APFS). UNC/network paths (including mapped and `subst` drive letters that resolve to one), `\\?\` and `\\.\` device paths and alternate data streams are rejected. On Windows the access list is limited to the user, SYSTEM and Administrators (constitution Principle V). Upstream device-migration guarantees, backup/restore steps and the isolated cross-identity test procedure are verified and documented under FR-011, FR-041, FR-047 and FR-039 |
 
@@ -770,7 +787,8 @@ case is tested on each platform it covers; one that cannot be run there is recor
 6. An oversized history batch is stored: rejected as a whole, with no prefix stored.
 7. Calls exceed 16 active and 64 waiting operations: the excess gets a busy error at once; memory and goroutines
    stay bounded.
-8. Context expansion or results exceed the row or byte limits: resource-limit error, not a truncated result.
+8. Context expansion or results exceed the row or byte limits, or a query needs more than SQLite's memory limit:
+   resource-limit error, not a truncated result or a crash.
 9. Free space falls below the reserve, or the disk is full: writes are refused, and no key, message, journal or
    backup is deleted.
 10. A database with a newer schema version is opened: refused, and the main file and sidecars are byte-for-byte
