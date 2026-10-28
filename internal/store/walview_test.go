@@ -94,10 +94,15 @@ func TestScanWALIgnores(t *testing.T) {
 		"empty":                 nil,
 		"shorter than a header": wal[:walHeaderSize-1],
 		"header only":           wal[:walHeaderSize],
-		"bad header checksum":   badHeaderSum,
-		"unknown magic":         badMagic,
-		"invalid page size":     badPageSize,
-		"zeros":                 make([]byte, walHeaderSize+walFrameHeaderSize+4096),
+		"header only, bad version": func() []byte {
+			b := bytes.Clone(wal[:walHeaderSize])
+			binary.BigEndian.PutUint32(b[4:8], walVersion+1)
+			return reencodeWAL(b, walMagicLE, binary.LittleEndian)
+		}(),
+		"bad header checksum": badHeaderSum,
+		"unknown magic":       badMagic,
+		"invalid page size":   badPageSize,
+		"zeros":               make([]byte, walHeaderSize+walFrameHeaderSize+4096),
 	} {
 		t.Run(name, func(t *testing.T) {
 			idx := mustScan(t, b, 4096)

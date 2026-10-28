@@ -62,7 +62,7 @@ type walIndex struct {
 // scanWAL reads a log once, front to back, and indexes its committed pages. It keeps offsets, not page data, so
 // its memory grows with the number of distinct pages in the log and never with the database.
 //
-// A log that SQLite would ignore gives an empty index: one shorter than its header, or whose header has an unknown
+// A log that SQLite would ignore gives an empty index: one no longer than its header, or whose header has an unknown
 // magic, an invalid page size or a checksum that does not match, as a header of zeros after a power loss does. A
 // log that SQLite would refuse, or whose page size differs from the main file's, is ErrNotDatabase.
 func scanWAL(r io.Reader, mainPageSize int64) (walIndex, error) {
@@ -71,6 +71,13 @@ func scanWAL(r io.Reader, mainPageSize int64) (walIndex, error) {
 	var hdr [walHeaderSize]byte
 	if _, err := io.ReadFull(br, hdr[:]); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return idx, nil
+		}
+		return walIndex{}, err
+	}
+	// SQLite reads the header only of a log longer than the header itself.
+	if _, err := br.Peek(1); err != nil {
+		if errors.Is(err, io.EOF) {
 			return idx, nil
 		}
 		return walIndex{}, err
