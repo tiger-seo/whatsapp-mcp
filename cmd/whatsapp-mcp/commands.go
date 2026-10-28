@@ -7,10 +7,12 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/tiger-seo/whatsapp-mcp/internal/buildinfo"
 	"github.com/tiger-seo/whatsapp-mcp/internal/config"
 	"github.com/tiger-seo/whatsapp-mcp/internal/lock"
+	"github.com/tiger-seo/whatsapp-mcp/internal/store"
 )
 
 // runVersion prints the build information. It reads no configuration and touches no files, so it works
@@ -43,18 +45,23 @@ func runPair(cmd *command, args []string, s *streams) int {
 		return code
 	}
 	defer l.Release()
+	st, code, ok := openStore(context.Background(), cfg, logger, s)
+	if !ok {
+		return code
+	}
+	defer st.Close(context.Background())
 	return notImplemented(cmd, s)
 }
 
 func runServe(cmd *command, args []string, s *streams) int {
-	return runUntilStopped(cmd, args, s, func(ctx context.Context, lc *lifecycle, logger *slog.Logger) {
+	return runUntilStopped(cmd, args, s, func(ctx context.Context, lc *lifecycle, logger *slog.Logger, _ *store.Store) {
 		logger.Info("serve: HTTP server not implemented yet")
 		<-ctx.Done()
 	})
 }
 
 func runStdio(cmd *command, args []string, s *streams) int {
-	return runUntilStopped(cmd, args, s, func(ctx context.Context, lc *lifecycle, logger *slog.Logger) {
+	return runUntilStopped(cmd, args, s, func(ctx context.Context, lc *lifecycle, logger *slog.Logger, _ *store.Store) {
 		logger.Info("stdio: MCP server not implemented yet")
 		go func() {
 			io.Copy(io.Discard, s.stdin)
@@ -72,7 +79,7 @@ func notImplemented(cmd *command, s *streams) int {
 // runUntilStopped takes the data directory and runs body until a stop signal or stop request, then shuts
 // down. The signal handler is installed before anything else, so an early signal still releases what
 // was taken.
-func runUntilStopped(cmd *command, args []string, s *streams, body func(context.Context, *lifecycle, *slog.Logger)) int {
+func runUntilStopped(cmd *command, args []string, s *streams, body func(context.Context, *lifecycle, *slog.Logger, *store.Store)) int {
 	lc := newLifecycle(slog.New(slog.NewTextHandler(s.stderr, nil)))
 	cfg, logger, code, ok := startup(cmd, args, s)
 	if !ok {
@@ -92,7 +99,16 @@ func runUntilStopped(cmd *command, args []string, s *streams, body func(context.
 	if lc.ctx.Err() != nil {
 		return lc.shutdown()
 	}
-	body(lc.ctx, lc, logger)
+	st, code, ok := openStore(lc.ctx, cfg, logger, s)
+	if !ok {
+		lc.shutdown()
+		return code
+	}
+	lc.addStop("store", st.Close)
+	if lc.ctx.Err() != nil {
+		return lc.shutdown()
+	}
+	body(lc.ctx, lc, logger, st)
 	return lc.shutdown()
 }
 
@@ -113,7 +129,7 @@ func startup(cmd *command, args []string, s *streams) (cfg *config.Config, logge
 		}
 		return nil, nil, exitUsage, false
 	}
-	logger = slog.New(slog.NewTextHandler(s.stderr, &slog.HandlerOptions{Level: cfg.LogLevel}))
+	logger = slog.New(slog.NewTextHandler(s.stderr, &slog.HandlerOptions{Level: cfg.LogLevel, ReplaceAttr: utcTime}))
 	slog.SetDefault(logger)
 	for _, w := range warnings {
 		logger.Warn("unknown environment variable", "name", w.Name)
@@ -140,4 +156,25 @@ func acquireLock(cfg *config.Config, logger *slog.Logger, s *streams) (*lock.Loc
 	}
 	logger.Debug("lock acquired", "path", l.Path, "pid", os.Getpid())
 	return l, exitOK, true
+}
+
+// utcTime renders the log time in UTC.
+func utcTime(groups []string, a slog.Attr) slog.Attr {
+	if len(groups) == 0 && a.Key == slog.TimeKey && a.Value.Kind() == slog.KindTime {
+		a.Value = slog.TimeValue(a.Value.Time().UTC())
+	}
+	return a
+}
+
+// openStore opens the database after the lock is held. It gives the whole startup, including schema upgrades,
+// the approved 10 minutes. On failure it prints the safe error and returns the environment-error exit code.
+func openStore(ctx context.Context, cfg *config.Config, logger *slog.Logger, s *streams) (*store.Store, int, bool) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	st, err := store.Open(ctx, cfg.DataDir, logger)
+	if err != nil {
+		fmt.Fprintln(s.stderr, "whatsapp-mcp: "+err.Error())
+		return nil, exitError, false
+	}
+	return st, exitOK, true
 }
