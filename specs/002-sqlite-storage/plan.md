@@ -27,7 +27,8 @@ The design follows [research.md](research.md):
 - contacts found under a phone number or a LID, resolved through the device store's map, with the LID merge
   rewriting senders in every chat (R15);
 - a 256 MiB hard heap limit on SQLite's own memory, which Go cannot see, with SQLite's memory statistics switched
-  on so that the limit is enforced, and at most 2 deep sender-filtered listings at once (R16).
+  on so that the limit is enforced (R16); sender queries are a `UNION ALL` of a phone and a LID branch on their own
+  indexes, so they never sort and never collect a contact's row IDs (R15).
 
 `stdio`, `serve` and `pair` open the store after the lock. The operator guide starts as `OPERATIONS.md`.
 

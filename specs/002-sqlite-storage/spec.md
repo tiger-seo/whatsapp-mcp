@@ -160,6 +160,22 @@ tools themselves (005, 006): this feature provides the operations they call.
   chat and phone sender and on chat and LID sender, each followed by time, at the cost of two more index writes
   per stored message. The scale test checks how each query grows with the database rather than a fixed time.
 
+### Session 2026-10-30 (parked findings of the seventh design review)
+
+- Q: A sender given under both identities is matched with `sender_phone = ? OR sender_jid = ?`. SQLite answers that
+  with a `MULTI-INDEX OR`, which first collects the row IDs of all of the contact's messages and then sorts their
+  keys, and with a chat filter it read the whole chat instead. Should every sender query instead be a `UNION ALL`
+  of a phone branch and a LID branch, each on its own index, merged in order? → A: Yes, every sender query. The
+  two branches cannot overlap, because `sender_phone` is `''` for a `@lid` sender. Measured on 400,000 messages
+  with 300,000 from one contact: the plan is `MERGE (UNION ALL)` over two covering index searches with no
+  temporary b-tree, SQLite's memory grows by about 7 KB at offset 0 and at offset 99,800, and the deep page takes
+  92 ms. This withdraws the bound of 2 deep sender listings (third design review) and the ceiling of about
+  1 million messages from one contact (fourth design review): no query collects a contact's row IDs or sorts
+  their keys any more.
+- Q: For contact chats, the same question applies to the groups a contact wrote in. → A: Each chat is tested with
+  two `EXISTS` probes on the chat-and-sender indexes, one per identity. That is two index searches per chat, with no
+  temporary b-tree; 2,000 chats took 16 ms.
+
 ## User Scenarios & Testing *(mandatory)*
 
 The "users" of this feature are the operator, who sees one database file in the data directory, and the developers
@@ -785,7 +801,7 @@ of 1024.
 | --- | --- |
 | Fields and metadata | JID ≤ 256 B; message ID ≤ 256 B; chat and contact names ≤ 1 KiB; text ≤ 256 KiB; caption ≤ 256 KiB; search text ≤ 1 KiB; URL ≤ 4 KiB; direct path ≤ 4 KiB; MIME type ≤ 255 B; original file name ≤ 1 KiB; media key, file hash and encrypted file hash exactly 32 B when present; file length 0 to 4 GiB; message times and time filters from 2000-01-01T00:00:00Z (inclusive) to 2100-01-01T00:00:00Z (exclusive). A value outside these is a validation error naming the field, with nothing stored |
 | Batch and results | Batch ≤ 1,000 messages and ≤ 16 MiB aggregate field bytes; chat-update batch ≤ 1,000 updates (their size is bounded by the field limits); list size 1–200; offset 0–100,000; context ≤ 20 rows per side and ≤ 2,000 context rows per call in total; ≤ 32 MiB of result bytes per call; an ambiguous-ID error lists ≤ 100 chats. Existing or upstream data that would exceed a result bound returns a resource-limit error, never a truncated or partial result |
-| Work and waits | 1 write connection and 4 read connections; ≤ 16 active and ≤ 64 waiting operations (beyond that: immediate busy error); admission wait ≤ 5 s; busy timeout 5 s; each query or write ≤ 10 s; resources released within 1 s of cancellation; startup schema upgrades ≤ 10 min in total; closing the store fits within the existing 10-second shutdown limit; SQLite memory (page cache, sorts, temporary b-trees) ≤ 256 MiB per process as a hard heap limit, beyond which the operation fails with a resource-limit error (approved 2026-10-28, second design review); ≤ 2 message listings with a sender filter and page end (offset + size) above 10,000 at once, the others waiting within the admission wait (approved 2026-10-28, third design review) |
+| Work and waits | 1 write connection and 4 read connections; ≤ 16 active and ≤ 64 waiting operations (beyond that: immediate busy error); admission wait ≤ 5 s; busy timeout 5 s; each query or write ≤ 10 s; resources released within 1 s of cancellation; startup schema upgrades ≤ 10 min in total; closing the store fits within the existing 10-second shutdown limit; SQLite memory (page cache, sorts, temporary b-trees) ≤ 256 MiB per process as a hard heap limit, beyond which the operation fails with a resource-limit error (approved 2026-10-28, second design review). The bound of 2 deep sender listings at once (third design review) was withdrawn on 2026-10-30: sender listings no longer sort, so their memory does not grow with the offset |
 | Disk and WAL | Free-space reserve 256 MiB, checked before each write transaction from a measurement at most 30 s old; once refused, writes resume when ≥ 512 MiB is free. The write-ahead log is truncated to ≤ 64 MiB after checkpoints; a long reader is bounded by the 10 s query deadline. Nothing (keys, messages, journals, backups) is deleted automatically |
 | Platform and recovery | Local filesystems only (NTFS on Windows; ext4 and other local POSIX filesystems; APFS). UNC/network paths (including mapped and `subst` drive letters that resolve to one), `\\?\` and `\\.\` device paths and alternate data streams are rejected. On Windows the access list is limited to the user, SYSTEM and Administrators (constitution Principle V). Upstream device-migration guarantees, backup/restore steps and the isolated cross-identity test procedure are verified and documented under FR-011, FR-041, FR-047 and FR-039 |
 

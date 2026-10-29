@@ -43,14 +43,18 @@ Development Workflow). They come from the seventh design review of commit `8d384
 data-loss, security or real-account finding. Each must be resolved, and a review of that part must clear it,
 before the tasks it blocks start, and before the code review at the latest.
 
-| ID | Finding (seventh design review, `8d38457`) | Blocks |
-| --- | --- | --- |
-| P1 | [high] A listing filtered by chat and by a sender with both identities, written as `chat_jid = ? AND (sender_phone = ? OR sender_jid = ?)`, plans as `SEARCH messages_chat_time (chat_jid=?)` and reads the whole chat (0.4–0.9 s at 300,000 messages). The distributed form `(chat_jid = ? AND sender_phone = ?) OR (chat_jid = ? AND sender_jid = ?)` reaches the two chat-and-sender indexes, and a `UNION ALL` of the two single-index branches merges them with no sort. T044 must name the shape and data-model.md's expected-plan table must match it. Owner decision still open: whether every sender query (not only chat and sender) uses the `UNION ALL` form, which would remove the per-contact row-ID sets, the key sort and possibly the deep-listing slots and the 1-million-message ceiling of research R16. | Phase 6 (T039–T046) |
-| P2 | [high] `TestQueryScale`'s 3× rule fails by construction: `SearchContacts` by name, `ContactChats` and the sender listings read every row they match by design and grow about 10×; the offset-99,800 listing is empty at a tenth; and Windows timing gives medians of 0 s. | T046 |
-| P3 | [medium] The scale test can count pages instead of time: modernc exports `sqlite.DBStatus`, reachable through `(*sql.Conn).Raw`, whose cache hit + miss delta counts the pages a query touched (1.0–1.3× tenth to full for constant-cost queries, about 10× for linear ones). The linear queries need their own rule, a bound per matched row. | T046 |
-| P4 | [medium] T047's slope depends on how the seeded messages split between phone and LID: an even split measures about 12 B a message, all under the phone (the state after a merge) about 24 B. Seed under the phone, or take the larger of both splits. | T047 |
-| P5 | [low] Own-account detection compares with `whatsmeow_device.lid`, which can be NULL or empty; an empty own LID would equal the empty LID of an unmapped contact and treat that contact as the account. Compare only non-empty values, and add the case to T040. | T040, T044 |
-| P6 | [low] The 64-waiter cap is shared with callers waiting for a deep slot; if the cap is checked before trying the admission semaphore, an ingest call gets `ErrBusy` with 64 deep listings waiting although admission slots are free. Specify try-acquire before the cap check, and test `StoreMessage` with 64 deep waiters. | T011 (the `enterDeep` part only), T048 |
+All six were resolved in the design on 2026-10-30, with the owner's decision on P1 (spec.md, Clarifications, session
+2026-10-30). The tasks they blocked start once the design review of that resolution, the first row in the "Owner
+reviews" table of `verification.md` after the parking, is `PASS` (or `CONCERNS` accepted by the owner).
+
+| ID | Finding (seventh design review, `8d38457`) | Blocks | Resolution (2026-10-30) |
+| --- | --- | --- | --- |
+| P1 | [high] A listing filtered by chat and by a sender with both identities, written as `chat_jid = ? AND (sender_phone = ? OR sender_jid = ?)`, plans as `SEARCH messages_chat_time (chat_jid=?)` and reads the whole chat (0.4–0.9 s at 300,000 messages). The distributed form `(chat_jid = ? AND sender_phone = ?) OR (chat_jid = ? AND sender_jid = ?)` reaches the two chat-and-sender indexes, and a `UNION ALL` of the two single-index branches merges them with no sort. T044 must name the shape and data-model.md's expected-plan table must match it. Owner decision still open: whether every sender query (not only chat and sender) uses the `UNION ALL` form, which would remove the per-contact row-ID sets, the key sort and possibly the deep-listing slots and the 1-million-message ceiling of research R16. | Phase 6 (T039–T046) | Owner's decision: every sender query is a `UNION ALL` of a phone branch and a LID branch, each on its own index (research R15, data-model.md § Indexes). T044 names the shape for the sender listing and for chat and sender; T043 finds a contact's groups with two `EXISTS` probes per chat; the expected-plan table now lists no temporary b-tree for any message query, and `TestQueryPlans` (T046) rejects `MULTI-INDEX OR`. The row-ID sets, the key sorts, the deep-listing slots and the 1-million-message ceiling are gone (research R9, R16). |
+| P2 | [high] `TestQueryScale`'s 3× rule fails by construction: `SearchContacts` by name, `ContactChats` and the sender listings read every row they match by design and grow about 10×; the offset-99,800 listing is empty at a tenth; and Windows timing gives medians of 0 s. | T046 | T046 compares pages, not times. Constant-cost cases have their own rule; `SearchContacts`, `ContactChats` and the deep sender listing are compared by pages per row they must walk; the deep listing runs at the same relative depth (offset 9,800 at a tenth, 99,800 at full); times are recorded only. |
+| P3 | [medium] The scale test can count pages instead of time: modernc exports `sqlite.DBStatus`, reachable through `(*sql.Conn).Raw`, whose cache hit + miss delta counts the pages a query touched (1.0–1.3× tenth to full for constant-cost queries, about 10× for linear ones). The linear queries need their own rule, a bound per matched row. | T046 | Adopted in T046: the `DBStatusCacheHit` + `DBStatusCacheMiss` delta on one reader connection (checked in `modernc.org/sqlite` v1.61.0, `dbstatus.go`), with a per-row rule for the linear cases. |
+| P4 | [medium] T047's slope depends on how the seeded messages split between phone and LID: an even split measures about 12 B a message, all under the phone (the state after a merge) about 24 B. Seed under the phone, or take the larger of both splits. | T047 | With the `UNION ALL` form no query holds a per-message term, so T047 asserts that a listing's memory does not grow with the contact's history, and runs that check with both splits (even, and all under the phone). |
+| P5 | [low] Own-account detection compares with `whatsmeow_device.lid`, which can be NULL or empty; an empty own LID would equal the empty LID of an unmapped contact and treat that contact as the account. Compare only non-empty values, and add the case to T040. | T040, T044 | Own number and LID are compared only when non-empty (data-model.md § Derived values "Current device", research R16, T044); T040 tests a `NULL` and an empty own LID with an unmapped contact. |
+| P6 | [low] The 64-waiter cap is shared with callers waiting for a deep slot; if the cap is checked before trying the admission semaphore, an ingest call gets `ErrBusy` with 64 deep listings waiting although admission slots are free. Specify try-acquire before the cap check, and test `StoreMessage` with 64 deep waiters. | T011 (the `enterDeep` part only), T048 | Obsolete: the deep-listing slots are removed (research R9), so no other kind of waiter shares the cap. T011 removes `enterDeep` and its constants and tests. |
 
 ---
 
@@ -108,8 +112,8 @@ R4, spike S2).
   - **Work and waits:** "1 write connection and 4 read connections; ≤ 16 active and ≤ 64 waiting operations;
     admission wait ≤ 5 s; busy timeout 5 s; each query or write ≤ 10 s; resources released within 1 s of
     cancellation; startup schema upgrades ≤ 10 min". `Close` gives running operations a 2 s grace period before
-    it cancels them (research R9). SQLite's hard heap limit is 256 MiB, and at most 2
-    sender-filtered listings with a page end above 10,000 run at once (research R16).
+    it cancels them (research R9). SQLite's hard heap limit is 256 MiB (research R16). The bound
+    of 2 deep sender-filtered listings was withdrawn on 2026-10-30; T011 removes its constants.
   - **Disk:** "Free-space reserve 256 MiB … measurement at most 30 s old; … writes resume when ≥ 512 MiB is free";
     WAL limit 64 MiB.
   - Every limit is defined in bytes, with KiB = 1024.
@@ -203,15 +207,15 @@ R4, spike S2).
   - on Windows an extra ACE for Everyone fails, and a junction or reparse point fails;
   - two calls on the same file return equal `FileID`s, and a file renamed over it gives a different one;
   - `FileIDOf` on an open handle equals `CheckFile` on its path, on Unix and Windows.
-- [ ] T011 [P] **Blocked in part: the `enterDeep` slot waits for parked finding P6.** Create `internal/store/admit.go`: `gate.enter(ctx) (release func(), opCtx context.Context, err error)`.
+- [ ] T011 [P] Create `internal/store/admit.go`: `gate.enter(ctx) (release func(), opCtx context.Context, err error)`.
   - A semaphore of 16 active slots, with an atomic count of waiters.
   - If 64 are already waiting, return `ErrBusy` immediately; otherwise wait at most 5 s or until the caller's
     deadline, whichever is earlier.
   - `opCtx` is the caller's context with a 10 s timeout, also cancelled when the gate's store-wide context is.
-  - `gate.enterDeep(ctx) (release func(), err error)`: one of 2 slots for a deep sorted listing (research R9),
-    taken before `enter` (admission), within one deadline for both, else `ErrBusy`; a caller waiting for it counts
-    toward the 64-waiter cap and holds no admission slot. Callers take it before any database
-    connection (T044). A test hook can hold a slot, so tests never rely on sleeps.
+  - No second semaphore. Remove the deep-listing slot of the earlier design: `gate.enterDeep`, the `deep`
+    semaphore, `deepSlots` and `deepPageEnd` in `limits.go`, and their tests (`TestGateDeepSlots`,
+    `TestGateDeepWaitersDoNotBlockAdmission` and the `enterDeep` case of the close test). Sender listings no longer
+    sort, so they need no bound of their own (research R9, R15).
   - `gate.close(ctx) error` (research R9): mark the gate closed, so new and waiting callers get `ErrClosed`; wait
     up to 2 s for active operations; cancel the store-wide context; wait up to 1 s more. `ctx` can shorten both
     waits. It returns once every slot is free or the waits are over.
@@ -225,9 +229,6 @@ R4, spike S2).
   - cancellation releases the slot within 1 s;
   - `close` with 16 operations that block until their `opCtx` is cancelled returns within 3 s; the waiting
     callers and every later `enter` get `ErrClosed`;
-  - with both deep slots held by the test hook and 10 deep callers waiting for them, the gate's active count is 2
-    (the holders), and a `StoreMessage` caller is admitted at once; each waiting deep caller counts once toward
-    the 64-waiter cap; a deep caller still waiting at `close` gets `ErrClosed`;
   - no goroutine leaks (count before and after).
 - [X] T012 [P] Create `internal/store/disk.go`, `disk_unix.go` (`unix.Statfs`, `Bavail*uint64(Bsize)`) and
   `disk_windows.go` (`windows.GetDiskFreeSpaceEx`).
@@ -639,8 +640,8 @@ every time.
 
 ## Phase 6: User Story 4 - The tools find chats, contacts and messages (Priority: P1)
 
-**⛔ Blocked**: no task in this phase starts until parked finding P1 is resolved and reviewed (see Parked
-findings).
+**Parked finding P1**: resolved in the design on 2026-10-30. No task in this phase starts until the design review of
+that resolution clears it (see Parked findings).
 
 **Goal**: every query that tools 005/006 need, correct and deterministic, fast on 100,000 messages.
 
@@ -665,7 +666,7 @@ expected rows.
     are returned, and `DirectChat` returns P.
   - **Paging rules:** limit 0, limit 201, offset -1 and offset 100,001 are `*ValidationError`; a page beyond the
     end is empty.
-- [ ] T040 [P] [US4] **Blocked: parked findings P1, P5.** `internal/store/queries_messages_test.go`:
+- [ ] T040 [P] [US4] `internal/store/queries_messages_test.go`:
   - **Filters:** `ListMessages` with every combination of strict after, strict before, chat, sender (given as
     "+49 151 1234567", as the phone JID and as the mapped LID, each matching messages stored under both
     identities) and query, newest first, ties by `(chat_jid, id)` desc. Paging never
@@ -682,10 +683,14 @@ expected rows.
     and an older one in the "message yourself" chat, the older one is returned; with no own chat, nil. The same
     holds when the account is given by its own LID, and when `whatsmeow_device.jid` carries a device part
     (`490000000001:7@s.whatsapp.net`). With no device row (logged out), asking for the former own number still
-    never returns a message the account sent to someone else. Two candidates at the same second are ordered by
+    never returns a message the account sent to someone else. With a device row whose `lid` is `NULL`, and again
+    with `lid = ''`, a contact with no LID mapping is not taken for the account: its last interaction is its own
+    newest message, not the newest of the own direct chat. Two candidates at the same second are ordered by
     chat JID, then ID.
   - **Chat and sender together:** `ListMessages` with a chat and a sender (by phone, by LID, and by a contact with
     both) returns only that sender's messages in that chat, newest first.
+  - **Both identities:** messages of one contact under the phone and under the LID at the same millisecond are
+    ordered by `(chat_jid, id)` across both, and paging through them never skips or repeats one.
   - **Fields:** every `MessageView` field is filled (scenario 9). The sender name follows the order full → first →
     push → business (device store), looked up under the sender JID and then its mapped counterpart, else the saved
     or real name of the direct chat with the sender, else ''. A contact with both a first name and a push name
@@ -726,17 +731,25 @@ expected rows.
   - the latest message uses the `messages_chat_time` index (`ORDER BY time DESC, id DESC LIMIT 1`);
   - `DirectChat` and `ContactChats` start with `resolveContact` (T045);
   - `DirectChat` is the chat with `jid = phoneJID`, else `jid = lidJID`;
-  - `ContactChats` is both direct chats that exist (`jid IN (phoneJID, lidJID)`) plus the distinct `chat_jid`s of
-    `g.us` chats where `sender_phone = phone OR sender_jid = lidJID` (empty values left out of the SQL, not bound as `''`), ordered by
-    `last_message_time DESC, jid`;
+  - `ContactChats` is one query over `chats`: both direct chats that exist (`jid IN (phoneJID, lidJID)`) plus every
+    `g.us` chat with `EXISTS (SELECT 1 FROM messages WHERE chat_jid = chats.jid AND sender_phone = ?)` or the same
+    with `sender_jid = ?` (a probe whose value is empty is left out of the SQL, not bound as `''`), ordered by
+    `last_message_time IS NULL, last_message_time DESC, jid` so that it walks `chats_last_activity`. Each probe is
+    one search on `messages_chat_sender_phone` or `messages_chat_sender_jid` (research R15). Never `DISTINCT
+    chat_jid` over the contact's messages with an `OR`, which collects the row IDs of the contact's whole history;
   - the sort orders are exact:
     - `ByLastActivity` is `ORDER BY last_message_time IS NULL, last_message_time DESC, jid`;
     - `ByName` is `ORDER BY name_quality = 0, name_fold, jid`, so unnamed chats come last even though their
       `name_fold` is `''`.
-- [ ] T044 [US4] **Blocked: parked findings P1, P5.** Implement `ListMessages`, `MessageContext` and `LastInteraction` in `internal/store/queries.go`:
+- [ ] T044 [US4] Implement `ListMessages`, `MessageContext` and `LastInteraction` in `internal/store/queries.go`:
   - filters are built from fixed SQL fragments with bound values;
-  - `MessageFilter.Sender` and `LastInteraction` resolve the contact with `resolveContact` (T045) and match
-    `sender_phone = ? OR sender_jid = ?`, leaving out the half whose value is empty;
+  - `MessageFilter.Sender` and `LastInteraction` resolve the contact with `resolveContact` (T045). A sender
+    listing has a phone branch (`sender_phone = ?`) and a LID branch (`sender_jid = ?`), and a branch whose value
+    is empty is left out. With one branch it is one query; with both, the key query is
+    `<phone branch> UNION ALL <LID branch> ORDER BY time DESC, chat_jid DESC, id DESC LIMIT ? OFFSET ?`, where each
+    branch is `SELECT time, chat_jid, id FROM messages WHERE <its sender column> = ?` followed by the other filters,
+    built from the same fixed fragments with their own bound values (research R15). It never runs one query with
+    `sender_phone = ? OR sender_jid = ?`;
   - `LastInteraction` is the newest of up to four `LIMIT 1` queries, each on a single index (research R16): the
     latest message of the phone chat and of the `@lid` chat (`messages_chat_time`), and the newest message with
     `sender_phone = phone` (`messages_sender_time`) and with `sender_jid = lidJID` (`messages_sender_jid`), each
@@ -745,20 +758,20 @@ expected rows.
     history. Both sender queries also require `from_me = 0`, which costs nothing for another contact (every
     message the account sent carries the account's own JID) and keeps the result right when the own number is
     unknown. The own number and LID are the user parts of `whatsmeow_device.jid` and `.lid`, with any device part
-    (`:7`) removed; when the contact's phone or LID equals one of them, the two sender queries are skipped, and the
+    (`:7`) removed. Each is compared only when both it and the contact's value are non-empty, so a `NULL` or `''`
+    own LID never matches an unmapped contact; when the contact's phone or LID equals one of them, the two sender queries are skipped, and the
     result is the latest message of the own direct chat. With no device row, the queries run with `from_me = 0`;
     for the former own number that walks only the account's own messages in the sender index, which is accepted
     for the logged-out state;
-  - a chat filter together with a sender filter uses `messages_chat_sender_phone` and `messages_chat_sender_jid`
-    (T021), with the same keys-first page as every sender listing;
+  - a chat filter together with a sender filter puts `chat_jid = ?` in each branch, so the phone branch searches
+    `messages_chat_sender_phone` and the LID branch `messages_chat_sender_jid` (T021), with the same order and
+    keys-first page as every sender listing;
   - search is `(instr(text_fold, ?) > 0 OR instr(caption_fold, ?) > 0)`;
   - order is `time DESC, chat_jid DESC, id DESC`. The page's keys are selected first
     (`SELECT time, chat_jid, id ... ORDER BY ... LIMIT ? OFFSET ?`), and the full rows are read for those keys
-    only, so any sort holds keys, not rows of up to 512 KiB (research R15, R16). A listing with a sender filter
-    and `offset + size` above 10,000 also takes `gate.enterDeep` (T011). It takes the slot before admission and
-    before it uses any connection, `resolveContact` included: the decision needs only the filter and
-    `offset + size`. A listing that held a reader while waiting for a slot could leave the 2 slot holders with no
-    reader to run on;
+    only. No listing sorts: each walks its index in this order, and a sender listing merges its two branches. The
+    rows skipped by the offset are read from covering indexes only, and the rows of up to 512 KiB only for the
+    page (research R15, R16);
   - context: per hit, two queries on `messages_chat_time` with the hit's position as a row value, so the index
     seeks straight to it: before is `chat_jid = ? AND (time, id) < (?, ?) ORDER BY time DESC, id DESC LIMIT ?`,
     then reversed; after is `chat_jid = ? AND (time, id) > (?, ?) ORDER BY time, id LIMIT ?`. Never the
@@ -789,7 +802,7 @@ expected rows.
   lookup in the current device's `whatsmeow_lid_map` by `pn` or by `lid` to fill the other identity. Without a
   device or a mapping, the contact keeps the one identity it was given. Test it in `contacts_test.go`: phone, phone
   JID and LID inputs, with and without a mapping, and with no device.
-- [ ] T046 [P] [US4] **Blocked: parked findings P1, P2, P3.** Create `internal/store/bench_test.go`: `BenchmarkQueries` seeds 100,000 messages across
+- [ ] T046 [P] [US4] Create `internal/store/bench_test.go`: `BenchmarkQueries` seeds 100,000 messages across
   1,000 chats once (through `StoreMessages` in batches of 1,000, cached per process in a temp dir). It has
   sub-benchmarks for each US4 query: `ListChats` (both sorts, with search),
   `GetChat`, `DirectChat`, `ContactChats` (by phone and by LID), `SearchContacts`, `ListMessages` (no filter,
@@ -800,7 +813,8 @@ expected rows.
   each query, from data-model.md § Indexes: a `SEARCH` on a named index for every lookup by key, ID, chat, sender
   or contact; `SCAN messages USING INDEX messages_time` only for text search and an unfiltered listing;
   `SCAN chats USING INDEX chats_last_activity` or `chats_name` for the chat listings; and a temporary b-tree only
-  where that table lists one. Any other plan fails the test. It runs in CI, unlike the
+  where that table lists one, which no message query has. A sender query under both identities must plan as
+  `MERGE (UNION ALL)` over its two indexes; a `MULTI-INDEX OR` anywhere fails. Any other plan fails the test. It runs in CI, unlike the
   benchmark, so a partial or missing index is caught there.
 
   Also add `TestQueryScale` in `internal/store/scale_test.go`, which runs in CI on all three OSes (not skipped by
@@ -812,14 +826,35 @@ expected rows.
   name and for a number; `ContactChats`, `LastInteraction` and a sender listing at offset 0 and at offset 99,800
   for the big contact; a listing with the big group and a sender who has 2 messages there; `GetMessageByID`.
 
-  The check is how each query grows, not a fixed time, so it holds on any runner. The test seeds the same
-  shapes twice, at one tenth (30,000 messages, 500 contacts, 1,000 mappings) and at full size, and times each
-  query as the median of 5 runs on each. A query whose cost should not grow with the database (every case above
-  except text search and the unfiltered listing) fails if its full-size median is more than 3 times its small
-  median; an O(chat size) or O(contacts × mappings) plan grows about 10 times. Text search and the unfiltered
-  listing, which are linear by design, only get a backstop of 5 s at full size. `database/sql` does not expose
-  the statement handle that SQLite's per-statement step counters need, so the ratio stands in for them. The test
-  records each median in its output for `verification.md`.
+  The check counts pages, not time, so it holds on any runner. The test seeds the same shapes twice, at one tenth
+  (30,000 messages, 12,000 of them from the big contact; 500 contacts; 1,000 mappings; the 1,000 small chats) and
+  at full size. Each case runs on one reader connection taken with `(*sql.DB).Conn`, through a test hook that runs
+  the query's own code on that connection. Before and after, `(*sql.Conn).Raw` reads `sqlite.DBStatus`
+  (`DBStatusCacheHit` + `DBStatusCacheMiss`, `modernc.org/sqlite` v1.61.0), and the delta is the pages the query
+  touched. Each case runs once to warm the cache and is then counted, with the rows it must walk, which the case
+  knows by construction. The rules:
+  - **Constant-cost cases:**
+    - every lookup, `DirectChat`, `LastInteraction`, `MessageContext` and a search hit's context;
+    - every listing at offset 0, including the big contact's sender listing;
+    - the big group with a sender who has 2 messages there;
+    - `GetMessageByID`.
+
+    Pages at full size ≤ 2 × pages at a tenth + 16. A deeper B-tree adds a page or two per search, while an
+    O(chat size) or O(contacts × mappings) plan grows about 10 times.
+  - **Linear-by-design cases,** each normalised by the rows it must walk:
+    - `SearchContacts` by name and by number (contacts plus mappings);
+    - `ContactChats` (chats);
+    - the big contact's deep sender listing, at the same relative depth: offset 9,800 at a tenth and 99,800 at
+      full (offset + size rows).
+
+    Pages per row at full size ≤ 1.5 × pages per row at a tenth + 0.01. A plan that walks more than it must (the
+    whole group for a chat-and-sender listing, the contact's history for contact chats, contacts × mappings) grows
+    about 10 times per row.
+  - **Text search and the unfiltered listing,** linear over messages by design, only get a backstop of 5 s at full
+    size.
+
+  The test records each case's pages, rows and median time of 5 runs in its output for `verification.md`. Times are
+  not compared, because Windows timers give medians of 0 s for the fast cases.
 
 **Checkpoint**: US4 passes on its own (T039–T041). Run the benchmark locally (it is not a CI gate).
 
@@ -835,7 +870,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
 
 ### Tests for User Story 7 ⚠️
 
-- [ ] T047 [P] [US7] **Blocked: parked finding P4.** `internal/store/limits_test.go` (SC-009). For every constant in `limits.go`, a test at the
+- [ ] T047 [P] [US7] `internal/store/limits_test.go` (SC-009). For every constant in `limits.go`, a test at the
   boundary (accepted) and one beyond it (rejected, with no row written: compare table dumps). Log for each case:
   - elapsed time;
   - result bytes;
@@ -847,24 +882,27 @@ has no side effect. The recorded cross-identity and restore evidence passes.
 
   The test asserts that heap growth stays below 2× the approved result budget and SQLite's high-water mark below
   the 256 MiB limit. It also seeds one contact with 2,000 messages of 256 KiB and lists them by phone and LID at
-  offset 1,800: the call succeeds within the limit (keys-first sort). In a child process (as T008 and T036), a
-  lowered limit set with `sqlite3_hard_heap_limit64` makes the same call fail with `ErrResourceLimit` code `memory`,
-  not a crash; the limit never changes in the test binary itself. Three concurrent deep sender listings (page end
-  above 10,000), with the two slots held by the test hook: the third waits, then gets `ErrBusy` after the admission
-  wait (shortened for the test). Per-contact memory, in a child process with no parallel tests (as T008), with
-  identifiers of realistic length so that keys are about 300 B (chat JIDs of 120 B, message IDs of 150 B):
-  1. seed one contact with 50,000 messages under both identities (phone and mapped LID); reset the high-water
-     mark (`sqlite3_memory_highwater(1)`); run one shallow sender-filtered listing at offset 0 and record the peak;
-  2. add 150,000 more (200,000), reset, run the same listing, and record the peak. The slope is the difference
-     divided by 150,000. This is the cost of one query, so assert it is at most 24 B × 1.1 per message
-     (research R16);
-  3. reset, then run 2 deep (offset 99,800) and 2 shallow (offset 9,800, page end 10,000) listings at once, with a
-     test hook that holds all four statements open until each has read its first row, so the peaks overlap.
-     Each of the four holds its own row-ID set, so assert that the peak minus 4 × 200,000 × the measured slope is
-     at most 108 MB × 1.1;
-  4. record both measured terms and the extrapolation to 1 million messages, fixed part + 4 × 1,000,000 × slope,
-     in `verification.md`; it must stay at least 60 MB below 256 MiB;
-  5. reset, then run `LastInteraction` for the same contact: below 1 MB of SQLite memory and 50 ms.
+  offset 1,800: the call succeeds within the limit, because the skipped rows come from covering indexes and only
+  the page's rows are read. In a child process (as T008 and T036), a lowered limit set with
+  `sqlite3_hard_heap_limit64` below what `SearchContacts` over 5,000 contacts needs for its grouping (measured first
+  in the same child) makes that call fail with `ErrResourceLimit` code `memory`, not a crash; the limit never
+  changes in the test binary itself.
+
+  Per-contact memory, in a child process with no parallel tests (as T008), with identifiers of realistic length
+  (chat JIDs of 120 B, message IDs of 150 B). Run it twice: once with the contact's messages split evenly between the
+  phone and the mapped LID, and once with all of them under the phone (the state after a merge). A query's growth
+  is SQLite's high-water mark after it minus `sqlite3_memory_used` at the reset (`sqlite3_memory_highwater(1)`),
+  less the growth of the page cache on the connections it used (`DBStatusCacheUsed` before and after), so it
+  measures the query and not the cache.
+  1. Seed the contact with 50,000 messages. Run a sender listing at offset 0 and at offset 49,800, and record
+     each growth.
+  2. Add 150,000 more (200,000). Repeat both, and also run offset 99,800. Each growth is at most 256 KiB, and for
+     the same offset the growth at 200,000 is at most the growth at 50,000 + 64 KiB: nothing grows with the
+     contact's history or with the offset.
+  3. Run 2 deep (offset 99,800) and 2 shallow (offset 9,800) listings at once, with a test hook that holds all four
+     statements open until each has read its first row, so the peaks overlap. The growth is at most 1 MiB.
+  4. Record the measured growths in `verification.md`.
+  5. Reset, then run `LastInteraction` for the same contact: below 1 MB of SQLite memory and 50 ms.
 
   Cover:
   - every field size;
@@ -876,7 +914,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
     shorter list;
   - ambiguous-ID chats (101 chats → `ErrResourceLimit`);
   - overflowing offsets and context (`math.MaxInt`).
-- [ ] T048 [P] [US7] **Blocked: parked finding P6.** `internal/store/admission_test.go`, with the real store:
+- [ ] T048 [P] [US7] `internal/store/admission_test.go`, with the real store:
   - 16 blocking operations (hold the writer with an open `BEGIN IMMEDIATE` on a separate raw connection) plus 64
     waiting, then one more gets `ErrBusy` at once;
   - waiting ends at 5 s;

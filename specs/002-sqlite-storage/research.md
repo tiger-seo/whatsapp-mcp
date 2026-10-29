@@ -265,11 +265,9 @@ were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-202
   `(chat_jid, id)`, which is idempotent. Any other failure is reported as rolled back.
 - **Result bytes:** query code accounts the bytes of each scanned row against the 32 MiB budget, and the context
   rows against the 2,000-row budget. Crossing either aborts with `ErrResourceLimit`, never a truncated result.
-- **Deep sorted listings:** a `ListMessages` call with a sender filter whose `offset + size` is above 10,000 also
-  needs one of 2 slots of a second semaphore. It takes that slot first and only then enters admission, within one
-  5 s wait for both; if either does not free in time it gets `ErrBusy`. A caller waiting for a deep slot counts
-  toward the 64-waiter cap and holds none of the 16 admission slots, so a burst of deep listings cannot keep ingest
-  or whatsmeow-driven operations out. This bounds SQLite's sort memory (R16).
+- **No second semaphore:** the earlier design gave deep sender listings 2 slots of their own, to bound the memory
+  of their sorts. Sender listings no longer sort (R15), so every operation, deep or not, goes through the one gate
+  (owner's decision, 2026-10-30).
 - **Close:** every `opCtx` also derives from a store-wide context that `Close` cancels. `Close` first marks the
   gate closed, so new and waiting callers get `ErrClosed` at once. It then waits up to 2 s for running
   operations, cancels the store-wide context, waits up to 1 s for them to release (the approved cancellation
@@ -350,14 +348,27 @@ unreachable one is recorded as an exception in `verification.md` (Principle V, X
     `@lid` or `@s.whatsapp.net` itself.
   - **From a phone number:** look up `pn = <digits>`, to find the LID.
   - **From a LID:** look up `lid = <user part>`, to find the phone number. With no row, only the LID is known.
-  - **Queries:** messages match `sender_phone = :phone OR sender_jid = :lidJID`, with empty values left out of
-    the SQL. Each half of the `OR` uses its own index (`messages_sender_time`, `messages_sender_jid`).
+  - **Queries:** messages match a phone branch (`sender_phone = :phone`) and a LID branch (`sender_jid =
+    :lidJID`). A branch whose value is empty is left out of the SQL, so a contact with one identity is one plain
+    query. With both, the query is a `UNION ALL` of the two branches, each on its own index
+    (`messages_sender_time`, `messages_sender_jid`, or with a chat filter `messages_chat_sender_phone`,
+    `messages_chat_sender_jid`), with the other filters repeated in each branch and the `ORDER BY`, `LIMIT` and
+    `OFFSET` on the compound. The branches never overlap: `sender_phone` is `''` for a `@lid` sender, and a
+    `@lid` sender is never a phone sender. Each index delivers its branch in the listing order, so SQLite merges
+    them (`MERGE (UNION ALL)`) and stops after `offset + size` rows, with no temporary b-tree and no set of row
+    IDs. One query with `OR` is never used: SQLite plans it as a `MULTI-INDEX OR`, which collects the row IDs of
+    every message of the contact and then sorts, or, with a chat filter, as a search on the chat alone that reads
+    the whole chat (owner's decision, 2026-10-30).
+  - **Contact chats:** the groups a contact wrote in are found per chat, `EXISTS` on
+    `messages_chat_sender_phone` and `EXISTS` on `messages_chat_sender_jid`, while walking `chats_last_activity`:
+    two index searches per chat, no `DISTINCT` and no sort over the contact's messages.
   - **Direct chats:** `jid IN (:phoneJID, :lidJID)`. Before 004 merges a LID, live one-to-one messages often land
     in the `@lid` chat while older history is in the phone chat, so `ContactChats` and `LastInteraction` use
     both. `DirectChat` returns one chat: the phone chat, else the `@lid` chat.
   - **Ordering:** the listing selects only the keys `(time, chat_jid, id)` under `ORDER BY ... LIMIT ...
-    OFFSET ...`, then reads the full rows for the page. An `OR` over two indexes needs a sort, and sorting keys
-    instead of rows of up to 512 KiB keeps that sort small (R16).
+    OFFSET ...`, then reads the full rows for the page. The key branches are answered from the covering indexes
+    alone, so the rows skipped by the offset are never read from the table, and only the page's rows of up to
+    512 KiB are.
 
   `ContactChats`, `DirectChat`, `LastInteraction` and `MessageFilter.Sender` all go through it.
 - **Merge:** `MergeLID` first runs `UPDATE messages SET sender_jid = :phoneJID, sender_phone = :phone WHERE
@@ -367,8 +378,8 @@ unreachable one is recorded as an exception in `verification.md` (Principle V, X
   canonical. Resolving at query time covers the time before 004 calls the merge, and LIDs whose mapping arrives
   while the process runs. The update is one indexed statement bounded by the 10 s operation deadline.
 - **Chat and sender together:** two more indexes, `(chat_jid, sender_phone, time DESC, id DESC)` and
-  `(chat_jid, sender_jid, time DESC, id DESC)`, make that combination an index search; without them it reads every
-  row of the chat (0.37 s for 300,000 messages in the sixth review's measurement). They add two index writes per
+  `(chat_jid, sender_jid, time DESC, id DESC)`, make that combination an index search, one per branch of the
+  `UNION ALL` when the contact has both identities; without them it reads every row of the chat (0.37 s for 300,000 messages in the sixth review's measurement). They add two index writes per
   stored message, which the owner accepted.
 - **Rationale:** M6 requires every contact tool to take a LID, and a person who writes in groups under a LID before
   their number is known must still be found by that number. Doing both keeps the queries right whether or not
@@ -397,41 +408,38 @@ unreachable one is recorded as an exception in `verification.md` (Principle V, X
   Go's runtime nor the 32 MiB result budget sees it. With `temp_store(MEMORY)` a sort for `ORDER BY` holds every
   row it sorts in that memory. A contact with many large messages, listed at a deep offset, could otherwise need
   hundreds of megabytes before the first row is counted (second design review).
-- **Keeping normal queries far below it:** listings sort only keys and read full rows for the page (R15), and the
-  page cache stays at SQLite's default of 2,000 KiB per connection, about 10 MiB for the 5 connections.
+- **Keeping normal queries far below it:** no message listing sorts. Every listing walks an index in its own
+  order, sender listings merge two such walks (R15), the page's keys come from covering indexes, and only the
+  page's full rows are read. The page cache stays at SQLite's default of 2,000 KiB per connection, about 10 MiB for
+  the 5 connections.
 - **Measurement:** tests read SQLite's high-water mark with `sqlite3_memory_highwater` (through
   `modernc.org/sqlite/lib` and a `libc.TLS`) before and after each boundary case, next to Go's heap growth. It
   reads 0 unless statistics are on, so a test first asserts that an allocation over a lowered limit fails.
 - **One budget for the process:** the allocation that crosses the limit fails, whichever connection makes it, so
   an ingest write or a whatsmeow write could fail while a reader holds the memory. The store keeps its own queries
-  below the limit, and the figures below say how far (fourth design review, measured with statistics on):
+  far below the limit:
   - **At most 4 queries run SQL at once,** one per reader connection, however many operations are admitted.
-  - **Key sorts:** a sender-filtered listing sorts at most `offset + size` keys, because SQLite keeps only the top
-    rows a `LIMIT` needs. A key is a time and two identifiers, so at most about 530 B with 256-byte identifiers
-    chosen by a hostile sender, and about 300 B with realistic ones. The temporary b-tree costs about 1.46 × the
-    raw key bytes. A deep listing (page end up to 100,200) therefore needs about 44 MB with realistic keys and
-    77 MB with hostile ones; a shallow one (page end ≤ 10,000) a tenth of that. At most 2 deep listings run at once
-    (R9).
-  - **Row-ID sets:** every query that matches a contact under both identities (`sender_phone = ? OR sender_jid =
-    ?`, a `MULTI-INDEX OR`) first collects the row IDs of all of that contact's messages, about 24 B each. This
-    does not depend on offset or size, and the deep-listing slots do not bound it. Four such queries over one
-    contact hold about 96 MB per million of that contact's messages.
+  - **Message queries hold no per-row state.** A sender listing at offset 99,800 for a contact with 300,000
+    messages under both identities grew SQLite's memory by about 7 KB, the same as at offset 0 (measured
+    2026-10-30). Neither the offset nor the size of a contact's history adds a term; the earlier key sorts (up to
+    77 MB for a deep listing) and row-ID sets (24 B per message of the contact) are gone with the `OR` form.
+  - **The one remaining temporary b-tree** is `SearchContacts`' grouping and order, which holds contact rows and is
+    bounded by the device store's contact count.
   - **The page cache** is about 10 MiB.
 
-  With 4 sender-filtered reads of one contact (2 deep, 2 shallow) and realistic keys, the total is about
-  108 MB + 96 MB per million of that contact's messages. More than 60 MB stays free for writes and the device store
-  up to about 1 million messages from one contact, and the 256 MiB limit is reached at about 1.6 million. With
-  hostile 256-byte identifiers the fixed part is about 180 MB, and the 60 MB margin holds to about 0.3 million. The
-  owner accepted this (fourth design review): beyond it, a write can fail with `ErrResourceLimit` code `memory`
-  while those reads run, and nothing is corrupted. T047 measures the per-message term with a contact of 200,000
-  messages.
+  So the store's reads need about 10 MiB of page cache plus a few hundred kilobytes, however large one contact's
+  history is, and the earlier ceiling of about 1 million messages from one contact (fourth design review) no
+  longer applies (owner's decision, 2026-10-30). T047 checks that a listing's memory does not grow between 50,000
+  and 200,000 messages from one contact.
 - **`LastInteraction` reads O(1):** it is the newest of up to four `LIMIT 1` queries, each on one index (the
   latest message of the phone chat and of the `@lid` chat on `messages_chat_time`, the newest message by
   `sender_phone` and by `sender_jid` on the two sender indexes). One query over the `OR` would collect the
   contact's whole history first (1.35 s and 26 MB for a million messages in the review's measurement). Every
   message the account sent carries the account's own JID as sender, so for any other contact the sender queries
   match only what that contact sent, in their direct chat or a group. For the account's own number or LID (from
-  `whatsmeow_device`), the sender queries are skipped and only the own direct chat counts (FR-033). The sender
+  `whatsmeow_device`), the sender queries are skipped and only the own direct chat counts (FR-033). Only non-empty
+  values are compared: `whatsmeow_device.lid` can be `NULL` or `''`, and an empty own LID must not equal the empty
+  LID of an unmapped contact, which would treat that contact as the account. The sender
   indexes end in `chat_jid DESC, id DESC`, so each query's `ORDER BY time DESC, chat_jid DESC, id DESC LIMIT 1` reads
   one index entry with no sort, and the four candidates are compared in Go by the same three keys.
 - **Alternatives:** `soft_heap_limit` alone (advisory; SQLite may exceed it); no limit (the review's finding);

@@ -105,8 +105,18 @@ Indexes (S3, FR-020):
 - `messages_id (id)`: a lookup by message ID alone (FR-022), which the `(chat_jid, id)` key cannot serve
 - `messages_chat_sender_phone (chat_jid, sender_phone, time DESC, id DESC)` and
   `messages_chat_sender_jid (chat_jid, sender_jid, time DESC, id DESC)`: a listing filtered by both a chat and a
-  sender, which would otherwise read every row of the chat. With both identities the plan is a `MULTI-INDEX OR`
-  over these two (owner's decision, sixth design review; they add two index writes per stored message)
+  sender, which would otherwise read every row of the chat (owner's decision, sixth design review; they add two
+  index writes per stored message). They also serve the per-chat `EXISTS` probes of `ContactChats`
+
+A sender under both identities is never matched with one `OR`: SQLite plans `sender_phone = ? OR sender_jid = ?` as a
+`MULTI-INDEX OR`, which collects the row IDs of every message of the contact and sorts them, and with a chat filter
+as a search on the chat alone. Every sender query is instead a `UNION ALL` of a phone branch and a LID branch, each on
+its own index, with `ORDER BY`, `LIMIT` and `OFFSET` on the compound (owner's decision, 2026-10-30). Its plan is
+`MERGE (UNION ALL)` over `SEARCH messages USING COVERING INDEX messages_sender_time (sender_phone=?)` and
+`... messages_sender_jid (sender_jid=?)`, or the two chat-and-sender indexes with a chat filter. A time filter adds
+`AND time<?` or `time>?` to each search, and search text makes the index non-covering (`USING INDEX`), since the
+folded text is read from the row. A contact with one identity runs only its branch. A plan with
+`MULTI-INDEX OR`, or with a `SEARCH` on `messages_chat_time (chat_jid=?)` for a chat-and-sender listing, is rejected.
 
 A query plan test (`EXPLAIN QUERY PLAN`) holds the expected plan of every query in FR-021–FR-033 and fails on any
 other. Every lookup by key, chat, sender or contact is a `SEARCH` on one of these indexes. A text search, and a
@@ -120,10 +130,12 @@ message rows:
 
 | Query | Expected sort | Why |
 | --- | --- | --- |
-| `ListMessages` with a sender filter | `USE TEMP B-TREE FOR ORDER BY` in the key subquery when the contact has both identities (`MULTI-INDEX OR`); none when it has only a phone number or only a LID, since the sender indexes carry the full listing order | an `OR` over two indexes; the sort holds keys (R15, R16) |
-| `ContactChats` | `USE TEMP B-TREE FOR DISTINCT` and for its `ORDER BY` | one row per chat from the contact's messages; holds chat JIDs |
 | `SearchContacts` | `USE TEMP B-TREE FOR GROUP BY` and for its `ORDER BY` | one row per person, built from both of the person's entries before the text is matched; holds contact rows, bounded by the device store's contact count |
-| `ListMessages` with a chat and a sender filter under both identities | `USE TEMP B-TREE FOR ORDER BY` over the `MULTI-INDEX OR` of the two chat-and-sender indexes | the sort holds the keys of that sender's messages in that chat only |
+
+No message query has a temporary b-tree: every listing, including a sender listing under both identities, walks
+its indexes in the listing order. `ContactChats` walks `SCAN chats USING COVERING INDEX chats_last_activity` with
+two correlated `SEARCH`es per chat, on `messages_chat_sender_phone (chat_jid=? AND sender_phone=?)` and
+`messages_chat_sender_jid (chat_jid=? AND sender_jid=?)`, and has none either.
 
 The order of every list is deterministic: messages by `(time, chat_jid, id)`, newest first; chats by `(last_message_time, jid)`
 or `(name_fold, jid)`. Rows without a name or time come last.
@@ -158,7 +170,7 @@ escaped only when they appear in diagnostics.
 | Latest message of a chat | the first row of `messages_chat_time` for that chat |
 | Contact identity (FR-028) | the device's `whatsmeow_contacts` rows, joined with `whatsmeow_lid_map (lid, pn)`. A LID row with a mapped phone and the phone row are one person, keyed by the phone JID. The name comes from the phone row, else from the LID row, each in the order full, first, push, business. Groups (`g.us`) are excluded. |
 | Resolved contact (FR-035) | the input as a phone number, phone JID or LID JID, plus its counterpart from `whatsmeow_lid_map` (`pn = <digits>` gives `lid`, `lid = <user part>` gives `pn`): `{phone, phoneJID, lidJID}`, where `phoneJID = phone || '@s.whatsapp.net'` and `lidJID = lid || '@lid'`; any may be empty but not all. Message matches use `sender_phone = phone OR sender_jid = lidJID`. The direct chats are `jid IN (phoneJID, lidJID)`: both exist only before a merge. `DirectChat` returns the phone chat, else the `@lid` chat. |
-| Current device | the single row of `whatsmeow_device`. If there is none (never paired, or logged out), contact queries return no rows and sender names fall back to chat names. |
+| Current device | the single row of `whatsmeow_device`. If there is none (never paired, or logged out), contact queries return no rows and sender names fall back to chat names. Its own number and LID are the user parts of `jid` and `lid` without a device part; `lid` can be `NULL` or `''`, and an empty own value never equals anything, so an unmapped contact's empty LID is never taken for the account. |
 
 ## State transitions
 
