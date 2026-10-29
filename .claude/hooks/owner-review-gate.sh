@@ -11,7 +11,8 @@
 #
 # The last row of a stage counts. It passes when the verdict is PASS, or CONCERNS with the owner's decision
 # filled in, and nothing it covers has changed since the commit it names. verification.md itself is never
-# covered, so recording a verdict does not make it stale.
+# covered, so recording a verdict does not make it stale. Nor is ticking tasks off: a tasks.md that differs only in
+# its "- [ ]" / "- [X]" markers counts as unchanged.
 #
 # A BLOCK also passes when the owner parked its findings (constitution, Development Workflow): the stage has at
 # least 3 BLOCK rows, the decision reads "Parked at <commit>: <findings>", that commit changed nothing the
@@ -149,7 +150,16 @@ if [[ -n ${parked_at:-} ]]; then
     decide deny "findings are parked, but $feature_dir/tasks.md has no \"## Parked findings\" section."
   base=$parked_at
 fi
-changed=$( { git diff --name-only "$base" -- "${paths[@]}"; git ls-files --others --exclude-standard -- "${paths[@]}"; } | head -n 5)
+changed=$( { git diff --name-only "$base" -- "${paths[@]}"; git ls-files --others --exclude-standard -- "${paths[@]}"; } )
+# Implementation marks each task done in tasks.md; that is progress, not a change to what was reviewed.
+unticked() { tr -d '\r' | sed -E 's/^([[:space:]]*- )\[[xX]\]/\1[ ]/'; }
+tasks=$feature_dir/tasks.md
+if grep -qxF "$tasks" <<<"$changed" && [[ -f $tasks ]] &&
+  git cat-file -e "$base:$tasks" 2>/dev/null &&
+  cmp -s <(git show "$base:$tasks" | unticked) <(unticked <"$tasks"); then
+  changed=$(grep -vxF "$tasks" <<<"$changed")
+fi
+changed=$(head -n 5 <<<"$changed")
 [[ -z $changed ]] ||
   decide deny "files changed since the reviewed commit $base, so the review is stale: $(tr '\n' ' ' <<<"$changed")$how"
 

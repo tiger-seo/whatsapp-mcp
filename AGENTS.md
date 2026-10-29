@@ -70,7 +70,8 @@ parked. `.claude/hooks/owner-review-gate.sh` (wired in `.claude/settings.json`) 
 `/speckit-implement` without a passing design review and `gh pr create` / `gh pr merge` without a passing
 code review, and treats a review as stale once anything it covered changed after the recorded commit (after
 the parking commit, for a parked `BLOCK`).
-Changing `verification.md` never makes a review stale. On a branch without a feature directory the hook
+Changing `verification.md` never makes a review stale, and neither does ticking tasks `[X]` in `tasks.md` when
+nothing else in it changed. On a branch without a feature directory the hook
 asks for confirmation instead; put the verdict in the pull request. The hook needs `bash` and `jq`.
 
 ## Conventions
