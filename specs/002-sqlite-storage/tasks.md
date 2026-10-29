@@ -207,7 +207,7 @@ R4, spike S2).
   - on Windows an extra ACE for Everyone fails, and a junction or reparse point fails;
   - two calls on the same file return equal `FileID`s, and a file renamed over it gives a different one;
   - `FileIDOf` on an open handle equals `CheckFile` on its path, on Unix and Windows.
-- [ ] T011 [P] Create `internal/store/admit.go`: `gate.enter(ctx) (release func(), opCtx context.Context, err error)`.
+- [X] T011 [P] Create `internal/store/admit.go`: `gate.enter(ctx) (release func(), opCtx context.Context, err error)`.
   - A semaphore of 16 active slots, with an atomic count of waiters.
   - If 64 are already waiting, return `ErrBusy` immediately; otherwise wait at most 5 s or until the caller's
     deadline, whichever is earlier.

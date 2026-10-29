@@ -34,6 +34,7 @@ CI can produce the macOS evidence the gate needs.
 | --- | --- | --- | --- |
 | 2026-10-28 | windows/amd64 (local) | `CGO_ENABLED=0 go test -count=1 -timeout 15m ./...` | PASS, exit 0: `cmd/whatsapp-mcp`, `internal/buildinfo`, `config`, `lock`, `private`, `store` (about 34 s for `store`); 341 top-level tests passed, 0 failed, 18 skipped (child-process helpers and symlink tests that Windows cannot create without a privilege) |
 | 2026-10-28 | windows/amd64 (local) | `gofmt -l .` and `go vet ./...` | no output, exit 0 |
+| 2026-10-30 | windows/amd64 (local), T011 after removing the deep slots | `CGO_ENABLED=0 go test -count=1 -timeout 15m ./...`; `gofmt -l .`; `go vet ./...` | PASS, exit 0, every package; `TestGate*` 7/7 (`SeventeenthWaits`, `WaiterCap`, `WaitEnds`, `CancellationFreesSlot`, `OperationLimit`, `Close`, `NoGoroutineLeak`); gofmt and vet clean; `grep -rn deep` over `internal/` and `cmd/` finds no store code |
 | 2026-10-28 | linux/amd64, darwin/amd64 (local, vet only) | `GOOS=linux go vet ./...`, `GOOS=darwin go vet ./...` | exit 0: the Unix and macOS test files compile; they have not been run |
 | not run | linux, macOS | CI on the next push | not verified: file-mode tests (`TestExistingDatabaseWithOpenModeIsRefused`, `TestFifoArtifactIsRefused`, `TestNewDatabaseIsMode0600`, `TestCheckFileModes`), the macOS ACL check in `private_darwin.go` (`syscall.Syscall6(SYS_GETATTRLIST)`, written without a Mac) and the symlink and hard-link subtests |
 | 2026-10-28 | windows/amd64 (local) | quickstart step 2, `-fuzz` on `FuzzValidateMessage` 60 s, `FuzzNormalizePhone` 30 s, `FuzzWALScan` 60 s | PASS: 860,742 / 522,880 / 3,361 executions, no failure, no new crasher files |
@@ -77,8 +78,9 @@ Not verified (T056). It needs a second OS identity on Windows and on Linux, and 
   (see "Owner reviews"), so those tasks can start.
 - Work that reached P6 while it was parked: commit `9c626d1` implemented `gate.enterDeep`, its constants and tests
   (`TestGateDeepSlots`, `TestGateDeepWaitersDoNotBlockAdmission`) and wrote `admission_test.go` (T048). The resolution
-  makes the deep slots obsolete; T011 removes that code, and the code review must confirm it is gone and that
-  `admission_test.go` matches the revised T048.
+  makes the deep slots obsolete. T011 removed that code on 2026-10-30 (`enterDeep`, the `deep` semaphore,
+  `enterWithin`, `deepSlots`, `deepPageEnd` and the two tests); the code review must confirm it is gone and that
+  `admission_test.go` matches the revised T048, which is still open.
 - T050, T051 and T052 are done for the write side and the lifecycle only; the search, sort, offset, context and corruption-on-query
   cases wait for the queries.
 - T060: `MergeLID` is done and tested; its `BenchmarkQueries` sub-benchmark waits for T046.

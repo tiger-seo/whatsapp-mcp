@@ -36,8 +36,6 @@ const (
 	readConns     = 4
 	maxActive     = 16
 	maxWaiting    = 64
-	deepSlots     = 2
-	deepPageEnd   = 10_000
 	maxHeapBytes  = 256 * mib
 	diskReserve   = 256 * mib
 	diskResume    = 512 * mib
