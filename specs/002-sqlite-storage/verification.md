@@ -73,8 +73,8 @@ Not verified (T056). It needs a second OS identity on Windows and on Linux, and 
 
 - Parked findings P1-P6 were resolved in the design on 2026-10-30 (`e2356fe`, see `tasks.md` § Parked findings). They
   blocked T039-T046 (queries, query plans, scale), T047 (limit boundaries and memory), the `enterDeep` part of T011 and
-  T048, and, through T042, T057-T058 (single-message lookups); those tasks start once the design review of the
-  resolution clears it (see "Owner reviews").
+  T048, and, through T042, T057-T058 (single-message lookups); the design review of `49ff123` cleared the resolution
+  (see "Owner reviews"), so those tasks can start.
 - Work that reached P6 while it was parked: commit `9c626d1` implemented `gate.enterDeep`, its constants and tests
   (`TestGateDeepSlots`, `TestGateDeepWaitersDoNotBlockAdmission`) and wrote `admission_test.go` (T048). The resolution
   makes the deep slots obsolete; T011 removes that code, and the code review must confirm it is gone and that
@@ -101,3 +101,4 @@ Not verified (T056). It needs a second OS identity on Windows and on Linux, and 
 | design | 2026-10-28 | fe48fce | BLOCK | |
 | design | 2026-10-28 | 8d38457 | BLOCK | Parked at 0a307f3: P1 chat-and-sender query shape, P2 scale-test 3x rule, P3 page counter, P4 memory slope split, P5 empty own LID, P6 waiter-cap order |
 | design | 2026-10-30 | e2356fe | CONCERNS | |
+| design | 2026-10-30 | 49ff123 | PASS | |
