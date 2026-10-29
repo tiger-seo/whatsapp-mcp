@@ -734,7 +734,9 @@ expected rows.
   - `ContactChats` is one query over `chats`: both direct chats that exist (`jid IN (phoneJID, lidJID)`) plus every
     `g.us` chat with `EXISTS (SELECT 1 FROM messages WHERE chat_jid = chats.jid AND sender_phone = ?)` or the same
     with `sender_jid = ?` (a probe whose value is empty is left out of the SQL, not bound as `''`), ordered by
-    `last_message_time IS NULL, last_message_time DESC, jid` so that it walks `chats_last_activity`. Each probe is
+    `last_message_time IS NULL, last_message_time DESC, jid` so that it walks `chats_last_activity`. Like the
+    message listings, it selects the page's `jid`s first, so that walk is covering, and then reads those chats'
+    rows. Each probe is
     one search on `messages_chat_sender_phone` or `messages_chat_sender_jid` (research R15). Never `DISTINCT
     chat_jid` over the contact's messages with an `OR`, which collects the row IDs of the contact's whole history;
   - the sort orders are exact:
@@ -769,9 +771,9 @@ expected rows.
   - search is `(instr(text_fold, ?) > 0 OR instr(caption_fold, ?) > 0)`;
   - order is `time DESC, chat_jid DESC, id DESC`. The page's keys are selected first
     (`SELECT time, chat_jid, id ... ORDER BY ... LIMIT ? OFFSET ?`), and the full rows are read for those keys
-    only. No listing sorts: each walks its index in this order, and a sender listing merges its two branches. The
-    rows skipped by the offset are read from covering indexes only, and the rows of up to 512 KiB only for the
-    page (research R15, R16);
+    only. No listing sorts: each walks its index in this order, and a sender listing merges its two branches.
+    Without search text the rows skipped by the offset are read from covering indexes only, and the rows of up to
+    512 KiB only for the page; with search text each skipped row's folded columns are read (research R15, R16);
   - context: per hit, two queries on `messages_chat_time` with the hit's position as a row value, so the index
     seeks straight to it: before is `chat_jid = ? AND (time, id) < (?, ?) ORDER BY time DESC, id DESC LIMIT ?`,
     then reversed; after is `chat_jid = ? AND (time, id) > (?, ?) ORDER BY time, id LIMIT ?`. Never the
@@ -835,7 +837,7 @@ expected rows.
   knows by construction. The rules:
   - **Constant-cost cases:**
     - every lookup, `DirectChat`, `LastInteraction`, `MessageContext` and a search hit's context;
-    - every listing at offset 0, including the big contact's sender listing;
+    - every listing at offset 0, including the unfiltered listing and the big contact's sender listing;
     - the big group with a sender who has 2 messages there;
     - `GetMessageByID`.
 
@@ -850,8 +852,8 @@ expected rows.
     Pages per row at full size ≤ 1.5 × pages per row at a tenth + 0.01. A plan that walks more than it must (the
     whole group for a chat-and-sender listing, the contact's history for contact chats, contacts × mappings) grows
     about 10 times per row.
-  - **Text search and the unfiltered listing,** linear over messages by design, only get a backstop of 5 s at full
-    size.
+  - **Linear over messages by design,** with only a backstop of 5 s at full size: a text search, the unfiltered
+    listing at a deep offset, and the big contact's deep sender listing with search text.
 
   The test records each case's pages, rows and median time of 5 runs in its output for `verification.md`. Times are
   not compared, because Windows timers give medians of 0 s for the fast cases.
@@ -890,10 +892,10 @@ has no side effect. The recorded cross-identity and restore evidence passes.
 
   Per-contact memory, in a child process with no parallel tests (as T008), with identifiers of realistic length
   (chat JIDs of 120 B, message IDs of 150 B). Run it twice: once with the contact's messages split evenly between the
-  phone and the mapped LID, and once with all of them under the phone (the state after a merge). A query's growth
-  is SQLite's high-water mark after it minus `sqlite3_memory_used` at the reset (`sqlite3_memory_highwater(1)`),
-  less the growth of the page cache on the connections it used (`DBStatusCacheUsed` before and after), so it
-  measures the query and not the cache.
+  phone and the mapped LID, and once with all of them under the phone (the state after a merge). Before each
+  measurement, the same listings run once on every reader connection they will use, so each page cache is already
+  at its 2,000 KiB ceiling and reuses its slots. A query's growth is then SQLite's high-water mark after it minus
+  `sqlite3_memory_used` at the reset (`sqlite3_memory_highwater(1)`), which measures the query and not the cache.
   1. Seed the contact with 50,000 messages. Run a sender listing at offset 0 and at offset 49,800, and record
      each growth.
   2. Add 150,000 more (200,000). Repeat both, and also run offset 99,800. Each growth is at most 256 KiB, and for

@@ -366,9 +366,11 @@ unreachable one is recorded as an exception in `verification.md` (Principle V, X
     in the `@lid` chat while older history is in the phone chat, so `ContactChats` and `LastInteraction` use
     both. `DirectChat` returns one chat: the phone chat, else the `@lid` chat.
   - **Ordering:** the listing selects only the keys `(time, chat_jid, id)` under `ORDER BY ... LIMIT ...
-    OFFSET ...`, then reads the full rows for the page. The key branches are answered from the covering indexes
-    alone, so the rows skipped by the offset are never read from the table, and only the page's rows of up to
-    512 KiB are.
+    OFFSET ...`, then reads the full rows for the page. Without search text the key branches are answered from the
+    covering indexes alone, so the rows skipped by the offset are never read from the table, and only the page's
+    rows of up to 512 KiB are. Search text is matched against the folded columns of each row, so with it every
+    skipped row of the contact is read: such a listing is linear by design, like any text search, and bounded by
+    the 10 s deadline.
 
   `ContactChats`, `DirectChat`, `LastInteraction` and `MessageFilter.Sender` all go through it.
 - **Merge:** `MergeLID` first runs `UPDATE messages SET sender_jid = :phoneJID, sender_phone = :phone WHERE
