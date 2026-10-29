@@ -9,9 +9,9 @@
 | whatsmeow | `v0.0.0-20261027104441-1eec1136a50b`, device schema version 16 |
 | Implementation run | 2026-10-28, branch `002-sqlite-storage` |
 
-The implementation run covers every task that the parked findings P1-P6 do not block (see "Limitations / not
-verified"). Queries (T039-T046, T057-T058), the scale and memory tests (T046, T047) and the cross-identity check
-(T056) are not done.
+The implementation run of 2026-10-28 covered every task that the parked findings P1-P6 did not block (see
+"Limitations / not verified"). Queries (T039-T046, T057-T058), the scale and memory tests (T046, T047) and the
+cross-identity check (T056) are not done.
 
 ## Gate results (committed view, device upgrade transactions)
 
@@ -71,10 +71,14 @@ Not verified (T056). It needs a second OS identity on Windows and on Linux, and 
 
 ## Limitations / not verified
 
-- Parked findings P1-P6 still block T039-T046 (queries, query plans, scale), T047 (limit boundaries and memory), the
-  `enterDeep` slot in T011 and its real-store test in T048, and, through T042, T057-T058 (single-message lookups). The
-  deep-slot code and the waiter-cap order (try-acquire before the cap) exist and are covered by `admit_test.go`, but the
-  owner review the parking requires has not happened.
+- Parked findings P1-P6 were resolved in the design on 2026-10-30 (`e2356fe`, see `tasks.md` § Parked findings). They
+  blocked T039-T046 (queries, query plans, scale), T047 (limit boundaries and memory), the `enterDeep` part of T011 and
+  T048, and, through T042, T057-T058 (single-message lookups); those tasks start once the design review of the
+  resolution clears it (see "Owner reviews").
+- Work that reached P6 while it was parked: commit `9c626d1` implemented `gate.enterDeep`, its constants and tests
+  (`TestGateDeepSlots`, `TestGateDeepWaitersDoNotBlockAdmission`) and wrote `admission_test.go` (T048). The resolution
+  makes the deep slots obsolete; T011 removes that code, and the code review must confirm it is gone and that
+  `admission_test.go` matches the revised T048.
 - T050, T051 and T052 are done for the write side and the lifecycle only; the search, sort, offset, context and corruption-on-query
   cases wait for the queries.
 - T060: `MergeLID` is done and tested; its `BenchmarkQueries` sub-benchmark waits for T046.
@@ -96,3 +100,4 @@ Not verified (T056). It needs a second OS identity on Windows and on Linux, and 
 | design | 2026-10-28 | fdd03f0 | BLOCK | |
 | design | 2026-10-28 | fe48fce | BLOCK | |
 | design | 2026-10-28 | 8d38457 | BLOCK | Parked at 0a307f3: P1 chat-and-sender query shape, P2 scale-test 3x rule, P3 page counter, P4 memory slope split, P5 empty own LID, P6 waiter-cap order |
+| design | 2026-10-30 | e2356fe | CONCERNS | |
