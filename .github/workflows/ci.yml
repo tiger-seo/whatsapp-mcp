@@ -7,6 +7,12 @@ on:
   schedule:
     - cron: "23 2 * * *"
   workflow_dispatch:
+    inputs:
+      what:
+        description: "heavy = the heavy store tests; timing = per-test times on Windows and Linux"
+        type: choice
+        options: [heavy, timing]
+        default: heavy
 
 permissions:
   contents: read
@@ -118,7 +124,7 @@ jobs:
   # a limit holds and are not needed on every push, so they run on Linux only, at night, and only if main has a
   # commit from the last 25 hours. Start the job by hand to run them on any branch.
   heavy:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.what == 'heavy')
     name: heavy store tests
     runs-on: ubuntu-latest
     steps:
@@ -143,3 +149,39 @@ jobs:
         env:
           WA_HEAVY_TESTS: "1"
         run: go test -timeout 30m -count=1 -run 'TestHeavyContactListing|TestPerContactMemory' -v ./internal/store
+
+  # Temporary: where the time goes in the full test run on each system. Start by hand with what = timing.
+  timing:
+    if: github.event_name == 'workflow_dispatch' && inputs.what == 'timing'
+    name: timing (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: go test -json
+        shell: bash
+        run: go test -json -timeout 30m -count=1 ./... > test.json || true
+      - name: slowest tests
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, collections
+          tests, pk = {}, {}
+          for line in open("test.json", encoding="utf-8"):
+              try: e = json.loads(line)
+              except ValueError: continue
+              if e.get("Action") in ("pass", "fail", "skip") and "Elapsed" in e:
+                  if e.get("Test"): tests[e["Package"].split("/")[-1] + " " + e["Test"]] = e["Elapsed"]
+                  else: pk[e["Package"].split("/")[-1]] = (e["Action"], e["Elapsed"])
+          print("packages:", pk)
+          top = sorted((t for t in tests.items() if "/" not in t[0].split(" ", 1)[1]), key=lambda t: -t[1])[:25]
+          print("slowest top-level tests (seconds):")
+          for name, sec in top: print(f"  {sec:8.1f}  {name}")
+          print("sum of top-level tests:", round(sum(v for k, v in tests.items() if "/" not in k.split(" ", 1)[1]), 1))
+          PY
