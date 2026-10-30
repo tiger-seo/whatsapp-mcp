@@ -174,4 +174,4 @@ identity cannot create or rename entries in the data directory is shown on Windo
 | design | 2026-10-30 | e2356fe | CONCERNS | |
 | design | 2026-10-30 | 49ff123 | PASS | |
 | design | 2026-10-30 | af5e2e3 | CONCERNS | |
-| design | 2026-10-30 | 239a3d4 | CONCERNS | |
+| design | 2026-10-30 | 239a3d4 | CONCERNS | Accepted 2026-10-30: the four low findings (T068 after T069 and T070, a stated margin in T070, "Access is denied" only in T067 on Windows, the partial notes moved to the end of T047, T054, T056 and T063) are fixed in the first commit of the implement run |
