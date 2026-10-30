@@ -164,7 +164,9 @@ type contactSeed struct {
 	jid, full, first, push, business string
 }
 
-// seedContacts writes contacts into the device store. PutContactName takes the full name before the first name.
+// seedContacts writes contacts into the device store. The SQL store's PutContactName takes the first name before
+// the full name, as whatsmeow's own app-state sync calls it, although the ContactStore interface names its
+// parameters the other way round.
 func seedContacts(t testing.TB, dev *wastore.Device, contacts ...contactSeed) {
 	t.Helper()
 	ctx := context.Background()
@@ -174,7 +176,7 @@ func seedContacts(t testing.TB, dev *wastore.Device, contacts ...contactSeed) {
 			t.Fatal(err)
 		}
 		if c.full != "" || c.first != "" {
-			if err := dev.Contacts.PutContactName(ctx, jid, c.full, c.first); err != nil {
+			if err := dev.Contacts.PutContactName(ctx, jid, c.first, c.full); err != nil {
 				t.Fatal(err)
 			}
 		}

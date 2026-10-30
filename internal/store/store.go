@@ -63,6 +63,8 @@ type testHooks struct {
 	afterChatInsert  func() error                           // StoreMessages, after the chat insert
 	free             func(dir string) (uint64, error)       // free-space measurement
 	queryHold        func(ctx context.Context, name string) // a query holds its reader here
+	wrapReader       func(q querier) querier                // a read operation runs its queries through the wrapper
+	onRead           func(conn *sql.Conn) (done func())     // a read operation starts on conn; done runs when it ends
 }
 
 // Open checks, creates if missing, preflights, upgrades and opens <dataDir>/whatsapp.db. The caller holds the

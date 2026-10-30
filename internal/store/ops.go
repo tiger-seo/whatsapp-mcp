@@ -93,6 +93,9 @@ func (s *Store) read(ctx context.Context, name string, fn func(ctx context.Conte
 		return s.report(op, err)
 	}
 	defer conn.Close()
+	if s.hooks.onRead != nil {
+		defer s.hooks.onRead(conn)()
+	}
 	if s.hooks.queryHold != nil {
 		s.hooks.queryHold(opCtx, name)
 	}
