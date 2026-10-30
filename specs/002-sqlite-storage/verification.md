@@ -178,9 +178,11 @@ no warning or error. A first attempt in which the store had already exited gave 
   step that fails if the two differ.
 - `govulncheck` v1.9.0 (the version CI pins), 2026-10-30, `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...`, exit 0: "Your
   code is affected by 0 vulnerabilities". One finding in a required module that the code does not call: GO-2026-5932,
-  `golang.org/x/crypto/openpgp` (in `golang.org/x/crypto@v0.58.0`, no fix available). Exception: owner s.shupylo,
-  compensating control: nothing imports `openpgp` (the scan finds no call), expiry 2026-12-31 or the next
-  `golang.org/x/crypto` bump, whichever comes first.
+  `golang.org/x/crypto/openpgp` (in `golang.org/x/crypto@v0.58.0`, no fix available). Exception: owner s.shupylo
+  (decided 2026-10-30), compensating control: nothing imports `openpgp` and CI runs `govulncheck` on every push, so a
+  call to it or a new reachable finding fails the build. Expiry: the next change to the `golang.org/x/crypto`
+  version in `go.mod`, when the finding is checked again (a fixed or removed package ends it); there is no calendar
+  date.
 
 ## Limitations / not verified
 
