@@ -105,5 +105,5 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      # The store's tests include concurrency and crash tests; the default 10 min is too tight for the slowest runner.
-      - run: go test -timeout 15m ./...
+      # The store's tests include concurrency and crash tests; the default 10 min is too tight for the slowest runner (Windows needs more than 15 min for the limit and memory tests).
+      - run: go test -timeout 30m ./...

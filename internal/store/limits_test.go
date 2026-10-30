@@ -484,6 +484,9 @@ func TestPerContactMemoryChild(t *testing.T) {
 	inChild(t, "TestPerContactMemoryChild")
 	split := os.Getenv(splitEnv)
 	ctx := context.Background()
+	// Filling every reader's cache scans the whole table, which a slow runner cannot do within the 10 s a normal
+	// operation gets. The child process is the only one that sees the longer limit.
+	operationLimit = 5 * time.Minute
 	st, _ := openTest(t, newDataDir(t))
 	dev := seedDevice(t, st)
 	const phone, lid = "491551234567", "900000001234"
