@@ -18,13 +18,13 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-// memoryUsed returns the bytes SQLite has allocated now.
 // heavyEnv switches on the tests that take minutes on a slow disk: the 500 MiB listing and the 400,000-message
 // point of the memory test. They check a limit once and are not run on pull requests; the nightly job sets it.
 const heavyEnv = "WA_HEAVY_TESTS"
 
 func heavyTests() bool { return os.Getenv(heavyEnv) == "1" }
 
+// memoryUsed returns the bytes SQLite has allocated now.
 func memoryUsed() int64 {
 	tls := libc.NewTLS()
 	defer tls.Close()

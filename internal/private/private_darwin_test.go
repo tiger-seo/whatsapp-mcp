@@ -54,6 +54,22 @@ func TestACLCheckOnAnOpenFile(t *testing.T) {
 	if err := checkACL(f); err == nil {
 		t.Error("checkACL accepted an open file with an ACL entry")
 	}
+
+	// The answer is the open file's, not the path's: a clean file renamed over the path leaves the handle on the
+	// file that has the entry.
+	clean := filepath.Join(filepath.Dir(path), "clean")
+	if err := os.WriteFile(clean, []byte("y"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(clean, path); err != nil {
+		t.Fatal(err)
+	}
+	if has, err := hasACL(path); err != nil || has {
+		t.Fatalf("the path now names a clean file: hasACL = %v, %v", has, err)
+	}
+	if err := checkACL(f); err == nil {
+		t.Error("checkACL followed the path, which now names a clean file, and not the open file")
+	}
 }
 
 func TestACLInReplyLayouts(t *testing.T) {
