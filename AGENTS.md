@@ -27,8 +27,9 @@ merged into `main`. The code:
 - `internal/store` (feature 002, in progress on branch `002-sqlite-storage`): the one SQLite file `whatsapp.db`
   with the whatsmeow device schema and the message schema (embedded migrations), the approved limits, the write
   side (`StoreMessages`, `UpdateChats`, `MergeLID`) and the lifecycle (`Open`, `Close`, `Device`). `stdio`,
-  `serve` and `pair` open it after the lock. The chat, contact and message queries (tasks T039-T046, T057-T058)
-  wait for parked findings P1-P6 in `specs/002-sqlite-storage/tasks.md`. `OPERATIONS.md` is the operator guide.
+  `serve` and `pair` open it after the lock. The chat, contact and message queries
+  (`queries.go`, `contacts.go`) are implemented and tested, with the limit, abuse and memory tests. The open work is
+  the Phase 11 convergence tasks in `specs/002-sqlite-storage/tasks.md`. `OPERATIONS.md` is the operator guide.
 - `internal/private`: also `CheckFile` and file identities, for the database and its sidecars.
 - `.github/workflows/ci.yml`: one `check` job (gofmt, go vet, five cross-builds) and `go test` on Linux, plus
   Windows and macOS for pull requests and `main`.
