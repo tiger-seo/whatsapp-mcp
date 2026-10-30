@@ -19,6 +19,12 @@ import (
 )
 
 // memoryUsed returns the bytes SQLite has allocated now.
+// heavyEnv switches on the tests that take minutes on a slow disk: the 500 MiB listing and the 400,000-message
+// point of the memory test. They check a limit once and are not run on pull requests; the nightly job sets it.
+const heavyEnv = "WA_HEAVY_TESTS"
+
+func heavyTests() bool { return os.Getenv(heavyEnv) == "1" }
+
 func memoryUsed() int64 {
 	tls := libc.NewTLS()
 	defer tls.Close()
@@ -349,8 +355,8 @@ func TestLimitsOfTheListings(t *testing.T) {
 // offset 1,800. The skipped rows come from covering indexes and only the page's rows are read, so the call
 // succeeds within the limits.
 func TestHeavyContactListing(t *testing.T) {
-	if testing.Short() {
-		t.Skip("seeds 500 MiB")
+	if !heavyTests() {
+		t.Skip("seeds 500 MiB; set " + heavyEnv + "=1 to run it")
 	}
 	ctx := context.Background()
 	st, _ := openTest(t, newDataDir(t))
@@ -627,7 +633,11 @@ func TestPerContactMemoryChild(t *testing.T) {
 		return growth(func() error { _, err := st.GetMessage(ctx, groupJID(0), fmt.Sprintf("%0150d", 0)); return err })
 	}
 	previous := map[int]int64{}
-	for _, size := range []int{50_000, 200_000, 400_000} {
+	sizes := []int{50_000, 200_000}
+	if heavyTests() {
+		sizes = append(sizes, 400_000) // shows that the cost stops growing; costs about 100 s more per child
+	}
+	for _, size := range sizes {
 		seedTo(size)
 		warm(0, 49_800, 99_800)
 		before := floor()

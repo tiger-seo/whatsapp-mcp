@@ -3,6 +3,10 @@ name: ci
 on:
   push:
   pull_request:
+  # The heavy store tests run here, once a night and only if main changed. They can also be started by hand.
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -21,6 +25,7 @@ jobs:
   # costs its own start-up, checkout and Go setup. Each target is its own step, so a failure names it, and every
   # step runs even after an earlier one failed.
   check:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -94,6 +99,7 @@ jobs:
   # every push and pull request is tested on all three. A feature's platform gates have to pass on a branch,
   # before its pull request exists.
   test:
+    if: github.event_name != 'schedule'
     name: test (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -107,3 +113,33 @@ jobs:
           go-version-file: go.mod
       # The store's tests include concurrency and crash tests; the default 10 min is too tight for the slowest runner (Windows needs more than 15 min for the limit and memory tests).
       - run: go test -timeout 30m ./...
+
+  # The tests that take minutes on a slow disk: a 500 MiB listing and a 400,000-message memory check. They show that
+  # a limit holds and are not needed on every push, so they run on Linux only, at night, and only if main has a
+  # commit from the last 25 hours. Start the job by hand to run them on any branch.
+  heavy:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: heavy store tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: changed since yesterday?
+        id: changed
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = schedule ] && [ -z "$(git log --since='25 hours ago' --format=%H -1)" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "main has no commit from the last 25 hours; nothing to run"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.changed.outputs.run == 'true'
+        with:
+          go-version-file: go.mod
+      - name: heavy store tests
+        if: steps.changed.outputs.run == 'true'
+        env:
+          WA_HEAVY_TESTS: "1"
+        run: go test -timeout 30m -count=1 -run 'TestHeavyContactListing|TestPerContactMemory' -v ./internal/store

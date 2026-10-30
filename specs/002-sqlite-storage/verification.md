@@ -72,6 +72,12 @@ Every query is below 200 ms. Slowest and fastest of the three runs, in ns/op:
 
 ### Per-contact memory (T047), 2026-10-30
 
+The 400,000-message point and `TestHeavyContactListing` (2,000 messages of 256 KiB) run only with `WA_HEAVY_TESTS=1`:
+locally by hand, and in CI in the `heavy` job on Linux, nightly and only if main changed (owner decision 2026-10-30,
+because they cost minutes on the Windows runner). Pull requests and pushes run the 50,000 and 200,000 points (about
+57 s locally, against 97 s with 400,000). The rows below that mention 400,000 messages were run once, with the variable
+set, on 2026-10-30.
+
 SQLite's high-water mark above the memory in use, with every reader's page cache filled first. A sender listing, 200
 rows, identifiers of realistic length (chat JIDs 120 B, message IDs 150 B). Both splits gave the same numbers.
 
