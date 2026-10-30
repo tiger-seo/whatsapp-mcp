@@ -118,6 +118,34 @@ func TestCallerDeadlineEndsALockWait(t *testing.T) {
 	eventually(t, "the slot to be freed", func() bool { return st.gate.activeCount() == 0 })
 }
 
+// TestCancellationFreesTheSlot cancels a caller that is waiting for the write lock. The slot must come back
+// within 1 s.
+func TestCancellationFreesTheSlot(t *testing.T) {
+	st, _ := openTest(t, newDataDir(t))
+	release := holdWriteLock(t, st)
+	defer release()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- st.StoreMessage(ctx, msg(alice, "cancelled", alice, at(0))) }()
+	eventually(t, "the call to hold a slot", func() bool { return st.gate.activeCount() == 1 })
+	start := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("a cancelled write succeeded")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the cancelled call did not return within 1 s")
+	}
+	for st.gate.activeCount() != 0 {
+		if time.Since(start) > time.Second {
+			t.Fatalf("the slot was not freed within 1 s (%d active)", st.gate.activeCount())
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestCommitCancelledIsIndeterminateAndRetrySafe(t *testing.T) {
 	st, _ := openTest(t, newDataDir(t))
 	ctx, cancel := context.WithCancel(context.Background())

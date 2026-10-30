@@ -17,6 +17,7 @@ import (
 const (
 	secretBody    = "SECRET-BODY-7f3a"
 	secretCaption = "SECRET-CAPTION-91cc"
+	secretSearch  = "SECRET-SEARCH-b81d"
 	secretName    = "SECRET-NAME-\x1b[31m\x07-5d2e"
 )
 
@@ -98,6 +99,37 @@ func TestNoSecretsInLogsOrErrors(t *testing.T) {
 	c.noteErr(st.StoreMessage(ctx, msg(lidAlice, "S2", lidAlice, at(2), withText(secretBody))))
 	c.noteErr(st.MergeLID(ctx, lidAlice, alice))
 
+	// Query success paths, with a search string that must never be logged.
+	c.add("search", []byte(secretSearch))
+	_, err = st.ListMessages(ctx, MessageFilter{Query: secretSearch}, Context{1, 1}, page(10, 0))
+	c.noteErr(err)
+	_, err = st.ListMessages(ctx, MessageFilter{Sender: alice, ChatJID: alice}, Context{1, 1}, page(10, 0))
+	c.noteErr(err)
+	_, err = st.ListChats(ctx, secretSearch, ByName, true, page(10, 0))
+	c.noteErr(err)
+	_, err = st.ListChats(ctx, "", ByLastActivity, true, page(10, 0))
+	c.noteErr(err)
+	_, err = st.SearchContacts(ctx, secretSearch, page(10, 0))
+	c.noteErr(err)
+	_, err = st.SearchContacts(ctx, "SECRET-NAME", page(10, 0))
+	c.noteErr(err)
+	_, err = st.GetChat(ctx, alice)
+	c.noteErr(err)
+	_, err = st.GetMessage(ctx, alice, "S1")
+	c.noteErr(err)
+	_, err = st.GetMessageByID(ctx, "S1")
+	c.noteErr(err)
+	_, _, err = st.MediaInfo(ctx, alice, "S1")
+	c.noteErr(err)
+	_, err = st.MessageContext(ctx, alice, "S1", Context{1, 1})
+	c.noteErr(err)
+	_, err = st.LastInteraction(ctx, alice)
+	c.noteErr(err)
+	_, err = st.ListMessages(ctx, MessageFilter{Query: secretSearch + strings.Repeat("x", maxSearchBytes)}, Context{}, page(10, 0))
+	c.noteErr(err)
+	_, err = st.GetMessage(ctx, alice, "missing-id")
+	c.noteErr(err)
+
 	// Failure paths: validation (carrying the secrets as input), busy, disk-low, disk-full.
 	bad := msg(alice, "S3\x1b[31m"+secretBody, alice, at(3), withText(secretBody))
 	c.noteErr(st.StoreMessage(ctx, bad))
@@ -168,6 +200,20 @@ func TestNoSecretsInLogsOrErrors(t *testing.T) {
 	c.noteErr(err)
 	c.noteRecords(clr)
 
+	// A failed migration, on a copy whose schema is one step behind.
+	behind := newDataDir(t)
+	ml := testMigrations(t, goodThird)
+	bst, _ := openTestWith(t, behind, openOptions{migrations: ml[:2]})
+	c.noteErr(bst.StoreMessage(ctx, msg(alice, "M1", alice, at(0), withText(secretBody))))
+	bst.Close(ctx)
+	ml2, mr := newTestLogger()
+	_, err = open(ctx, behind, ml2, openOptions{migrations: testMigrations(t, failingThird)})
+	if err == nil {
+		t.Fatal("a failing migration opened")
+	}
+	c.noteErr(err)
+	c.noteRecords(mr)
+
 	c.check()
 
 	for _, r := range recs.events("whatsmeow.log") {
@@ -177,9 +223,31 @@ func TestNoSecretsInLogsOrErrors(t *testing.T) {
 			}
 		}
 	}
-	for _, r := range recs.all() {
-		if !strings.HasPrefix(r.attrs["event"], "store.") {
+	// The records of the main run and of the refusal, corruption and migration runs alike.
+	var every []capturedRecord
+	every = append(every, recs.all()...)
+	every = append(every, mr.all()...)
+	every = append(every, clr.all()...)
+	stored := 0
+	for _, r := range every {
+		if r.attrs["event"] == "whatsmeow.log" {
+			if r.time.IsZero() || r.attrs["module"] == "" {
+				t.Errorf("a whatsmeow.log record lacks its time or module: %+v", r)
+			}
 			continue
+		}
+		if !strings.HasPrefix(r.attrs["event"], "store.") {
+			t.Errorf("a record without a store event: %q %v", r.msg, r.attrs)
+			continue
+		}
+		stored++
+		if r.time.IsZero() {
+			t.Errorf("%s has no time", r.attrs["event"])
+		}
+		for k, v := range r.attrs {
+			if hasControl(v) {
+				t.Errorf("%s: %s holds a control character", r.attrs["event"], k)
+			}
 		}
 		for _, k := range []string{"op_id", "outcome", "code"} {
 			if r.attrs[k] == "" {
