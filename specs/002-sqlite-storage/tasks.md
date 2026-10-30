@@ -901,8 +901,10 @@ has no side effect. The recorded cross-identity and restore evidence passes.
   2. Add 150,000 more (200,000) and then 200,000 more (400,000). Repeat both, and also run offset 99,800. Each
      growth is at most 256 KiB at every size and offset, and from 200,000 to 400,000 it rises by at most 16 KiB:
      nothing grows with the contact's history or with the offset. A fixed cost of about 98 KB per operation
-     appears after the first tens of thousands of writes, in a `GetMessage` too; a checkpoint does not change it,
-     and it is the same at 200,000 and at 400,000, so the rule is absolute and does not subtract it.
+     appears after the first tens of thousands of writes, in a `GetMessage` too; it follows the WAL
+     state and not the contact's history (a checkpoint made no difference locally, where it had already appeared, and
+     brought it in on one CI run), and it is the same at 200,000 and at 400,000, so the rule is absolute and does not
+     subtract it.
   3. Run 2 deep (offset 99,800) and 2 shallow (offset 9,800) listings at once, with a test hook that holds all four
      statements open until each has read its first row, so the peaks overlap. The growth is at most 1 MiB.
   4. Record the measured growths in `verification.md`.

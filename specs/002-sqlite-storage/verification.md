@@ -83,9 +83,11 @@ Updated 2026-10-30 (T069, T070). Two deep and two shallow listings at once, held
 peaks overlap: 391,808 B (even split) and 365,600 B (all under the phone), limit 1 MiB. `LastInteraction`: 93,592 B
 in 1.9-6.0 ms (limits 1 MB and 50 ms). Every listing is below 256 KiB, and from 200,000 to 400,000 messages the growth
 does not rise at all (limit +16 KiB). A fixed cost of about 98 KB per operation appears after the first tens of
-thousands of writes and is the same in a `GetMessage`; `PRAGMA wal_checkpoint(TRUNCATE)` before the measurement does not
-change it, so it does not follow the WAL. Its cause is not found, but it plateaus (identical at 200,000 and 400,000),
-so the test asserts the absolute bound and no longer subtracts it. The hook that holds the listings is the
+thousands of writes and is the same in a `GetMessage`; `PRAGMA wal_checkpoint(TRUNCATE)` before the measurement made no
+difference locally, where the cost was already at its plateau, but in one CI run (windows-latest, 50,000 messages) a
+`GetMessage` went from 21,488 B to 93,584 B right after the checkpoint, so the cost follows the WAL state and not the
+contact's history. Its exact cause is not found, but it plateaus (identical at 200,000 and 400,000), so the test
+asserts the absolute bound and no longer subtracts it. The hook that holds the listings is the
 `firstRowHolder` check in `messageKeys`.
 
 ## Cross-identity evidence (SC-008)

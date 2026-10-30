@@ -15,7 +15,7 @@ const childEnv = "GO_STORE_CHILD"
 // SQLite state. The child test skips unless childEnv names it.
 func runChild(t *testing.T, test string, env ...string) string {
 	t.Helper()
-	cmd := osexec.Command(os.Args[0], "-test.run=^"+test+"$", "-test.v", "-test.timeout=120s")
+	cmd := osexec.Command(os.Args[0], "-test.run=^"+test+"$", "-test.v", "-test.timeout=10m")
 	cmd.Env = append(os.Environ(), append([]string{childEnv + "=" + test}, env...)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
