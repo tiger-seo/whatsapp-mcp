@@ -437,6 +437,33 @@ func TestSearchContactsHeapLimitChild(t *testing.T) {
 	t.Logf("with the limit at %d B: %v", used+need/2, err)
 }
 
+// heldReader is a test wrapper that holds a sender listing after its first row until n listings have reached that
+// point, so their peaks overlap.
+type heldReader struct {
+	querier
+	arrived *atomic.Int32
+	release chan struct{}
+	n       int32
+}
+
+func (h heldReader) afterFirstRow(ctx context.Context) {
+	if h.arrived.Add(1) == h.n {
+		close(h.release)
+	}
+	select {
+	case <-h.release:
+	case <-ctx.Done():
+	}
+}
+
+func holdAfterFirstRow(st *Store, n int) {
+	var arrived atomic.Int32
+	release := make(chan struct{})
+	st.hooks.wrapReader = func(q querier) querier {
+		return heldReader{querier: q, arrived: &arrived, release: release, n: int32(n)}
+	}
+}
+
 const splitEnv = "GO_STORE_SPLIT"
 
 func TestPerContactMemory(t *testing.T) {
@@ -568,44 +595,50 @@ func TestPerContactMemoryChild(t *testing.T) {
 		return memoryHighwater(false) - used
 	}
 
-	// A write-heavy history leaves a fixed cost in every operation, a GetMessage too (about 98 KB once the
-	// database has taken a few hundred thousand writes, against 21 KB before). A listing's own growth is what it
-	// adds to that floor, and that is the part that must not depend on the contact's history or the offset.
+	// Growth is measured at three sizes. Each must stay at most 256 KiB at every offset, and from the second size
+	// to the third it may rise by at most 16 KiB, which is allocator rounding and slot reuse, not history. The cost
+	// of a GetMessage, which cannot depend on the contact, is logged next to it, before and after a checkpoint,
+	// to show where the fixed part comes from.
 	floor := func() int64 {
 		return growth(func() error { _, err := st.GetMessage(ctx, groupJID(0), fmt.Sprintf("%0150d", 0)); return err })
 	}
-
-	seedTo(50_000)
-	warm(0, 49_800)
-	base := floor()
-	own := map[int]int64{}
-	for _, off := range []int{0, 49_800} {
-		g := growth(listing(off))
-		own[off] = g - base
-		t.Logf("split=%s 50,000 messages, offset %d: growth %d B (a GetMessage: %d B)", split, off, g, base)
-	}
-
-	seedTo(200_000)
-	warm(0, 49_800, 99_800)
-	base = floor()
-	for _, off := range []int{0, 49_800, 99_800} {
-		g := growth(listing(off))
-		t.Logf("split=%s 200,000 messages, offset %d: growth %d B (a GetMessage: %d B)", split, off, g, base)
-		if g > 256*kib {
-			t.Errorf("offset %d: growth %d B, want at most 256 KiB", off, g)
+	previous := map[int]int64{}
+	for _, size := range []int{50_000, 200_000, 400_000} {
+		seedTo(size)
+		warm(0, 49_800, 99_800)
+		before := floor()
+		if _, err := st.writer.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+			t.Fatal(err)
 		}
-		if small, ok := own[off]; ok && g-base > small+64*kib {
-			t.Errorf("offset %d: the listing adds %d B at 200,000 against %d B at 50,000, want at most +64 KiB", off, g-base, small)
+		warm(0, 49_800, 99_800)
+		t.Logf("split=%s %d messages: a GetMessage grows %d B, and %d B after a checkpoint", split, size, before, floor())
+		current := map[int]int64{}
+		for _, off := range []int{0, 49_800, 99_800} {
+			if off >= size {
+				continue
+			}
+			g := growth(listing(off))
+			current[off] = g
+			t.Logf("split=%s %d messages, offset %d: growth %d B", split, size, off, g)
+			if g > 256*kib {
+				t.Errorf("%d messages, offset %d: growth %d B, want at most 256 KiB", size, off, g)
+			}
+			if size == 400_000 {
+				if p, ok := previous[off]; ok && g > p+16*kib {
+					t.Errorf("offset %d: growth rose from %d B to %d B between 200,000 and 400,000 messages, want at most +16 KiB", off, p, g)
+				}
+			}
 		}
+		previous = current
 	}
 
 	// Two deep and two shallow listings at once.
 	warm(99_800, 9_800)
 	used := memoryUsed()
 	memoryHighwater(true)
-	barrier(4)
+	holdAfterFirstRow(st, 4)
 	runAll(listing(99_800), listing(99_800), listing(9_800), listing(9_800))
-	st.hooks.queryHold = nil
+	st.hooks.wrapReader = nil
 	together := memoryHighwater(false) - used
 	t.Logf("split=%s two deep and two shallow listings at once: growth %d B", split, together)
 	if together > mib {

@@ -540,10 +540,19 @@ func messageKeys(ctx context.Context, q querier, f MessageFilter, ids *contactID
 		if err := rows.Scan(&k.time, &k.chatJID, &k.id); err != nil {
 			return nil, err
 		}
+		if len(keys) == 0 {
+			if h, ok := q.(firstRowHolder); ok {
+				h.afterFirstRow(ctx)
+			}
+		}
 		keys = append(keys, k)
 	}
 	return keys, rows.Err()
 }
+
+// firstRowHolder is implemented only by a test's wrapper (testHooks.wrapReader): afterFirstRow is called once the
+// first row of a sender listing has been read, so a test can keep several listings open at their peak.
+type firstRowHolder interface{ afterFirstRow(ctx context.Context) }
 
 // contextOf reads the messages around a message of the same chat, both sides oldest first. The message's position
 // is bound as a row value, so the index seeks straight to it.
