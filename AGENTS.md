@@ -24,6 +24,13 @@ merged into `main`. The code:
   registry in `internal/config/setting.go`; a new setting is one descriptor plus one `Config` field.
 - `internal/lock`: the single-instance lock on the data directory.
 - `internal/buildinfo`: version, commit and build date.
+- `internal/store` (feature 002, in progress on branch `002-sqlite-storage`): the one SQLite file `whatsapp.db`
+  with the whatsmeow device schema and the message schema (embedded migrations), the approved limits, the write
+  side (`StoreMessages`, `UpdateChats`, `MergeLID`) and the lifecycle (`Open`, `Close`, `Device`). `stdio`,
+  `serve` and `pair` open it after the lock. The chat, contact and message queries
+  (`queries.go`, `contacts.go`) are implemented and tested, with the limit, abuse and memory tests. The open work is
+  the Phase 11 convergence tasks in `specs/002-sqlite-storage/tasks.md`. `OPERATIONS.md` is the operator guide.
+- `internal/private`: also `CheckFile` and file identities, for the database and its sidecars.
 - `.github/workflows/ci.yml`: one `check` job (gofmt, go vet, five cross-builds) and `go test` on Linux, plus
   Windows and macOS for pull requests and `main`.
 
@@ -32,6 +39,41 @@ S1 (§8.5) is done: `sqlstore` works on `modernc.org/sqlite` with the dialect na
 imported from an earlier deployment (D16), so the I3 spike is closed and there is no `import` command.
 
 The work is split into Spec Kit features in `docs/roadmap.md`, to be implemented one at a time in its order.
+
+## Owner reviews
+
+Every feature passes two reviews by the `owner-judge` agent (`.claude/agents/owner-judge.md`); the
+constitution's Development Workflow sets the rule.
+
+1. After `/speckit-tasks`, commit the feature directory and run owner-judge in **design** mode.
+2. After implementation, commit the work and its `verification.md` evidence and run it in **code** mode.
+
+Add the row the agent ends with to the "Owner reviews" table in `specs/NNN-*/verification.md` and commit it:
+
+```
+## Owner reviews
+
+| Stage | Date | Commit | Verdict | Owner decision |
+| --- | --- | --- | --- | --- |
+| design | 2026-10-28 | 8c54a83 | PASS | |
+```
+
+The last row of a stage counts. `BLOCK` means fix and review again; `CONCERNS` needs the user's decision in
+the last column.
+
+After 3 `BLOCK` rounds of one stage the user may park the last round's findings (constitution, Development
+Workflow). Only the user decides this. List each parked finding in the feature's `tasks.md` under
+`## Parked findings`, with the review, its commit, the finding and the task or phase it blocks, and mark those
+tasks blocked. Commit that change on its own, then put `Parked at <that commit>: <finding titles>` in the
+review's last column. A parked finding is resolved and reviewed before the task it blocks starts, and before the
+code review at the latest. High-severity findings about data loss, security or a real WhatsApp account cannot be
+parked. `.claude/hooks/owner-review-gate.sh` (wired in `.claude/settings.json`) refuses
+`/speckit-implement` without a passing design review and `gh pr create` / `gh pr merge` without a passing
+code review, and treats a review as stale once anything it covered changed after the recorded commit (after
+the parking commit, for a parked `BLOCK`).
+Changing `verification.md` never makes a review stale, and neither does ticking tasks `[X]` in `tasks.md` when
+nothing else in it changed. On a branch without a feature directory the hook
+asks for confirmation instead; put the verdict in the pull request. The hook needs `bash` and `jq`.
 
 ## Conventions
 

@@ -5,3 +5,5 @@ A WhatsApp MCP server in a single Go binary. It connects to WhatsApp through
 PostgreSQL and no C compiler.
 
 **Status:** in development. The binary skeleton exists; only `whatsapp-mcp version` works so far.
+
+Running it, including where it keeps your data and how to back it up: [OPERATIONS.md](OPERATIONS.md).

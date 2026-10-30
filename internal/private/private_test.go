@@ -182,3 +182,66 @@ func TestErrorText(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestCheckFileIdentity(t *testing.T) {
+	dir := privateTemp(t)
+	a := filepath.Join(dir, "a")
+	if err := os.WriteFile(a, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	id1, err := CheckFile(a)
+	if err != nil {
+		t.Fatalf("CheckFile: %v", err)
+	}
+	id2, err := CheckFile(a)
+	if err != nil || id1 != id2 {
+		t.Errorf("second CheckFile = %v, %v; want %v", id2, err, id1)
+	}
+	f, err := os.Open(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if id3, err := FileIDOf(f); err != nil || id3 != id1 {
+		t.Errorf("FileIDOf = %v, %v; want %v", id3, err, id1)
+	}
+	// A different file renamed over it has another identity.
+	b := filepath.Join(dir, "b")
+	if err := os.WriteFile(b, []byte("y"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := os.Rename(b, a); err != nil {
+		t.Fatal(err)
+	}
+	if id4, err := CheckFile(a); err != nil || id4 == id1 {
+		t.Errorf("after rename CheckFile = %v, %v; want an identity different from %v", id4, err, id1)
+	}
+}
+
+func TestCheckFileRefusals(t *testing.T) {
+	dir := privateTemp(t)
+	if _, err := CheckFile(filepath.Join(dir, "missing")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("missing: %v, want ErrNotExist", err)
+	}
+	if _, err := CheckFile(dir); err != errIrreg {
+		t.Errorf("directory: %v, want %v", err, errIrreg)
+	}
+	a := filepath.Join(dir, "a")
+	if err := os.WriteFile(a, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(a, filepath.Join(dir, "hard")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CheckFile(a); err != errHardLnk {
+		t.Errorf("hard link: %v, want %v", err, errHardLnk)
+	}
+	link := filepath.Join(dir, "sym")
+	if err := os.Symlink(a, link); err != nil {
+		t.Skipf("cannot create a symbolic link here: %v", err)
+	}
+	if _, err := CheckFile(link); err != errLinkF {
+		t.Errorf("symlink: %v, want %v", err, errLinkF)
+	}
+}

@@ -274,3 +274,14 @@ func isReparse(fi fs.FileInfo) bool {
 	d, ok := fi.Sys().(*syscall.Win32FileAttributeData)
 	return ok && d.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
+
+// checkFileStrict has nothing to add on Windows: the access-list rule is already checkFile's.
+func checkFileStrict(*os.File) error { return nil }
+
+func fileID(f *os.File) (FileID, error) {
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(windows.Handle(f.Fd()), &info); err != nil {
+		return FileID{}, err
+	}
+	return FileID{A: uint64(info.VolumeSerialNumber), B: uint64(info.FileIndexHigh)<<32 | uint64(info.FileIndexLow)}, nil
+}

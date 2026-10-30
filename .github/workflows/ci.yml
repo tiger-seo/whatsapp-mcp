@@ -3,12 +3,16 @@ name: ci
 on:
   push:
   pull_request:
+  # The heavy store tests run here, once a night and only if main changed. They can also be started by hand.
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 env:
@@ -21,6 +25,7 @@ jobs:
   # costs its own start-up, checkout and Go setup. Each target is its own step, so a failure names it, and every
   # step runs even after an earlier one failed.
   check:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -43,6 +48,14 @@ jobs:
       - name: go mod verify
         if: ${{ !cancelled() }}
         run: go mod verify
+      # modernc.org/sqlite is generated against one libc version; a bump that moves libc alone breaks it at run time.
+      - name: modernc libc matches the driver
+        if: ${{ !cancelled() }}
+        run: |
+          want=$(go mod graph | awk '$1 ~ /^modernc[.]org[/]sqlite@/ && $2 ~ /^modernc[.]org[/]libc@/ {print $2; exit}')
+          have="modernc.org/libc@$(go list -m -f '{{.Version}}' modernc.org/libc)"
+          echo "driver wants $want, build uses $have"
+          [ -n "$want" ] && [ "$want" = "$have" ]
       # Fails only on a vulnerability that the code can reach. Ones in unused parts of a dependency or of the
       # standard library are listed in the log but do not fail the run.
       - name: govulncheck
@@ -82,18 +95,61 @@ jobs:
         env: { GOOS: darwin, GOARCH: arm64 }
         run: go vet ./... && go build -o /dev/null ./cmd/whatsapp-mcp
 
-  # The lock and signal handling differ per OS, so pull requests and main are tested on all three. Other branch
-  # pushes run Linux only, for quick feedback while work is in progress.
+  # The lock, signal handling, file access checks and the store's read-only database view differ per OS, so
+  # every push and pull request is tested on all three. A feature's platform gates have to pass on a branch,
+  # before its pull request exists.
   test:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     name: test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON((github.event_name == 'pull_request' || github.ref == 'refs/heads/main') && '["ubuntu-latest", "windows-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - run: go test ./...
+      # The Windows runner keeps its temporary directory on the C: drive, which is about 12 times slower than the D:
+      # drive that holds the workspace: TestQueryPlans took 493 s there and 39 s with the directory on D:. The store's
+      # tests write databases of hundreds of thousands of messages, so they use D:.
+      - name: temporary directory on the workspace drive
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p 'D:\wa-tmp'
+          echo 'TEMP=D:\wa-tmp' >> "$GITHUB_ENV"
+          echo 'TMP=D:\wa-tmp' >> "$GITHUB_ENV"
+      # The store's tests include concurrency and crash tests; the default 10 min is too tight for the slowest runner (Windows needs more than 15 min for the limit and memory tests).
+      - run: go test -timeout 30m ./...
+
+  # The tests that take minutes on a slow disk: a 500 MiB listing and a 400,000-message memory check. They show that
+  # a limit holds and are not needed on every push, so they run on Linux only, at night, and only if main has a
+  # commit from the last 25 hours. Start the job by hand to run them on any branch.
+  heavy:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: heavy store tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: changed since yesterday?
+        id: changed
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = schedule ] && [ -z "$(git log --since='25 hours ago' --format=%H -1)" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "main has no commit from the last 25 hours; nothing to run"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.changed.outputs.run == 'true'
+        with:
+          go-version-file: go.mod
+      - name: heavy store tests
+        if: steps.changed.outputs.run == 'true'
+        env:
+          WA_HEAVY_TESTS: "1"
+        run: go test -timeout 30m -count=1 -run 'TestHeavyContactListing|TestPerContactMemory' -v ./internal/store

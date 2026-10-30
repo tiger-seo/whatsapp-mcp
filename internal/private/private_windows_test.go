@@ -135,3 +135,18 @@ func TestOpenFileAccess(t *testing.T) {
 	}
 	f.Close()
 }
+
+func TestCheckFileAccess(t *testing.T) {
+	dir := privateTemp(t)
+	f := filepath.Join(dir, "db")
+	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CheckFile(f); err != nil {
+		t.Fatalf("inherited access: %v, want nil", err)
+	}
+	grantUsers(t, f, "R")
+	if _, err := CheckFile(f); err == nil {
+		t.Error("an extra access entry for Users passed, want a refusal")
+	}
+}
