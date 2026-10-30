@@ -39,15 +39,20 @@ func snapshotDir(t testing.TB, dir string) map[string]fileState {
 		if err != nil {
 			return err
 		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		if !fi.Mode().IsRegular() {
+			// Reading a FIFO would block for ever; its type and time are all that can change.
+			snap[rel] = fileState{size: fi.Size(), modTime: fi.ModTime(), sha256: fi.Mode().Type().String()}
+			return nil
+		}
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
 		sum := sha256.Sum256(b)
-		rel, err := filepath.Rel(dir, path)
-		if err != nil {
-			return err
-		}
 		snap[rel] = fileState{size: fi.Size(), modTime: fi.ModTime(), sha256: hex.EncodeToString(sum[:])}
 		return nil
 	})
