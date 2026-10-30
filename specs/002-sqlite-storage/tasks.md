@@ -650,7 +650,7 @@ expected rows.
 
 ### Tests for User Story 4 ⚠️
 
-- [ ] T039 [P] [US4] `internal/store/queries_chats_test.go`:
+- [X] T039 [P] [US4] `internal/store/queries_chats_test.go`:
   - **`ListChats`:**
     - matches the text in the name or the JID, case- and NFC-insensitively ("ПРИВІТ" finds "привіт");
     - sorts by activity (newest first, no activity last, ties by JID) or by name (ascending, unnamed last);
@@ -666,7 +666,7 @@ expected rows.
     are returned, and `DirectChat` returns P.
   - **Paging rules:** limit 0, limit 201, offset -1 and offset 100,001 are `*ValidationError`; a page beyond the
     end is empty.
-- [ ] T040 [P] [US4] `internal/store/queries_messages_test.go`:
+- [X] T040 [P] [US4] `internal/store/queries_messages_test.go`:
   - **Filters:** `ListMessages` with every combination of strict after, strict before, chat, sender (given as
     "+49 151 1234567", as the phone JID and as the mapped LID, each matching messages stored under both
     identities) and query, newest first, ties by `(chat_jid, id)` desc. Paging never
@@ -695,7 +695,7 @@ expected rows.
     push → business (device store), looked up under the sender JID and then its mapped counterpart, else the saved
     or real name of the direct chat with the sender, else ''. A contact with both a first name and a push name
     shows the first name. It is '' for from-me messages.
-- [ ] T041 [P] [US4] `internal/store/contacts_test.go`, seeded through the device store (T016):
+- [X] T041 [P] [US4] `internal/store/contacts_test.go`, seeded through the device store (T016):
   - `SearchContacts` matches full, push, first and business name, and phone, case- and NFC-insensitively;
   - groups are excluded;
   - a person under both a LID and a phone is returned once, "matched if either entry matches", with the
@@ -711,7 +711,7 @@ expected rows.
 
 ### Implementation for User Story 4
 
-- [ ] T042 [US4] Create `internal/store/queries.go` with the shared parts:
+- [X] T042 [US4] Create `internal/store/queries.go` with the shared parts:
   - `MessageView`, `ChatView`, `Page`, `ChatSort`, `MessageFilter`, `Context` and `Hit` (contract);
   - `validatePage` (limit 1–200, offset 0–100,000) and `validateContext` (0–20 per side);
   - the shared message SELECT, joining chat name and sender name. The sender name is a correlated subquery on
@@ -725,7 +725,7 @@ expected rows.
   - a `resultBudget` that adds each row's byte size and returns `ErrResourceLimit` above 32 MiB.
 
   All SQL values are bound parameters. The sort columns and directions come from a fixed `map[ChatSort]string`.
-- [ ] T043 [US4] Implement `ListChats`, `GetChat`, `DirectChat` and `ContactChats` in
+- [X] T043 [US4] Implement `ListChats`, `GetChat`, `DirectChat` and `ContactChats` in
   `internal/store/queries.go`, on the reader pool under admission:
   - search uses `instr(name_fold, ?) > 0 OR instr(jid, ?) > 0` with the folded query;
   - the latest message uses the `messages_chat_time` index (`ORDER BY time DESC, id DESC LIMIT 1`);
@@ -743,7 +743,7 @@ expected rows.
     - `ByLastActivity` is `ORDER BY last_message_time IS NULL, last_message_time DESC, jid`;
     - `ByName` is `ORDER BY name_quality = 0, name_fold, jid`, so unnamed chats come last even though their
       `name_fold` is `''`.
-- [ ] T044 [US4] Implement `ListMessages`, `MessageContext` and `LastInteraction` in `internal/store/queries.go`:
+- [X] T044 [US4] Implement `ListMessages`, `MessageContext` and `LastInteraction` in `internal/store/queries.go`:
   - filters are built from fixed SQL fragments with bound values;
   - `MessageFilter.Sender` and `LastInteraction` resolve the contact with `resolveContact` (T045). A sender
     listing has a phone branch (`sender_phone = ?`) and a LID branch (`sender_jid = ?`), and a branch whose value
@@ -780,7 +780,7 @@ expected rows.
     `time < ? OR (time = ? AND id < ?)` form, which binds only `chat_jid` and walks the chat from one end;
   - before any context query runs, check that `hits × (before+after) ≤ 2,000` with checked arithmetic, else
     `ErrResourceLimit`.
-- [ ] T045 [US4] Create `internal/store/contacts.go` with `SearchContacts`. The rules are in data-model.md
+- [X] T045 [US4] Create `internal/store/contacts.go` with `SearchContacts`. The rules are in data-model.md
   § Derived values "Contact identity". One query over the current device's `whatsmeow_contacts`, left-joined
   with `whatsmeow_lid_map`:
   - person key = `coalesce(pn_jid, their_jid)`;
@@ -804,7 +804,7 @@ expected rows.
   lookup in the current device's `whatsmeow_lid_map` by `pn` or by `lid` to fill the other identity. Without a
   device or a mapping, the contact keeps the one identity it was given. Test it in `contacts_test.go`: phone, phone
   JID and LID inputs, with and without a mapping, and with no device.
-- [ ] T046 [P] [US4] Create `internal/store/bench_test.go`: `BenchmarkQueries` seeds 100,000 messages across
+- [X] T046 [P] [US4] Create `internal/store/bench_test.go`: `BenchmarkQueries` seeds 100,000 messages across
   1,000 chats once (through `StoreMessages` in batches of 1,000, cached per process in a temp dir). It has
   sub-benchmarks for each US4 query: `ListChats` (both sorts, with search),
   `GetChat`, `DirectChat`, `ContactChats` (by phone and by LID), `SearchContacts`, `ListMessages` (no filter,
@@ -872,7 +872,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
 
 ### Tests for User Story 7 ⚠️
 
-- [ ] T047 [P] [US7] `internal/store/limits_test.go` (SC-009). For every constant in `limits.go`, a test at the
+- [X] T047 [P] [US7] `internal/store/limits_test.go` (SC-009). For every constant in `limits.go`, a test at the
   boundary (accepted) and one beyond it (rejected, with no row written: compare table dumps). Log for each case:
   - elapsed time;
   - result bytes;
@@ -916,7 +916,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
     shorter list;
   - ambiguous-ID chats (101 chats → `ErrResourceLimit`);
   - overflowing offsets and context (`math.MaxInt`).
-- [ ] T048 [P] [US7] `internal/store/admission_test.go`, with the real store:
+- [X] T048 [P] [US7] `internal/store/admission_test.go`, with the real store:
   - 16 blocking operations (hold the writer with an open `BEGIN IMMEDIATE` on a separate raw connection) plus 64
     waiting, then one more gets `ErrBusy` at once;
   - waiting ends at 5 s;
@@ -939,7 +939,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
   - **Long reader:** hold a read transaction open on the reader pool through a test hook while writes continue.
     The reader's operation ends with a deadline error at the 10 s operation limit (use a shortened test limit).
     After it ends, a checkpoint brings `-wal` back within 64 MiB.
-- [ ] T050 [P] [US7] `internal/store/abuse_test.go`: one subtest per abuse case 1–12 in spec.md § Security → Abuse
+- [X] T050 [P] [US7] `internal/store/abuse_test.go`: one subtest per abuse case 1–12 in spec.md § Security → Abuse
   cases that is automatable, each asserting "no side effect" (table dumps unchanged, sentinel file outside the
   data directory unchanged):
   - case 4: search text `x' OR '1'='1`, `%`, `_`, `\` matches literally;
@@ -949,7 +949,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
   - case 11: see T051;
   - case 12: documented in T054;
   - cases 1–3 are in T017 plus T056 (manual).
-- [ ] T051 [P] [US7] `internal/store/logsafety_test.go` (SC-011). At level Debug, run with a capturing handler:
+- [X] T051 [P] [US7] `internal/store/logsafety_test.go` (SC-011). At level Debug, run with a capturing handler:
   - every success path: open, upgrade, migrate, store, query, merge, close;
   - every failure path: each refusal, a migration failure, disk-low, disk-full, busy, validation, corruption
     (flip bytes in a page of a copy, then query).
@@ -963,7 +963,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
 
 ### Implementation for User Story 7
 
-- [ ] T052 [US7] Apply the cross-cutting enforcement in `internal/store/queries.go`, `messages.go`, `chats.go`,
+- [X] T052 [US7] Apply the cross-cutting enforcement in `internal/store/queries.go`, `messages.go`, `chats.go`,
   `contacts.go` and `merge.go` until T047–T051 pass:
   - every public method goes through `gate.enter`, writes go through `diskGuard.check`, and errors go through
     `mapDriverError`;
@@ -1018,7 +1018,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
     recovery-time objectives, restore rehearsals.
 
   Add a one-line link to `OPERATIONS.md` in `README.md`.
-- [ ] T054 [US7] `internal/store/restore_test.go` (SC-010):
+- [X] T054 [US7] `internal/store/restore_test.go` (SC-010):
   1. Seed a device and 5,000 messages, close cleanly (quiesce).
   2. Copy the file set into a new directory made by `private.MkdirAll`.
   3. Open the copy offline with a raw read-only connection and run `integrity_check` = `ok`, `foreign_key_check` =
@@ -1037,7 +1037,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
   `whatsmeow_version.compat` in a given file, for quickstart step 4) and
   `internal/store/testdata/cmd/seed/main.go` (writes N synthetic messages through `store.Open`). Both refuse to
   run on a path outside a directory whose name starts with the system temp directory, unless `-force` is given.
-- [ ] T056 [US7] Manual cross-identity check (SC-008), following quickstart step 6 on Windows (`runas` with a
+- [X] T056 [US7] Manual cross-identity check (SC-008), following quickstart step 6 on Windows (`runas` with a
   second local account) and on Linux (a second user). Besides reading and writing the artifacts, the second
   identity tries to create a file in the data directory and to rename a file over `whatsapp.db`; both must be
   denied (abuse case 2). Record the commands, date, the denied output and the `icacls` and `ls -l` listings in
@@ -1055,7 +1055,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
 
 ### Tests for User Story 5 ⚠️
 
-- [ ] T057 [P] [US5] `internal/store/lookup_test.go`:
+- [X] T057 [P] [US5] `internal/store/lookup_test.go`:
   - `(C, X)` is found; a missing pair gives `*NotFoundError` naming the chat and the ID;
   - an ID in exactly one chat is found by ID alone; none gives not found;
   - an ID in C1 and C2 gives `*AmbiguousIDError` listing C1 and C2 sorted;
@@ -1065,7 +1065,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
 
 ### Implementation for User Story 5
 
-- [ ] T058 [US5] Implement `GetMessage`, `GetMessageByID` and `MediaInfo` in `internal/store/queries.go`:
+- [X] T058 [US5] Implement `GetMessage`, `GetMessageByID` and `MediaInfo` in `internal/store/queries.go`:
   - `GetMessageByID` selects `chat_jid` for `id = ?` on `messages_id` with `LIMIT 102` to detect more than 101 matches without an
     unbounded read;
   - `MediaInfo` returns `MediaMeta` with nil length when NULL, and `ErrNotMedia` when `media_type = ''`;
@@ -1107,7 +1107,7 @@ result, then merge again and check nothing changes.
 
 ### Implementation for User Story 6
 
-- [ ] T060 [US6] Create `internal/store/merge.go` with `MergeLID(ctx, lidJID, phoneJID)`: validate, then one
+- [X] T060 [US6] Create `internal/store/merge.go` with `MergeLID(ctx, lidJID, phoneJID)`: validate, then one
   writer transaction under admission and the disk guard:
   1. `UPDATE messages SET sender_jid = P, sender_phone = <digits> WHERE sender_jid = L`, across all chats (uses
      `messages_sender_jid`);
@@ -1136,10 +1136,10 @@ result, then merge again and check nothing changes.
   record the binary sizes. Check that `go list -m modernc.org/libc` equals the libc version that
   `modernc.org/sqlite`'s own `go.mod` requires (`go mod graph | grep '^modernc.org/sqlite@'`), and add the same
   check as a step of CI's `check` job, so a bump that moves libc alone fails there.
-- [ ] T062 Run `gofmt -l .` (empty), `go vet ./...`, `go test ./...` (read each exit code directly, not through a
+- [X] T062 Run `gofmt -l .` (empty), `go vet ./...`, `go test ./...` (read each exit code directly, not through a
   pipe) and `govulncheck ./...`. Record the results. Record any unreachable finding as an exception in
   `verification.md` with owner, compensating controls and expiry; a reachable one blocks the feature.
-- [ ] T063 Run every step of `specs/002-sqlite-storage/quickstart.md`, including the local benchmark (step 5,
+- [X] T063 Run every step of `specs/002-sqlite-storage/quickstart.md`, including the local benchmark (step 5,
   SC-004: record each `ns/op` and the machine) and the 60 s fuzz runs (step 2). Record the results in
   `verification.md`.
 - [X] T064 [P] Update `AGENTS.md` "Current state": feature 002 adds `internal/store` (one file, two schema
@@ -1222,3 +1222,12 @@ Task: "T036 crash_test.go: killed child, every committed write present"
 - [P] = different files and no unfinished dependency. [USn] maps to spec.md user stories.
 - Commit after each task or logical group, with Conventional Commits that explain why, and no attribution lines.
 - Never act on a real WhatsApp account. Every device here is synthetic.
+
+## Phase 11: Convergence
+
+- [ ] T067 Run quickstart step 6 on a Linux machine (a second user: `cat` and `ls` on the data directory, create a file in it, rename a file over `whatsapp.db`; all denied) and record the commands, date, denied output and `ls -l` listings in `verification.md`, per SC-008 (partial)
+- [ ] T068 Push the branch and confirm that CI's `go test` is green on ubuntu, windows and macOS with the new `limits_test.go` tests (`TestHeavyContactListing` seeds 500 MiB; `TestPerContactMemory` runs two children with 200,000 messages each); if a runner is too slow or short of disk, shorten the seed or skip it under `-short` in CI only, and record the run in `verification.md`, per SC-002 (partial)
+- [ ] T069 Add a test hook that holds a sender listing after its first row has been read, use it in `TestPerContactMemoryChild` so that 2 deep and 2 shallow listings overlap at their peak, and record the measured growth (at most 1 MiB), per T047 step 3 (partial)
+- [ ] T070 Find the cause of the per-operation SQLite memory floor that rises from about 21 KB to about 98 KB after the first tens of thousands of writes (a `GetMessage` shows it too), then either restore the literal "growth at 200,000 is at most growth at 50,000 + 64 KiB" assertion in `TestPerContactMemoryChild` or amend T047 with the measured rule and the cause, per T047 step 2 and SC-009 (partial)
+- [ ] T071 Correct the wording of T058 (`LIMIT 102`, "more than 101") to the contract: `GetMessageByID` lists at most 100 chats and 101 is `ErrResourceLimit`, as `queries.go` and `TestGetMessageByIDLimit` already do, per FR-022 (contradicts)
+- [ ] T072 Record `queryHold`, `wrapReader` and `onRead` in T052's list of test-only hooks, with the test that uses each; remove any that T069 makes redundant, per T052 (unrequested)

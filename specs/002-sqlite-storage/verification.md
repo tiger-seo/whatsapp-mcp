@@ -9,9 +9,9 @@
 | whatsmeow | `v0.0.0-20261027104441-1eec1136a50b`, device schema version 16 |
 | Implementation run | 2026-10-28, branch `002-sqlite-storage` |
 
-The implementation run of 2026-10-28 covered every task that the parked findings P1-P6 did not block (see
-"Limitations / not verified"). Queries (T039-T046, T057-T058), the scale and memory tests (T046, T047) and the
-cross-identity check (T056) are not done.
+The implementation run of 2026-10-28 covered every task that the parked findings P1-P6 did not block. The runs of
+2026-10-30 added the queries, the scale, memory and limit tests, the hardening tests and the final checks. Open: the
+Linux and macOS runs of the manual checks (T054, T056, T063), which are marked "not verified".
 
 ## Gate results (committed view, device upgrade transactions)
 
@@ -35,6 +35,11 @@ CI can produce the macOS evidence the gate needs.
 | 2026-10-28 | windows/amd64 (local) | `CGO_ENABLED=0 go test -count=1 -timeout 15m ./...` | PASS, exit 0: `cmd/whatsapp-mcp`, `internal/buildinfo`, `config`, `lock`, `private`, `store` (about 34 s for `store`); 341 top-level tests passed, 0 failed, 18 skipped (child-process helpers and symlink tests that Windows cannot create without a privilege) |
 | 2026-10-28 | windows/amd64 (local) | `gofmt -l .` and `go vet ./...` | no output, exit 0 |
 | 2026-10-30 | windows/amd64 (local), T011 after removing the deep slots | `CGO_ENABLED=0 go test -count=1 -timeout 15m ./...`; `gofmt -l .`; `go vet ./...` | PASS, exit 0, every package; `TestGate*` 7/7 (`SeventeenthWaits`, `WaiterCap`, `WaitEnds`, `CancellationFreesSlot`, `OperationLimit`, `Close`, `NoGoroutineLeak`); gofmt and vet clean; `grep -rn deep` over `internal/` and `cmd/` finds no store code |
+| 2026-10-30 | windows/amd64 (local), T039-T041 before T042-T045 | `CGO_ENABLED=0 go test -count=1 -v -run '<the 21 US4 tests>' ./internal/store/`, then `go test -count=1 ./... -skip '<the same>'` | red as intended: 21 of 21 new tests fail, every failure is the skeleton's "not implemented" (53 lines), no fixture error; every other test passes, exit 0. `seedContacts` fixed to pass the first name before the full name, as whatsmeow's SQL store expects |
+| 2026-10-30 | windows/amd64 (local), T042-T045 and the plan and scale parts of T046 | `CGO_ENABLED=0 go test -count=1 -timeout 15m ./...`; `gofmt -l .`; `go vet ./...` | PASS, exit 0, every package (`store` 113.8 s); the 21 US4 tests are green; `TestQueryPlans` 21/21 on 106,000 messages (every lookup a SEARCH on a named index, sender listings `MERGE (UNION ALL)` over the two sender indexes, context queries `(time,id)<(?,?)`, no temporary b-tree outside `SearchContacts`); `TestQueryScale` PASS: 14 constant-cost cases (largest growth 1,055 vs 1,004 pages), 4 linear cases (per-row cost at full ≤ at a tenth, `SearchContacts` 0.3463 vs 0.3493), 4 backstop cases (slowest median 0.47 s at 300,000 messages); gofmt and vet clean; no CRLF file. `BenchmarkQueries` is written and compiles; it has not been run |
+| 2026-10-30 | windows/amd64 (local), T046 complete, T057-T058 | `CGO_ENABLED=0 go test -count=1 -timeout 15m ./...`; `gofmt -l .`; `go vet ./...` | PASS, exit 0, every package (`store` 118.8 s); `TestGetMessage`, `TestGetMessageByID`, `TestGetMessageByIDLimit` (100 chats listed, 101 is `ErrResourceLimit`), `TestMediaInfo` green; `TestQueryPlans` now 24/24 and `TestQueryScale` 6 more constant-cost lookups (`GetMessage` 23 vs 25 pages, `GetMessageByID` 28 vs 31) |
+| 2026-10-30 | windows/amd64 (local), T047-T052, T060, T062 | `gofmt -l .` (0 files); `go build ./...`, `go vet ./...`, `go test -count=1 ./...` (179 s), each read as its own exit code | all exit 0. New: `TestLimitsAtTheBoundary` 26 constants, each accepted at the limit and rejected beyond it with the tables unchanged; `TestLimitsOfTheListings` (aggregate context 100 x 10/10 accepted and 200 x 10/10 rejected, 100 chats with one ID listed and 101 `ErrResourceLimit`, 100 rows of 256 KiB accepted and 130 `ErrResourceLimit`); `TestHeavyContactListing` (2,000 messages of 256 KiB, offset 1,800, by phone and by LID); `TestSearchContactsHeapLimit` (needs 639,424 B for 5,000 contacts; with the limit at 521,096 B the call fails with `ErrResourceLimit` "memory"); `TestPerContactMemory` both splits (below); `TestCancellationFreesTheSlot`; abuse cases 4, 5 (sort, overflow), 8; `TestNoSecretsInLogsOrErrors` now also covers every query, a search marker, a failed migration, event fields and control characters |
+| 2026-10-30 | windows/amd64 (local), T063 steps 2 and 5 | the three `-fuzz` runs of step 2 (60 s, 30 s, 60 s) and the benchmark of step 5 | fuzz: all exit 0; benchmark: see "Benchmark (SC-004)" |
 | 2026-10-28 | linux/amd64, darwin/amd64 (local, vet only) | `GOOS=linux go vet ./...`, `GOOS=darwin go vet ./...` | exit 0: the Unix and macOS test files compile; they have not been run |
 | not run | linux, macOS | CI on the next push | not verified: file-mode tests (`TestExistingDatabaseWithOpenModeIsRefused`, `TestFifoArtifactIsRefused`, `TestNewDatabaseIsMode0600`, `TestCheckFileModes`), the macOS ACL check in `private_darwin.go` (`syscall.Syscall6(SYS_GETATTRLIST)`, written without a Mac) and the symlink and hard-link subtests |
 | 2026-10-28 | windows/amd64 (local) | quickstart step 2, `-fuzz` on `FuzzValidateMessage` 60 s, `FuzzNormalizePhone` 30 s, `FuzzWALScan` 60 s | PASS: 860,742 / 522,880 / 3,361 executions, no failure, no new crasher files |
@@ -45,12 +50,72 @@ Windows-only evidence from the same run: the path forms `\\server\share\x`, `\\?
 
 ## Benchmark (SC-004)
 
-Not run. `BenchmarkQueries`, `TestQueryPlans` and `TestQueryScale` (T046) wait for the owner decision on parked
-finding P1.
+2026-10-30, Intel Core i7-8550U 1.80 GHz (8 threads), Windows 10 Pro 10.0.19045, windows/amd64, Go 1.27.3:
+`go test ./internal/store -run '^$' -bench BenchmarkQueries -benchtime 20x -count 3`, exit 0, on 100,000+ messages.
+Every query is below 200 ms. Slowest and fastest of the three runs, in ns/op:
+
+| Query | ns/op |
+| --- | --- |
+| ListChats activity / name / search | 8.5-8.9 ms / 8.5-8.9 ms / 8.8-10.3 ms |
+| GetChat / DirectChat | 0.29-0.38 ms / 0.29-0.32 ms |
+| ContactChats phone / LID | 0.94-0.97 ms / 0.90-0.93 ms |
+| SearchContacts name / number | 5.8-6.3 ms / 5.9-6.0 ms |
+| ListMessages all / chat / sender | 8.1-9.0 ms / 7.9-8.2 ms / 8.4-12.4 ms |
+| ListMessages search / with 5+5 context | 65-68 ms / 103-106 ms |
+| MessageContext | 1.0-1.6 ms |
+| GetMessage / GetMessageByID / MediaInfo | 0.20-0.22 ms / 0.25-0.26 ms / 0.24-0.25 ms |
+| LastInteraction phone / LID | 0.41-0.42 ms / 0.42-0.47 ms |
+| MergeLID of a 20,000-message chat | 1.74 s, 1.76 s, 2.77 s (below the 5 s bound, so no split is needed) |
+
+### Per-contact memory (T047), 2026-10-30
+
+SQLite's high-water mark above the memory in use, with every reader's page cache filled first. A sender listing, 200
+rows, identifiers of realistic length (chat JIDs 120 B, message IDs 150 B). Both splits gave the same numbers.
+
+| Messages of the contact | Offset | Growth (B) | A `GetMessage` at the same moment (B) |
+| --- | --- | --- | --- |
+| 50,000 | 0 / 49,800 | 21,488 / 46,064 | 21,488 |
+| 200,000 | 0 / 49,800 / 99,800 | 97,952 each | 97,952 |
+
+Two deep and two shallow listings at once: 316,848 B (limit 1 MiB). `LastInteraction`: 93,592 B in 0.6-1.8 ms (limits
+1 MB and 50 ms). Every listing is below 256 KiB. Two points differ from the task text:
+
+- The step from 21 KB to 98 KB is not caused by the contact's history: a `GetMessage`, which cannot depend on it,
+  grows by exactly the same amount at the same moment, and it appears after the first tens of thousands of writes. The
+  test therefore compares what a listing adds to that `GetMessage` floor (at most +64 KiB between 50,000 and
+  200,000). The cause of the floor itself is not found.
+- The four concurrent listings start together at the reader, but the hook cannot hold them until each has read its
+  first row, because `database/sql` gives no way to stop between the query and its first row. The bound follows
+  from the single-listing growth (4 x 256 KiB = 1 MiB).
 
 ## Cross-identity evidence (SC-008)
 
-Not verified (T056). It needs a second OS identity on Windows and on Linux, and has not been run. macOS is also not verified.
+**Windows: passed, 2026-10-30.** Linux and macOS: not verified (no such machine here).
+
+Setup: a throwaway standard local account `wa002test` (created and deleted with `net user`, profile folder removed;
+`net user` is the same as before). The data directory was `D:\wa-002-t056\data`, made by `stdio --data-dir` plus
+`testdata/cmd/seed -n 100`; its parent `D:\wa-002-t056` is readable by the Users group, so a denial comes from the
+data directory's own permissions. `icacls D:\wa-002-t056\data` and `...\whatsapp.db` list only SYSTEM, Administrators
+and the owner (`NOTEBOOKPRO\Tiger`, full control), with no entry for Users or Everyone.
+
+Commands, run as `wa002test` through `Start-Process -Credential` (`whoami` printed `notebookpro\wa002test`). The system
+language is Russian, so the messages are translated here:
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1 | `type whatsapp.db` | Access is denied |
+| 2 | `dir D:\wa-002-t056\data` | nothing listed ("File not found") |
+| 3 | `echo x>> whatsapp.db` | Access is denied |
+| 4 | `echo x> data
+ewfile.txt` (create a file in the data directory) | Access is denied |
+| 5 | `type whatsapp-mcp.lock` | Access is denied |
+| 6 | `move /Y <file owned by wa002test> data\whatsapp.db` (rename over the database) | Access is denied |
+| 7 | `del whatsapp.db` | "Cannot find the file" (the directory cannot be listed, so the file is not visible to it) |
+| 8 | `echo x> whatsapp.db-wal` (create a sidecar) | Access is denied |
+
+Afterwards `sha256sum whatsapp.db` equals the value before (`30d19946...be77`), and the directory holds only
+`whatsapp.db` and `whatsapp-mcp.lock`: nothing was created, replaced or deleted. Abuse case 2's claim that an unrelated
+identity cannot create or rename entries in the data directory is shown on Windows.
 
 ## Backup/restore rehearsal (SC-010)
 
@@ -58,7 +123,8 @@ Not verified (T056). It needs a second OS identity on Windows and on Linux, and 
 | --- | --- | --- | --- |
 | 2026-10-28 | windows/amd64 | `TestRestoredBackupIsValidatedOffline`: 5,000 messages and a device, copied into a new private directory, `integrity_check` = ok, `foreign_key_check` empty, versions 1 / 16, store dump equals the original | PASS |
 | 2026-10-28 | windows/amd64 | `TestRollbackJournalRecoveryProcedure`: empty, zeroed and hot `-journal` each refused with `rollback_journal`; the `OPERATIONS.md` steps on the live file, then a start that succeeds with the data of the state before the killed transaction | PASS |
-| not run | windows, linux | following `OPERATIONS.md` by hand once on each | not verified |
+| 2026-10-30 | windows/amd64 | by hand, quickstart step 7: `stdio --data-dir` on a new directory (exit 0), `testdata/cmd/seed -n 5000`, stop, copy `whatsapp.db` (no `-wal`: clean close) to a backup directory, copy that into a new restore directory, then Python's `sqlite3` module (mode=ro) on the restored file: `integrity_check` = ok, `foreign_key_check` = no rows, `mcp_version` = 1, `whatsmeow_version` = (16, 8), 5,000 messages; `store.Open` on the restored copy succeeds | PASS |
+| not run | linux | following `OPERATIONS.md` by hand | not verified: no Linux machine here; CI runs the automated rehearsals |
 
 ## Dependencies and govulncheck
 
@@ -68,7 +134,11 @@ Not verified (T056). It needs a second OS identity on Windows and on Linux, and 
   darwin/amd64 18,688,128 B, darwin/arm64 18,208,994 B.
 - libc: `go list -m modernc.org/libc` = v1.79.0, the version `go mod graph` shows for `modernc.org/sqlite.61.0`. CI gained a
   step that fails if the two differ.
-- `govulncheck`: not installed on this machine, not run. CI runs it; the result is not recorded yet. No exceptions are recorded.
+- `govulncheck` v1.9.0 (the version CI pins), 2026-10-30, `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...`, exit 0: "Your
+  code is affected by 0 vulnerabilities". One finding in a required module that the code does not call: GO-2026-5932,
+  `golang.org/x/crypto/openpgp` (in `golang.org/x/crypto@v0.58.0`, no fix available). Exception: owner s.shupylo,
+  compensating control: nothing imports `openpgp` (the scan finds no call), expiry 2026-12-31 or the next
+  `golang.org/x/crypto` bump, whichever comes first.
 
 ## Limitations / not verified
 
@@ -81,11 +151,11 @@ Not verified (T056). It needs a second OS identity on Windows and on Linux, and 
   makes the deep slots obsolete. T011 removed that code on 2026-10-30 (`enterDeep`, the `deep` semaphore,
   `enterWithin`, `deepSlots`, `deepPageEnd` and the two tests); the code review must confirm it is gone and that
   `admission_test.go` matches the revised T048, which is still open.
-- T050, T051 and T052 are done for the write side and the lifecycle only; the search, sort, offset, context and corruption-on-query
-  cases wait for the queries.
-- T060: `MergeLID` is done and tested; its `BenchmarkQueries` sub-benchmark waits for T046.
-- T054: the automated rehearsals pass; the manual runs on Windows and Linux are open. T056, the cross-identity check, is open.
-- T061-T063: the quickstart steps, the fuzz runs of 60 s each, `govulncheck` and the benchmark have not been run.
+- T052 found one inconsistency, fixed: `UpdateChats` rejected 1,001 updates as a validation error where `StoreMessages` gives
+  `ErrResourceLimit` for 1,001 messages; both are limits now (`chats.go`, `chats_test.go`).
+- T054: the automated rehearsals and the manual Windows run pass; the manual Linux run is not verified. T056 (cross-identity) passed on Windows;
+  Linux and macOS are not verified.
+- T063: steps 1, 2, 3, 4 and 5 are recorded; steps 6 and 7 are done on Windows only.
 - Windows symlinks could not be created without a privilege, so those subtests skip locally; the junction tests cover
   the reparse-point rule on Windows, and CI covers symlinks on Linux and macOS.
 - A read-only database is refused by a write probe at open (`readonly`), because SQLite opens a read-only file read-only
