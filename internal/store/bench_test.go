@@ -288,7 +288,7 @@ type planCase struct {
 	allowTemp bool
 }
 
-// TestQueryPlans holds the expected plan of every US4 query on the seeded database: a search on a named index for
+// TestQueryPlans holds the expected plan of every chat, contact and message query on the seeded database: a search on a named index for
 // every lookup, a scan only where the data model lists one, and the merge of the two sender indexes for a contact
 // under both identities. A query that stops using its index fails here, in CI, where the benchmark does not run.
 func TestQueryPlans(t *testing.T) {
@@ -432,7 +432,7 @@ func TestQueryPlans(t *testing.T) {
 	}
 }
 
-// BenchmarkQueries times each US4 query on the seeded database. It is run locally and is not a CI gate.
+// BenchmarkQueries times each chat, contact and message query on the seeded database. It is run locally and is not a CI gate.
 func BenchmarkQueries(b *testing.B) {
 	st := openSeeded(b, nil)
 	ctx := context.Background()
