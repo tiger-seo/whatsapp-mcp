@@ -167,7 +167,7 @@ escaped only when they appear in diagnostics.
 
 | Value | Definition |
 | --- | --- |
-| Sender name (FR-024) | For `from_me = 0`: the device-store contact for `sender_jid`, then for its counterpart through `whatsmeow_lid_map` (user part looked up, suffix added) (`full_name`, then `first_name`, `push_name`, `business_name`), else the saved or real name (`name_quality >= 2`) of the chat whose `jid = sender_jid`, else `''`. For `from_me = 1`: `''` (the tools render "Me"). |
+| Sender name (FR-024) | For `from_me = 0`: the device-store contact for `sender_jid`, then for its counterpart through `whatsmeow_lid_map` (user part looked up, suffix added) (`full_name`, then `first_name`, `push_name`, `business_name`), else the saved or real name (`name_quality >= 2`) of the chat whose `jid = sender_jid`, else `''`. The chat is looked up under the sender's own JID only, not under its counterpart: a LID sender whose name sits only on the phone-number direct chat has no name until `MergeLID` moves the two together (owner decision 2026-10-30). For `from_me = 1`: `''` (the tools render "Me"). |
 | Chat name on a message | `chats.name` of `chat_jid` |
 | Latest message of a chat | the first row of `messages_chat_time` for that chat |
 | Contact identity (FR-028) | the device's `whatsmeow_contacts` rows, joined with `whatsmeow_lid_map (lid, pn)`. A LID row with a mapped phone and the phone row are one person, keyed by the phone JID. The name comes from the phone row, else from the LID row, each in the order full, first, push, business. Groups (`g.us`) are excluded. |

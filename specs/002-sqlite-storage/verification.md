@@ -191,6 +191,15 @@ no warning or error. A first attempt in which the store had already exited gave 
   version in `go.mod`, when the finding is checked again (a fixed or removed package ends it); there is no calendar
   date.
 
+## Owner decisions
+
+- 2026-10-30, sender name (the second code review's open question): the direct chat with the sender in the sender-name
+  lookup is the chat whose JID equals the sender's JID, as the code and `data-model.md` read it. A LID sender whose
+  name is only on the phone-number direct chat has an empty sender name until `MergeLID` runs. A lookup through the
+  counterpart's chat may be added later if ingest leaves too many names empty.
+- 2026-10-30, heavy tests: see "Per-contact memory".
+- 2026-10-30, `govulncheck` exception: see "Dependencies and govulncheck".
+
 ## Limitations / not verified
 
 - Parked findings P1-P6 were resolved in the design on 2026-10-30 (`e2356fe`, see `tasks.md` § Parked findings). They
