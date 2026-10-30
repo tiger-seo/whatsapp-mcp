@@ -12,9 +12,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// noACL is the entry count of a security attribute that holds an owner and a group but no ACL.
+const noACL = 0xffffffff
+
 // hasACL reports whether path carries an extended ACL, which grants access that the mode bits do not show.
-// getattrlist returns the extended security attribute only when there is one, so a reply that is just the
-// length word means there is none.
 func hasACL(path string) (bool, error) {
 	p, err := syscall.BytePtrFromString(path)
 	if err != nil {
@@ -27,7 +28,32 @@ func hasACL(path string) (bool, error) {
 	if errno != 0 {
 		return false, errno
 	}
-	return binary.NativeEndian.Uint32(buf[:4]) > 4, nil
+	return aclInReply(buf), nil
+}
+
+// aclInReply reads a getattrlist reply for the extended security attribute: the length of the reply, then a
+// reference (an offset from the reference itself, and a length) to a filesec of a magic number, an owner and a
+// group GUID of 16 bytes each, and an ACL that starts with its entry count. A reply with no reference or an empty
+// one has no ACL, and so has a filesec whose entry count is zero or marks "no ACL". A reply that cannot be read is
+// taken to hold one, so that a layout this code does not know refuses and never allows.
+func aclInReply(reply []byte) bool {
+	const header, filesecACL = 4 + 8, 4 + 16 + 16
+	if len(reply) < 4 || binary.NativeEndian.Uint32(reply[:4]) <= 4 {
+		return false
+	}
+	if len(reply) < header {
+		return true
+	}
+	offset, length := int(int32(binary.NativeEndian.Uint32(reply[4:8]))), int(binary.NativeEndian.Uint32(reply[8:12]))
+	if length == 0 {
+		return false
+	}
+	start := 4 + offset
+	if offset < 8 || length < filesecACL+4 || start < 0 || start+length > len(reply) {
+		return true
+	}
+	count := binary.NativeEndian.Uint32(reply[start+filesecACL : start+filesecACL+4])
+	return count != 0 && count != noACL
 }
 
 func aclError(path string, err error, acl bool) error {
