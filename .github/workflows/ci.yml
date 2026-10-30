@@ -7,12 +7,6 @@ on:
   schedule:
     - cron: "23 2 * * *"
   workflow_dispatch:
-    inputs:
-      what:
-        description: "heavy = the heavy store tests; timing = per-test times on Windows and Linux"
-        type: choice
-        options: [heavy, timing]
-        default: heavy
 
 permissions:
   contents: read
@@ -117,6 +111,16 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      # The Windows runner keeps its temporary directory on the C: drive, which is about 12 times slower than the D:
+      # drive that holds the workspace: TestQueryPlans took 493 s there and 39 s with the directory on D:. The store's
+      # tests write databases of hundreds of thousands of messages, so they use D:.
+      - name: temporary directory on the workspace drive
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p 'D:\wa-tmp'
+          echo 'TEMP=D:\wa-tmp' >> "$GITHUB_ENV"
+          echo 'TMP=D:\wa-tmp' >> "$GITHUB_ENV"
       # The store's tests include concurrency and crash tests; the default 10 min is too tight for the slowest runner (Windows needs more than 15 min for the limit and memory tests).
       - run: go test -timeout 30m ./...
 
@@ -124,7 +128,7 @@ jobs:
   # a limit holds and are not needed on every push, so they run on Linux only, at night, and only if main has a
   # commit from the last 25 hours. Start the job by hand to run them on any branch.
   heavy:
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.what == 'heavy')
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     name: heavy store tests
     runs-on: ubuntu-latest
     steps:
@@ -149,31 +153,3 @@ jobs:
         env:
           WA_HEAVY_TESTS: "1"
         run: go test -timeout 30m -count=1 -run 'TestHeavyContactListing|TestPerContactMemory' -v ./internal/store
-
-  # Temporary: why TestQueryPlans takes 10 minutes on the Windows runner. Start by hand with what = timing. It
-  # runs the test with the runner's default temporary directory and again with one on the D: drive.
-  timing:
-    if: github.event_name == 'workflow_dispatch' && inputs.what == 'timing'
-    name: timing (${{ matrix.name }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: windows default temp, os: windows-latest, tmp: "" }
-          - { name: windows D drive temp, os: windows-latest, tmp: 'D:\wa-tmp' }
-          - { name: ubuntu, os: ubuntu-latest, tmp: "" }
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-      - name: TestQueryPlans
-        shell: bash
-        run: |
-          if [ -n "${{ matrix.tmp }}" ]; then
-            mkdir -p '${{ matrix.tmp }}'
-            export TEMP='${{ matrix.tmp }}' TMP='${{ matrix.tmp }}'
-          fi
-          echo "temp dir: $(go env GOTMPDIR) TEMP=${TEMP:-unset}"
-          go test -count=1 -timeout 30m -run 'TestQueryPlans$' -v ./internal/store 2>&1 | grep -E "^(--- |ok|FAIL)"
