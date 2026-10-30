@@ -106,8 +106,7 @@ language is Russian, so the messages are translated here:
 | 1 | `type whatsapp.db` | Access is denied |
 | 2 | `dir D:\wa-002-t056\data` | nothing listed ("File not found") |
 | 3 | `echo x>> whatsapp.db` | Access is denied |
-| 4 | `echo x> data
-ewfile.txt` (create a file in the data directory) | Access is denied |
+| 4 | `echo x> data\newfile.txt` (create a file in the data directory) | Access is denied |
 | 5 | `type whatsapp-mcp.lock` | Access is denied |
 | 6 | `move /Y <file owned by wa002test> data\whatsapp.db` (rename over the database) | Access is denied |
 | 7 | `del whatsapp.db` | "Cannot find the file" (the directory cannot be listed, so the file is not visible to it) |
@@ -150,7 +149,7 @@ identity cannot create or rename entries in the data directory is shown on Windo
   (`TestGateDeepSlots`, `TestGateDeepWaitersDoNotBlockAdmission`) and wrote `admission_test.go` (T048). The resolution
   makes the deep slots obsolete. T011 removed that code on 2026-10-30 (`enterDeep`, the `deep` semaphore,
   `enterWithin`, `deepSlots`, `deepPageEnd` and the two tests); the code review must confirm it is gone and that
-  `admission_test.go` matches the revised T048, which is still open.
+  `admission_test.go` matches the revised T048, which is done.
 - T052 found one inconsistency, fixed: `UpdateChats` rejected 1,001 updates as a validation error where `StoreMessages` gives
   `ErrResourceLimit` for 1,001 messages; both are limits now (`chats.go`, `chats_test.go`).
 - T054: the automated rehearsals and the manual Windows run pass; the manual Linux run is not verified. T056 (cross-identity) passed on Windows;
@@ -174,3 +173,4 @@ identity cannot create or rename entries in the data directory is shown on Windo
 | design | 2026-10-28 | 8d38457 | BLOCK | Parked at 0a307f3: P1 chat-and-sender query shape, P2 scale-test 3x rule, P3 page counter, P4 memory slope split, P5 empty own LID, P6 waiter-cap order |
 | design | 2026-10-30 | e2356fe | CONCERNS | |
 | design | 2026-10-30 | 49ff123 | PASS | |
+| design | 2026-10-30 | af5e2e3 | CONCERNS | |
