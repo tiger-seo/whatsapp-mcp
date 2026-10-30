@@ -21,10 +21,20 @@ func hasACL(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	return aclReply(syscall.SYS_GETATTRLIST, uintptr(unsafe.Pointer(p)), unix.FSOPT_NOFOLLOW)
+}
+
+// hasACLOpen is hasACL for an open file, asked of the handle so that a path swapped after the open cannot change
+// the answer.
+func hasACLOpen(f *os.File) (bool, error) {
+	return aclReply(unix.SYS_FGETATTRLIST, f.Fd(), 0)
+}
+
+func aclReply(call, target, options uintptr) (bool, error) {
 	al := unix.Attrlist{Bitmapcount: unix.ATTR_BIT_MAP_COUNT, Commonattr: unix.ATTR_CMN_EXTENDED_SECURITY}
 	buf := make([]byte, 4096)
-	_, _, errno := syscall.Syscall6(syscall.SYS_GETATTRLIST, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(&al)),
-		uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), uintptr(unix.FSOPT_NOFOLLOW), 0)
+	_, _, errno := syscall.Syscall6(call, target, uintptr(unsafe.Pointer(&al)),
+		uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), options, 0)
 	if errno != 0 {
 		return false, errno
 	}
@@ -70,7 +80,7 @@ func aclError(path string, err error, acl bool) error {
 }
 
 func checkACL(f *os.File) error {
-	acl, err := hasACL(f.Name())
+	acl, err := hasACLOpen(f)
 	return aclError(f.Name(), err, acl)
 }
 

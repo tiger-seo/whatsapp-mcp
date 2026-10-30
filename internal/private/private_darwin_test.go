@@ -5,6 +5,7 @@ package private
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"os"
 	osexec "os/exec"
 	"path/filepath"
 	"testing"
@@ -30,6 +31,28 @@ func TestACLDetectionOnARealDirectory(t *testing.T) {
 	}
 	if err := checkDirACL(dir); err == nil {
 		t.Error("checkDirACL accepted a directory with an ACL entry")
+	}
+}
+
+// TestACLCheckOnAnOpenFile asks the open handle, as the store does for the database and its sidecars.
+func TestACLCheckOnAnOpenFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "whatsapp.db")
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := checkACL(f); err != nil {
+		t.Fatalf("a file with no ACL: %v", err)
+	}
+	if out, err := osexec.Command("chmod", "+a", "everyone allow read", path).CombinedOutput(); err != nil {
+		t.Fatalf("chmod +a: %v: %s", err, out)
+	}
+	if err := checkACL(f); err == nil {
+		t.Error("checkACL accepted an open file with an ACL entry")
 	}
 }
 
