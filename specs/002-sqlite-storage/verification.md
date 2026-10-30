@@ -40,6 +40,7 @@ CI can produce the macOS evidence the gate needs.
 | 2026-10-30 | windows/amd64 (local), T046 complete, T057-T058 | `CGO_ENABLED=0 go test -count=1 -timeout 15m ./...`; `gofmt -l .`; `go vet ./...` | PASS, exit 0, every package (`store` 118.8 s); `TestGetMessage`, `TestGetMessageByID`, `TestGetMessageByIDLimit` (100 chats listed, 101 is `ErrResourceLimit`), `TestMediaInfo` green; `TestQueryPlans` now 24/24 and `TestQueryScale` 6 more constant-cost lookups (`GetMessage` 23 vs 25 pages, `GetMessageByID` 28 vs 31) |
 | 2026-10-30 | windows/amd64 (local), T047-T052, T060, T062 | `gofmt -l .` (0 files); `go build ./...`, `go vet ./...`, `go test -count=1 ./...` (179 s), each read as its own exit code | all exit 0. New: `TestLimitsAtTheBoundary` 26 constants, each accepted at the limit and rejected beyond it with the tables unchanged; `TestLimitsOfTheListings` (aggregate context 100 x 10/10 accepted and 200 x 10/10 rejected, 100 chats with one ID listed and 101 `ErrResourceLimit`, 100 rows of 256 KiB accepted and 130 `ErrResourceLimit`); `TestHeavyContactListing` (2,000 messages of 256 KiB, offset 1,800, by phone and by LID); `TestSearchContactsHeapLimit` (needs 639,424 B for 5,000 contacts; with the limit at 521,096 B the call fails with `ErrResourceLimit` "memory"); `TestPerContactMemory` both splits (below); `TestCancellationFreesTheSlot`; abuse cases 4, 5 (sort, overflow), 8; `TestNoSecretsInLogsOrErrors` now also covers every query, a search marker, a failed migration, event fields and control characters |
 | 2026-10-30 | windows/amd64 (local), T063 steps 2 and 5 | the three `-fuzz` runs of step 2 (60 s, 30 s, 60 s) and the benchmark of step 5 | fuzz: all exit 0; benchmark: see "Benchmark (SC-004)" |
+| 2026-10-30 | windows/amd64 (local, TEMP on D:), T069, T070, T072 | `gofmt -l .` (0 files); `go vet ./...`; `go test -count=1 ./...` (store 201.8 s), each as its own exit code | all exit 0. `TestPerContactMemory` now measures 50,000, 200,000 and 400,000 messages for both splits and holds four listings after their first row (see "Per-contact memory"). C: had 20 MB free during one run, so the test temp directory moved to D: |
 | 2026-10-28 | linux/amd64, darwin/amd64 (local, vet only) | `GOOS=linux go vet ./...`, `GOOS=darwin go vet ./...` | exit 0: the Unix and macOS test files compile; they have not been run |
 | not run | linux, macOS | CI on the next push | not verified: file-mode tests (`TestExistingDatabaseWithOpenModeIsRefused`, `TestFifoArtifactIsRefused`, `TestNewDatabaseIsMode0600`, `TestCheckFileModes`), the macOS ACL check in `private_darwin.go` (`syscall.Syscall6(SYS_GETATTRLIST)`, written without a Mac) and the symlink and hard-link subtests |
 | 2026-10-28 | windows/amd64 (local) | quickstart step 2, `-fuzz` on `FuzzValidateMessage` 60 s, `FuzzNormalizePhone` 30 s, `FuzzWALScan` 60 s | PASS: 860,742 / 522,880 / 3,361 executions, no failure, no new crasher files |
@@ -76,17 +77,16 @@ rows, identifiers of realistic length (chat JIDs 120 B, message IDs 150 B). Both
 | --- | --- | --- | --- |
 | 50,000 | 0 / 49,800 | 21,488 / 46,064 | 21,488 |
 | 200,000 | 0 / 49,800 / 99,800 | 97,952 each | 97,952 |
+| 400,000 | 0 / 49,800 / 99,800 | 97,952 each | 97,952 |
 
-Two deep and two shallow listings at once: 316,848 B (limit 1 MiB). `LastInteraction`: 93,592 B in 0.6-1.8 ms (limits
-1 MB and 50 ms). Every listing is below 256 KiB. Two points differ from the task text:
-
-- The step from 21 KB to 98 KB is not caused by the contact's history: a `GetMessage`, which cannot depend on it,
-  grows by exactly the same amount at the same moment, and it appears after the first tens of thousands of writes. The
-  test therefore compares what a listing adds to that `GetMessage` floor (at most +64 KiB between 50,000 and
-  200,000). The cause of the floor itself is not found.
-- The four concurrent listings start together at the reader, but the hook cannot hold them until each has read its
-  first row, because `database/sql` gives no way to stop between the query and its first row. The bound follows
-  from the single-listing growth (4 x 256 KiB = 1 MiB).
+Updated 2026-10-30 (T069, T070). Two deep and two shallow listings at once, held after their first row so that the
+peaks overlap: 391,808 B (even split) and 365,600 B (all under the phone), limit 1 MiB. `LastInteraction`: 93,592 B
+in 1.9-6.0 ms (limits 1 MB and 50 ms). Every listing is below 256 KiB, and from 200,000 to 400,000 messages the growth
+does not rise at all (limit +16 KiB). A fixed cost of about 98 KB per operation appears after the first tens of
+thousands of writes and is the same in a `GetMessage`; `PRAGMA wal_checkpoint(TRUNCATE)` before the measurement does not
+change it, so it does not follow the WAL. Its cause is not found, but it plateaus (identical at 200,000 and 400,000),
+so the test asserts the absolute bound and no longer subtracts it. The hook that holds the listings is the
+`firstRowHolder` check in `messageKeys`.
 
 ## Cross-identity evidence (SC-008)
 

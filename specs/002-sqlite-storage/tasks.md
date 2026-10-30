@@ -898,9 +898,11 @@ has no side effect. The recorded cross-identity and restore evidence passes.
   `sqlite3_memory_used` at the reset (`sqlite3_memory_highwater(1)`), which measures the query and not the cache.
   1. Seed the contact with 50,000 messages. Run a sender listing at offset 0 and at offset 49,800, and record
      each growth.
-  2. Add 150,000 more (200,000). Repeat both, and also run offset 99,800. Each growth is at most 256 KiB, and for
-     the same offset the growth at 200,000 is at most the growth at 50,000 + 64 KiB: nothing grows with the
-     contact's history or with the offset.
+  2. Add 150,000 more (200,000) and then 200,000 more (400,000). Repeat both, and also run offset 99,800. Each
+     growth is at most 256 KiB at every size and offset, and from 200,000 to 400,000 it rises by at most 16 KiB:
+     nothing grows with the contact's history or with the offset. A fixed cost of about 98 KB per operation
+     appears after the first tens of thousands of writes, in a `GetMessage` too; a checkpoint does not change it,
+     and it is the same at 200,000 and at 400,000, so the rule is absolute and does not subtract it.
   3. Run 2 deep (offset 99,800) and 2 shallow (offset 9,800) listings at once, with a test hook that holds all four
      statements open until each has read its first row, so the peaks overlap. The growth is at most 1 MiB.
   4. Record the measured growths in `verification.md`.
@@ -971,7 +973,12 @@ has no side effect. The recorded cross-identity and restore evidence passes.
   - `store.limit` and `store.io_error` events are emitted;
   - checked arithmetic is used for offsets, sizes and context;
   - a test-only hook (unexported `testHooks` struct) supports commit cancellation, `max_page_count` and the
-    injected free-space function.
+    injected free-space function. Three more hooks serve the read-side tests: `queryHold` (a read holds its
+    connection at its start; `TestPerContactMemoryChild` uses it to fill every reader), `wrapReader` (a read runs
+    through a wrapper; the plan and scale tests count pages with it, and the memory test wraps it to hold listings)
+    and `onRead` (a read reports its connection; the page meter uses it). The wrapper may implement
+    `firstRowHolder`, which the sender listing calls after its first row (`TestPerContactMemoryChild`, four
+    overlapping listings).
 - [X] T053 [US7] Create `OPERATIONS.md` at the repository root with a "Storage" section and these subsections:
   - **Files and privacy:** what `whatsapp.db`, `-wal` and `-shm` hold; the data classes (device credentials,
     contacts and LID mappings, text and captions, media keys); owner-only access is not encryption at rest;
@@ -1231,8 +1238,8 @@ Task: "T036 crash_test.go: killed child, every committed write present"
 
 - [ ] T067 Run quickstart step 6 on a Linux machine and, again, on Windows, this time with the store open (a `serve` or `stdio` process holding the data directory, so `-wal` and `-shm` exist). As a second user: `cat` and `ls` the data directory, read and write `whatsapp.db`, the lock file, `-wal` and `-shm`, create a file in the directory, and rename a file over `whatsapp.db`; all must be denied. On Windows a running store holds `whatsapp.db` open, so a rename or delete may fail with a sharing violation whatever the access rights: record the error text, count only "Access is denied" as a denial, and keep the rename and delete steps on the closed store if the open one cannot show it. Keep the process running with its standard input held open (for example `sleep 600 | whatsapp-mcp stdio --data-dir <new empty directory>`), on an unpaired data directory only, so it never pairs or connects. Record the commands, date, denied output and `ls -l` / `icacls` listings in `verification.md`, per SC-008 (partial)
 - [ ] T068 After T069 and T070, push the branch and confirm that CI's `go test` (run without `-short`) is green on ubuntu, windows and macOS with the new `limits_test.go` tests (`TestHeavyContactListing` seeds 500 MiB; `TestPerContactMemory` runs two children with up to 400,000 messages each, as T070 leaves it; the run recorded is the one made after the last test change). If a runner cannot run them, only `TestHeavyContactListing` and `TestPerContactMemory` may be changed, through an environment variable that CI sets for those two tests alone and never through a global `-short`, so the WAL-bound and long-reader tests of T049 keep running on all three systems. The seed of `TestHeavyContactListing` stays at 2,000 rows of 256 KiB at offset 1,800. Record every reduction in `verification.md` for the owner to accept, per SC-002 (partial)
-- [ ] T069 Add a test hook in the row loop of the sender listing in `queries.go` (`wrapReader` cannot stop after the first row, because `querier` returns a concrete `*sql.Rows`) that holds a listing after its first row has been read, use it in `TestPerContactMemoryChild` so that 2 deep and 2 shallow listings overlap at their peak, and record the measured growth (at most 1 MiB), per T047 step 3 (partial)
-- [ ] T070 Find the cause of the per-operation SQLite memory floor that rises from about 21 KB to about 98 KB after the first tens of thousands of writes (a `GetMessage` shows it too). First experiment: run `PRAGMA wal_checkpoint(TRUNCATE)` before the floor measurement and see whether it drops back. Then replace the floor-subtracting rule in `TestPerContactMemoryChild`, which cannot detect growth with history, with an absolute assertion that does not subtract a quantity that itself may grow: add a third size point (for example 400,000 messages) or show that the floor plateaus, and assert that the growth at every size and offset stays at most 256 KiB and rises by at most 16 KiB between the last two sizes (allocator rounding and slot reuse make a single reading differ by a few hundred bytes). Amend T047 with the measured rule and the cause, per T047 step 2 and SC-009 (partial)
+- [X] T069 Add a test hook in the row loop of the sender listing in `queries.go` (`wrapReader` cannot stop after the first row, because `querier` returns a concrete `*sql.Rows`) that holds a listing after its first row has been read, use it in `TestPerContactMemoryChild` so that 2 deep and 2 shallow listings overlap at their peak, and record the measured growth (at most 1 MiB), per T047 step 3 (partial)
+- [X] T070 Find the cause of the per-operation SQLite memory floor that rises from about 21 KB to about 98 KB after the first tens of thousands of writes (a `GetMessage` shows it too). First experiment: run `PRAGMA wal_checkpoint(TRUNCATE)` before the floor measurement and see whether it drops back. Then replace the floor-subtracting rule in `TestPerContactMemoryChild`, which cannot detect growth with history, with an absolute assertion that does not subtract a quantity that itself may grow: add a third size point (for example 400,000 messages) or show that the floor plateaus, and assert that the growth at every size and offset stays at most 256 KiB and rises by at most 16 KiB between the last two sizes (allocator rounding and slot reuse make a single reading differ by a few hundred bytes). Amend T047 with the measured rule and the cause, per T047 step 2 and SC-009 (partial)
 - [X] T071 Correct the wording of T058 (`LIMIT 102`, "more than 101") to the contract: `GetMessageByID` lists at most 100 chats and 101 is `ErrResourceLimit`, as `queries.go` and `TestGetMessageByIDLimit` already do, per FR-022 (contradicts)
-- [ ] T072 Record `queryHold`, `wrapReader`, `onRead` and the hook that T069 adds in T052's list of test-only hooks, with the test that uses each; remove any that T069 makes redundant, per T052 (unrequested)
+- [X] T072 Record `queryHold`, `wrapReader`, `onRead` and the hook that T069 adds in T052's list of test-only hooks, with the test that uses each; remove any that T069 makes redundant, per T052 (unrequested)
 - [ ] T073 Follow `OPERATIONS.md` by hand on a Linux machine (backup, restore into a new private directory, the offline checks, and the `rollback_journal` recovery step), and record the result in `verification.md`, per T054 and quickstart step 7 (partial)
