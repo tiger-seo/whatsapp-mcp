@@ -116,6 +116,29 @@ Afterwards `sha256sum whatsapp.db` equals the value before (`30d19946...be77`), 
 `whatsapp.db` and `whatsapp-mcp.lock`: nothing was created, replaced or deleted. Abuse case 2's claim that an unrelated
 identity cannot create or rename entries in the data directory is shown on Windows.
 
+### Windows, store open (T067), 2026-10-30
+
+A `whatsapp-mcp stdio` process (standard input held open by a `sleep 900` pipe; a new, unpaired data directory
+`D:\wa-002-t067\data` that the binary created itself; it never paired or connected) held `whatsapp.db`, `-wal`
+(0 B), `-shm` (32 KiB) and the lock file open. `icacls` on the directory and on `-wal` listed only SYSTEM,
+Administrators and `NOTEBOOKPRO\Tiger`. As `wa002test` (`whoami` = `notebookpro\wa002test`), through
+`Start-Process -Credential`, with the Russian messages translated:
+
+| # | Command | Result |
+| --- | --- | --- |
+| 1, 3 | read, append to `whatsapp.db` | Access is denied |
+| 2 | `dir` of the data directory | nothing listed |
+| 4, 5 | read, append to `whatsapp-mcp.lock` | Access is denied |
+| 6, 7 | read, append to `whatsapp.db-wal` | Access is denied |
+| 8, 9 | read, append to `whatsapp.db-shm` | Access is denied |
+| 10 | create `newfile.txt` in the data directory | Access is denied |
+| 11 | `move /Y` a file owned by `wa002test` over `whatsapp.db` | Access is denied (not a sharing violation, so the permissions refused it) |
+| 12, 13 | `del` the database, the `-wal` | "Cannot find the file" (the directory cannot be listed) |
+
+Afterwards the process was still running, its log held no warning or error, the four files had the sizes they had
+before and no file had been added. The process was then stopped with `taskkill`, so `-wal` and `-shm` stayed in place
+until the directory was removed. Linux (closed and open store) is not verified.
+
 ## Backup/restore rehearsal (SC-010)
 
 | Date | Platform | What | Result |
