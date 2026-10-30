@@ -11,7 +11,7 @@
 
 The implementation run of 2026-10-28 covered every task that the parked findings P1-P6 did not block. The runs of
 2026-10-30 added the queries, the scale, memory and limit tests, the hardening tests and the final checks. Open: the
-Linux and macOS runs of the manual checks (T054, T056, T063), which are marked "not verified".
+the macOS runs of the manual checks (T056), which are marked "not verified"; Linux was run on WSL2.
 
 ## Gate results (committed view, device upgrade transactions)
 
@@ -93,7 +93,7 @@ asserts the absolute bound and no longer subtracts it. The hook that holds the l
 
 ## Cross-identity evidence (SC-008)
 
-**Windows: passed, 2026-10-30.** Linux and macOS: not verified (no such machine here).
+**Windows: passed, 2026-10-30. Linux: passed, 2026-10-30 (WSL2, see "Linux, store open"). macOS: not verified** (SC-008 asks for Unix and Windows).
 
 Setup: a throwaway standard local account `wa002test` (created and deleted with `net user`, profile folder removed;
 `net user` is the same as before). The data directory was `D:\wa-002-t056\data`, made by `stdio --data-dir` plus
@@ -140,7 +140,23 @@ Administrators and `NOTEBOOKPRO\Tiger`. As `wa002test` (`whoami` = `notebookpro\
 
 Afterwards the process was still running, its log held no warning or error, the four files had the sizes they had
 before and no file had been added. The process was then stopped with `taskkill`, so `-wal` and `-shm` stayed in place
-until the directory was removed. Linux (closed and open store) is not verified.
+until the directory was removed.
+
+### Linux, store open (T067), 2026-10-30
+
+WSL2 on the same Windows machine: Ubuntu 22.04.3, kernel 5.15.90.1-microsoft-nbd-WSL2, in the distro's own ext4
+filesystem under `/tmp` (`/mnt/d` does not keep Unix permissions). The binary was the linux/amd64 cross-build of
+commit `5ec8d64`. The owner was `tiger`; the unrelated identity was the system account `nobody` (uid 65534), started
+with `runuser` from a root shell (`wsl -u root`), so no account was created. The store (`wa stdio`, standard input
+held open by `sleep 60 |`, a new unpaired data directory the binary created itself, 100 seeded messages) was
+confirmed alive by `pgrep` before and after the checks. Listing: `/tmp/wa-t067` `drwxr-xr-x tiger`, `data`
+`drwx------ tiger`, and `whatsapp.db`, `whatsapp.db-wal`, `whatsapp.db-shm`, `whatsapp-mcp.lock` all `-rw------- tiger`.
+
+As `nobody`, every step failed with "Permission denied": `ls` of the directory, `cat` and append to `whatsapp.db`, the
+lock file, `-wal` and `-shm`, creating `newfile.txt`, `mv -f` of a file owned by `nobody` over `whatsapp.db`, `rm` of
+the database and the `-wal`, and `stat` of the database. Afterwards the four files had the same sizes and the same
+modes, `sha256sum whatsapp.db` was unchanged, no file had been added, the process was still running, and its log had
+no warning or error. A first attempt in which the store had already exited gave the same denials; it is not counted.
 
 ## Backup/restore rehearsal (SC-010)
 
@@ -149,7 +165,8 @@ until the directory was removed. Linux (closed and open store) is not verified.
 | 2026-10-28 | windows/amd64 | `TestRestoredBackupIsValidatedOffline`: 5,000 messages and a device, copied into a new private directory, `integrity_check` = ok, `foreign_key_check` empty, versions 1 / 16, store dump equals the original | PASS |
 | 2026-10-28 | windows/amd64 | `TestRollbackJournalRecoveryProcedure`: empty, zeroed and hot `-journal` each refused with `rollback_journal`; the `OPERATIONS.md` steps on the live file, then a start that succeeds with the data of the state before the killed transaction | PASS |
 | 2026-10-30 | windows/amd64 | by hand, quickstart step 7: `stdio --data-dir` on a new directory (exit 0), `testdata/cmd/seed -n 5000`, stop, copy `whatsapp.db` (no `-wal`: clean close) to a backup directory, copy that into a new restore directory, then Python's `sqlite3` module (mode=ro) on the restored file: `integrity_check` = ok, `foreign_key_check` = no rows, `mcp_version` = 1, `whatsmeow_version` = (16, 8), 5,000 messages; `store.Open` on the restored copy succeeds | PASS |
-| not run | linux | following `OPERATIONS.md` by hand | not verified: no Linux machine here; CI runs the automated rehearsals |
+| 2026-10-30 | linux/amd64 (WSL2 Ubuntu 22.04.3) | by hand, quickstart step 7: a store of 5,000 seeded messages closed cleanly (no `-wal`), copied with `cp -p` into a `drwx------` backup directory, then into a new private directory; offline checks with Python 3's `sqlite3` module (SQLite 3.37.2), since the `sqlite3` shell is not installed: `integrity_check` = ok, `foreign_key_check` = no rows, `mcp_version` = 1, `whatsmeow_version` = (16, 8), 5,000 messages; `store.Open` on the restored copy succeeds and the original is not touched | PASS |
+| 2026-10-30 | linux/amd64 (WSL2) | by hand, the `rollback_journal` recovery of `OPERATIONS.md` with a 0-byte, a zeroed 512-byte and a hot journal (an 855,552-byte one, left by a Python process that updated every row in `journal_mode=DELETE` with a small cache and was killed with SIGKILL before it committed): each start exits 1 with `rollback_journal`; the file set is copied aside; `PRAGMA integrity_check` on the live file returns ok; the empty and zeroed journals are left where they are and are moved into the copy, and the hot journal is rolled back and removed by SQLite; the next start exits 0 and the data equals the state before (5,000 messages, 108,890 text bytes in all three cases) | PASS |
 
 ## Dependencies and govulncheck
 
@@ -178,9 +195,8 @@ until the directory was removed. Linux (closed and open store) is not verified.
   `admission_test.go` matches the revised T048, which is done.
 - T052 found one inconsistency, fixed: `UpdateChats` rejected 1,001 updates as a validation error where `StoreMessages` gives
   `ErrResourceLimit` for 1,001 messages; both are limits now (`chats.go`, `chats_test.go`).
-- T054: the automated rehearsals and the manual Windows run pass; the manual Linux run is not verified. T056 (cross-identity) passed on Windows;
-  Linux and macOS are not verified.
-- T063: steps 1, 2, 3, 4 and 5 are recorded; steps 6 and 7 are done on Windows only.
+- T054 and T073: the automated rehearsals and the manual runs on Windows and on Linux (WSL2) pass. T056 (cross-identity) passed on Windows and Linux (WSL2); macOS is not verified.
+- T063: steps 1 to 7 are recorded; steps 6 and 7 ran on Windows and on Linux (WSL2), not on macOS.
 - Windows symlinks could not be created without a privilege, so those subtests skip locally; the junction tests cover
   the reparse-point rule on Windows, and CI covers symlinks on Linux and macOS.
 - A read-only database is refused by a write probe at open (`readonly`), because SQLite opens a read-only file read-only
