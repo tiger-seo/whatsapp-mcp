@@ -872,7 +872,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
 
 ### Tests for User Story 7 ⚠️
 
-- [X] T047 (partial: steps 2 and 3 are open, see T069 and T070) [P] [US7] `internal/store/limits_test.go` (SC-009). For every constant in `limits.go`, a test at the
+- [X] T047 [P] [US7] `internal/store/limits_test.go` (SC-009). For every constant in `limits.go`, a test at the
   boundary (accepted) and one beyond it (rejected, with no row written: compare table dumps). Log for each case:
   - elapsed time;
   - result bytes;
@@ -916,6 +916,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
     shorter list;
   - ambiguous-ID chats (101 chats → `ErrResourceLimit`);
   - overflowing offsets and context (`math.MaxInt`).
+  _Partial: step 2 (the literal rule) and step 3 (listings held after their first row) are open, see T069 and T070._
 - [X] T048 [P] [US7] `internal/store/admission_test.go`, with the real store:
   - 16 blocking operations (hold the writer with an open `BEGIN IMMEDIATE` on a separate raw connection) plus 64
     waiting, then one more gets `ErrBusy` at once;
@@ -1018,7 +1019,7 @@ has no side effect. The recorded cross-identity and restore evidence passes.
     recovery-time objectives, restore rehearsals.
 
   Add a one-line link to `OPERATIONS.md` in `README.md`.
-- [X] T054 (partial: the manual Linux run is open, see T073) [US7] `internal/store/restore_test.go` (SC-010):
+- [X] T054 [US7] `internal/store/restore_test.go` (SC-010):
   1. Seed a device and 5,000 messages, close cleanly (quiesce).
   2. Copy the file set into a new directory made by `private.MkdirAll`.
   3. Open the copy offline with a raw read-only connection and run `integrity_check` = `ok`, `foreign_key_check` =
@@ -1033,15 +1034,17 @@ has no side effect. The recorded cross-identity and restore evidence passes.
      before the killed transaction, which shows the hot journal was rolled back.
 
   Also follow the `OPERATIONS.md` procedure manually once on Windows and once on Linux, and record the result.
+  _Partial: the manual Linux run is open, see T073._
 - [X] T055 [P] [US7] Create `internal/store/testdata/cmd/bumpversion/main.go` (sets `mcp_version` or
   `whatsmeow_version.compat` in a given file, for quickstart step 4) and
   `internal/store/testdata/cmd/seed/main.go` (writes N synthetic messages through `store.Open`). Both refuse to
   run on a path outside a directory whose name starts with the system temp directory, unless `-force` is given.
-- [X] T056 (partial: Linux is open, see T067; the live-store steps are open) [US7] Manual cross-identity check (SC-008), following quickstart step 6 on Windows (`runas` with a
+- [X] T056 [US7] Manual cross-identity check (SC-008), following quickstart step 6 on Windows (`runas` with a
   second local account) and on Linux (a second user). Besides reading and writing the artifacts, the second
   identity tries to create a file in the data directory and to rename a file over `whatsapp.db`; both must be
   denied (abuse case 2). Record the commands, date, the denied output and the `icacls` and `ls -l` listings in
   `verification.md`. Mark macOS "not verified" unless it was run.
+  _Partial: Linux is open, and so are the live-store steps on both systems, see T067._
 
 **Checkpoint**: all P1 stories are complete and hardened.
 
@@ -1066,8 +1069,8 @@ has no side effect. The recorded cross-identity and restore evidence passes.
 ### Implementation for User Story 5
 
 - [X] T058 [US5] Implement `GetMessage`, `GetMessageByID` and `MediaInfo` in `internal/store/queries.go`:
-  - `GetMessageByID` selects `chat_jid` for `id = ?` on `messages_id` with `LIMIT 102` to detect more than 101 matches without an
-    unbounded read;
+  - `GetMessageByID` selects `chat_jid` for `id = ?` on `messages_id` with `LIMIT 101` to detect more than 100 matches without an
+    unbounded read (an ID in 100 chats lists them, in 101 it is `ErrResourceLimit`);
   - `MediaInfo` returns `MediaMeta` with nil length when NULL, and `ErrNotMedia` when `media_type = ''`;
   - add sub-benchmarks for `GetMessage`, `GetMessageByID` and `MediaInfo` to `BenchmarkQueries` in
     `internal/store/bench_test.go` (from T046), so that SC-004 covers FR-021–FR-023.
@@ -1139,9 +1142,10 @@ result, then merge again and check nothing changes.
 - [X] T062 Run `gofmt -l .` (empty), `go vet ./...`, `go test ./...` (read each exit code directly, not through a
   pipe) and `govulncheck ./...`. Record the results. Record any unreachable finding as an exception in
   `verification.md` with owner, compensating controls and expiry; a reachable one blocks the feature.
-- [X] T063 (partial: steps 6 and 7 ran on Windows only, see T067 and T073) Run every step of `specs/002-sqlite-storage/quickstart.md`, including the local benchmark (step 5,
+- [X] T063 Run every step of `specs/002-sqlite-storage/quickstart.md`, including the local benchmark (step 5,
   SC-004: record each `ns/op` and the machine) and the 60 s fuzz runs (step 2). Record the results in
   `verification.md`.
+  _Partial: steps 6 and 7 ran on Windows only, see T067 and T073._
 - [X] T064 [P] Update `AGENTS.md` "Current state": feature 002 adds `internal/store` (one file, two schema
   histories, approved limits) and `OPERATIONS.md`, and `stdio`/`serve`/`pair` open the store. Keep the existing
   style.
@@ -1225,10 +1229,10 @@ Task: "T036 crash_test.go: killed child, every committed write present"
 
 ## Phase 11: Convergence
 
-- [ ] T067 Run quickstart step 6 on a Linux machine and, again, on Windows, this time with the store open (a `serve` or `stdio` process holding the data directory, so `-wal` and `-shm` exist). As a second user: `cat` and `ls` the data directory, read and write `whatsapp.db`, the lock file, `-wal` and `-shm`, create a file in the directory, and rename a file over `whatsapp.db`; all must be denied. Record the commands, date, denied output and `ls -l` / `icacls` listings in `verification.md`, per SC-008 (partial)
-- [ ] T068 Push the branch and confirm that CI's `go test` (run without `-short`) is green on ubuntu, windows and macOS with the new `limits_test.go` tests (`TestHeavyContactListing` seeds 500 MiB; `TestPerContactMemory` runs two children with 200,000 messages each). If a runner cannot run them, only `TestHeavyContactListing` and `TestPerContactMemory` may be changed, through an environment variable that CI sets for those two tests alone and never through a global `-short`, so the WAL-bound and long-reader tests of T049 keep running on all three systems. The seed of `TestHeavyContactListing` stays at 2,000 rows of 256 KiB at offset 1,800. Record every reduction in `verification.md` for the owner to accept, per SC-002 (partial)
+- [ ] T067 Run quickstart step 6 on a Linux machine and, again, on Windows, this time with the store open (a `serve` or `stdio` process holding the data directory, so `-wal` and `-shm` exist). As a second user: `cat` and `ls` the data directory, read and write `whatsapp.db`, the lock file, `-wal` and `-shm`, create a file in the directory, and rename a file over `whatsapp.db`; all must be denied. On Windows a running store holds `whatsapp.db` open, so a rename or delete may fail with a sharing violation whatever the access rights: record the error text, count only "Access is denied" as a denial, and keep the rename and delete steps on the closed store if the open one cannot show it. Keep the process running with its standard input held open (for example `sleep 600 | whatsapp-mcp stdio --data-dir <new empty directory>`), on an unpaired data directory only, so it never pairs or connects. Record the commands, date, denied output and `ls -l` / `icacls` listings in `verification.md`, per SC-008 (partial)
+- [ ] T068 After T069 and T070, push the branch and confirm that CI's `go test` (run without `-short`) is green on ubuntu, windows and macOS with the new `limits_test.go` tests (`TestHeavyContactListing` seeds 500 MiB; `TestPerContactMemory` runs two children with up to 400,000 messages each, as T070 leaves it; the run recorded is the one made after the last test change). If a runner cannot run them, only `TestHeavyContactListing` and `TestPerContactMemory` may be changed, through an environment variable that CI sets for those two tests alone and never through a global `-short`, so the WAL-bound and long-reader tests of T049 keep running on all three systems. The seed of `TestHeavyContactListing` stays at 2,000 rows of 256 KiB at offset 1,800. Record every reduction in `verification.md` for the owner to accept, per SC-002 (partial)
 - [ ] T069 Add a test hook in the row loop of the sender listing in `queries.go` (`wrapReader` cannot stop after the first row, because `querier` returns a concrete `*sql.Rows`) that holds a listing after its first row has been read, use it in `TestPerContactMemoryChild` so that 2 deep and 2 shallow listings overlap at their peak, and record the measured growth (at most 1 MiB), per T047 step 3 (partial)
-- [ ] T070 Find the cause of the per-operation SQLite memory floor that rises from about 21 KB to about 98 KB after the first tens of thousands of writes (a `GetMessage` shows it too). First experiment: run `PRAGMA wal_checkpoint(TRUNCATE)` before the floor measurement and see whether it drops back. Then replace the floor-subtracting rule in `TestPerContactMemoryChild`, which cannot detect growth with history, with an absolute assertion that does not subtract a quantity that itself may grow: add a third size point (for example 400,000 messages) or show that the floor plateaus, and assert that the growth at every size and offset stays at most 256 KiB and does not rise between the last two sizes. Amend T047 with the measured rule and the cause, per T047 step 2 and SC-009 (partial)
-- [ ] T071 Correct the wording of T058 (`LIMIT 102`, "more than 101") to the contract: `GetMessageByID` lists at most 100 chats and 101 is `ErrResourceLimit`, as `queries.go` and `TestGetMessageByIDLimit` already do, per FR-022 (contradicts)
+- [ ] T070 Find the cause of the per-operation SQLite memory floor that rises from about 21 KB to about 98 KB after the first tens of thousands of writes (a `GetMessage` shows it too). First experiment: run `PRAGMA wal_checkpoint(TRUNCATE)` before the floor measurement and see whether it drops back. Then replace the floor-subtracting rule in `TestPerContactMemoryChild`, which cannot detect growth with history, with an absolute assertion that does not subtract a quantity that itself may grow: add a third size point (for example 400,000 messages) or show that the floor plateaus, and assert that the growth at every size and offset stays at most 256 KiB and rises by at most 16 KiB between the last two sizes (allocator rounding and slot reuse make a single reading differ by a few hundred bytes). Amend T047 with the measured rule and the cause, per T047 step 2 and SC-009 (partial)
+- [X] T071 Correct the wording of T058 (`LIMIT 102`, "more than 101") to the contract: `GetMessageByID` lists at most 100 chats and 101 is `ErrResourceLimit`, as `queries.go` and `TestGetMessageByIDLimit` already do, per FR-022 (contradicts)
 - [ ] T072 Record `queryHold`, `wrapReader`, `onRead` and the hook that T069 adds in T052's list of test-only hooks, with the test that uses each; remove any that T069 makes redundant, per T052 (unrequested)
 - [ ] T073 Follow `OPERATIONS.md` by hand on a Linux machine (backup, restore into a new private directory, the offline checks, and the `rollback_journal` recovery step), and record the result in `verification.md`, per T054 and quickstart step 7 (partial)
