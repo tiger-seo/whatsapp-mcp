@@ -65,18 +65,39 @@ func observe(t *testing.T, st *Store, label string, fn func() (resultBytes int, 
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	memoryHighwater(true)
+	// A call that builds a large result and then fails leaves little behind, so the heap is sampled while it runs.
+	var peak atomic.Uint64
+	stop := make(chan struct{})
+	sampled := make(chan struct{})
+	go func() {
+		defer close(sampled)
+		var m runtime.MemStats
+		for {
+			runtime.ReadMemStats(&m)
+			if m.HeapAlloc > peak.Load() {
+				peak.Store(m.HeapAlloc)
+			}
+			select {
+			case <-stop:
+				return
+			case <-time.After(2 * time.Millisecond):
+			}
+		}
+	}()
 	start := time.Now()
 	n, err := fn()
 	elapsed := time.Since(start)
+	close(stop)
+	<-sampled
 	runtime.GC()
 	runtime.ReadMemStats(&after)
-	growth := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+	growth := int64(peak.Load()) - int64(before.HeapAlloc)
 	hw := memoryHighwater(false)
-	t.Logf("%-44s %9v result=%-9d heap+=%-9d sqlite-high=%-9d active=%d waiting=%d db=%d wal=%d -> %v",
+	t.Logf("%-44s %9v result=%-9d heap-peak+=%-9d sqlite-high=%-9d active=%d waiting=%d db=%d wal=%d -> %v",
 		label, elapsed.Round(time.Microsecond), n, growth, hw, st.gate.activeCount(), st.gate.waitingCount(),
 		sizeOfFile(st.path), sizeOfFile(st.path+"-wal"), codeOf(err))
 	if growth > 2*maxResultBytes {
-		t.Errorf("%s: heap grew by %d, want below 2 x %d", label, growth, maxResultBytes)
+		t.Errorf("%s: the heap peaked %d above its start, want below 2 x %d", label, growth, maxResultBytes)
 	}
 	if hw >= maxHeapBytes {
 		t.Errorf("%s: SQLite's high-water mark is %d, want below %d", label, hw, maxHeapBytes)
@@ -660,5 +681,84 @@ func TestPerContactMemoryChild(t *testing.T) {
 	t.Logf("split=%s LastInteraction: growth %d B in %v", split, last, elapsed)
 	if last >= mib || elapsed >= 50*time.Millisecond {
 		t.Errorf("LastInteraction used %d B in %v, want below 1 MB and 50 ms", last, elapsed)
+	}
+}
+
+// TestContactChatsResultBytes gives a contact 200 groups whose latest message holds 256 KiB of text and 256 KiB of
+// caption. The result is far over 32 MiB, so the call must fail with ErrResourceLimit, and it must stop counting
+// as it reads: the heap may not hold every latest message before the bound is checked.
+func TestContactChatsResultBytes(t *testing.T) {
+	ctx := context.Background()
+	st, _ := openTest(t, newDataDir(t))
+	const phone = "491551234567"
+	big := strings.Repeat("c", maxTextBytes)
+	tx, err := st.writer.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 200; i++ {
+		jid := fmt.Sprintf("1203630000000%05d@g.us", i)
+		if _, err := tx.ExecContext(ctx, "INSERT INTO chats (jid, phone, last_message_time) VALUES (?, '', ?)", jid, baseTime.UnixMilli()+int64(i)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO messages (chat_jid, id, sender_jid, sender_phone, time, from_me, text, caption, text_fold, caption_fold)
+			VALUES (?, 'latest', ?, ?, ?, 0, ?, ?, '', '')`, jid, phoneJID(phone), phone, baseTime.UnixMilli()+int64(i), big, big); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	err = observe(t, st, "ContactChats of 200 x 512 KiB", func() (int, error) {
+		_, err := st.ContactChats(ctx, phone, page(200, 0))
+		return 0, err
+	})
+	if !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("a result of about 50 MiB: %v, want ErrResourceLimit", err)
+	}
+	err = observe(t, st, "ListChats with latest of 200 x 512 KiB", func() (int, error) {
+		_, err := st.ListChats(ctx, "", ByLastActivity, true, page(200, 0))
+		return 0, err
+	})
+	if !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("a chat listing of about 50 MiB: %v, want ErrResourceLimit", err)
+	}
+}
+
+// TestBeforeFilterBelowAMillisecond checks that a strict "before" bound that falls inside a millisecond keeps a
+// message stored at that millisecond, because the message is earlier than the bound.
+func TestBeforeFilterBelowAMillisecond(t *testing.T) {
+	ctx := context.Background()
+	st, _ := openTest(t, newDataDir(t))
+	mustStore(t, st, msg(alice, "ms", alice, baseTime))
+	for _, c := range []struct {
+		before time.Time
+		want   int
+	}{
+		{baseTime.Add(500 * time.Microsecond), 1},
+		{baseTime, 0},
+		{baseTime.Add(time.Millisecond), 1},
+	} {
+		hits, err := st.ListMessages(ctx, MessageFilter{Before: c.before}, Context{}, all)
+		if err != nil || len(hits) != c.want {
+			t.Errorf("before %v: %d hits, %v; want %d", c.before.Format(time.RFC3339Nano), len(hits), err, c.want)
+		}
+	}
+}
+
+// TestBadSenderIsRejectedWhateverTheRange checks that a sender that is no contact is a validation error naming the
+// sender, also when the time range is empty.
+func TestBadSenderIsRejectedWhateverTheRange(t *testing.T) {
+	ctx := context.Background()
+	st, _ := openTest(t, newDataDir(t))
+	for name, f := range map[string]MessageFilter{
+		"valid range":    {Sender: "not-a-number"},
+		"reversed range": {Sender: "not-a-number", After: at(10), Before: at(5)},
+	} {
+		_, err := st.ListMessages(ctx, f, Context{}, all)
+		var ve *ValidationError
+		if !errors.As(err, &ve) || ve.Field != "sender" {
+			t.Errorf("%s: %v, want a validation error naming the sender", name, err)
+		}
 	}
 }

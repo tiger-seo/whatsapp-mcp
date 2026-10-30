@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"slices"
 	"strings"
 	"time"
@@ -233,6 +234,16 @@ func scanChats(rows *sql.Rows) ([]ChatView, error) {
 	return out, rows.Err()
 }
 
+// beforeMillis is the bound for a strictly-before filter. Times are stored in milliseconds, so a bound that
+// falls inside a millisecond is rounded up: a message stored at that millisecond is before it.
+func beforeMillis(t time.Time) int64 {
+	ms := t.UnixMilli()
+	if t.Nanosecond()%1_000_000 != 0 {
+		ms++
+	}
+	return ms
+}
+
 // finishChats counts the chats against the budget and, when asked, fills Latest of each.
 func finishChats(ctx context.Context, q querier, chats []ChatView, withLatest bool) error {
 	budget := &resultBudget{}
@@ -399,15 +410,14 @@ func (s *Store) ContactChats(ctx context.Context, contact string, p Page) ([]Cha
 		if err != nil {
 			return err
 		}
+		// Each chat is counted as it is read, so a result that crosses the bound stops there and not after every
+		// latest message has been held.
+		budget := &resultBudget{}
 		for _, jid := range jids {
 			c, err := getChat(ctx, q, jid)
 			if err != nil {
 				return err
 			}
-			out = append(out, c)
-		}
-		budget := &resultBudget{}
-		for _, c := range out {
 			if err := budget.add(len(c.JID) + len(c.Name) + 64); err != nil {
 				return err
 			}
@@ -416,6 +426,7 @@ func (s *Store) ContactChats(ctx context.Context, contact string, p Page) ([]Cha
 					return err
 				}
 			}
+			out = append(out, c)
 		}
 		return nil
 	})
@@ -497,7 +508,7 @@ func messageKeys(ctx context.Context, q querier, f MessageFilter, ids *contactID
 		conds, condArgs = append(conds, "time > ?"), append(condArgs, f.After.UnixMilli())
 	}
 	if !f.Before.IsZero() {
-		conds, condArgs = append(conds, "time < ?"), append(condArgs, f.Before.UnixMilli())
+		conds, condArgs = append(conds, "time < ?"), append(condArgs, beforeMillis(f.Before))
 	}
 	if f.ChatJID != "" {
 		conds, condArgs = append(conds, "chat_jid = ?"), append(condArgs, f.ChatJID)
@@ -634,6 +645,15 @@ func (s *Store) ListMessages(ctx context.Context, f MessageFilter, c Context, p 
 			return nil, s.report(newOpID(), err)
 		}
 		f.ChatJID = chat.String()
+	}
+	if f.Sender != "" {
+		if _, _, err := parseContact(f.Sender); err != nil {
+			var ve *ValidationError
+			if errors.As(err, &ve) {
+				ve.Field = "sender"
+			}
+			return nil, s.report(newOpID(), err)
+		}
 	}
 	if !f.After.IsZero() && !f.Before.IsZero() && !f.After.Before(f.Before) {
 		return nil, nil
