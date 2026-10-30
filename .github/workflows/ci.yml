@@ -106,4 +106,13 @@ jobs:
         with:
           go-version-file: go.mod
       # The store's tests include concurrency and crash tests; the default 10 min is too tight for the slowest runner.
+      # Temporary: shows which ACL entries the macOS runner puts on temporary directories.
+      - name: macOS ACL diagnostics
+        if: runner.os == 'macOS'
+        run: |
+          echo "TMPDIR=$TMPDIR"
+          ls -led "$TMPDIR" "$(dirname "$TMPDIR")" "$(dirname "$(dirname "$TMPDIR")")" || true
+          d="$(mktemp -d)"; mkdir -m 700 "$d/data"
+          ls -led "$d" "$d/data" || true
+          ls -le "$HOME" | head -5 || true
       - run: go test -timeout 15m ./...
