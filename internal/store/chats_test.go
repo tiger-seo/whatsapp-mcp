@@ -139,7 +139,7 @@ func TestBatchOfUpdatesIsAtomic(t *testing.T) {
 	for i := range many {
 		many[i] = ChatUpdate{JID: alice}
 	}
-	if err := st.UpdateChats(context.Background(), many); !errors.Is(err, ErrInvalid) {
+	if err := st.UpdateChats(context.Background(), many); !errors.Is(err, ErrResourceLimit) {
 		t.Errorf("1,001 updates: %v", err)
 	}
 }

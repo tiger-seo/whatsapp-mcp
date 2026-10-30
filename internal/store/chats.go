@@ -73,7 +73,7 @@ func (s *Store) UpdateChat(ctx context.Context, u ChatUpdate) error {
 // moves forward.
 func (s *Store) UpdateChats(ctx context.Context, updates []ChatUpdate) error {
 	if len(updates) == 0 || len(updates) > maxChatUpdates {
-		return s.report(newOpID(), invalid("updates", "must hold 1 to 1000 updates"))
+		return s.report(newOpID(), limitOrInvalid(len(updates) > maxChatUpdates, "chat updates", "updates"))
 	}
 	parsed := make([]chatUpdate, len(updates))
 	for i, u := range updates {
