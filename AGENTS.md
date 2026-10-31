@@ -15,8 +15,8 @@ Without it, ask the user for the specification before planning; don't guess the 
 
 ## Current state
 
-Feature 001 (binary skeleton) is implemented and verified, including CI; it is done once pull request #1 is
-merged into `main`. The code:
+Features 001 (binary skeleton, pull request #1) and 002 (SQLite storage, pull request #5) are implemented,
+verified and merged into `main`. The code:
 
 - `cmd/whatsapp-mcp`: the commands, flag parsing, the logger and the shutdown lifecycle. Only `version`
   does real work yet.
@@ -24,15 +24,19 @@ merged into `main`. The code:
   registry in `internal/config/setting.go`; a new setting is one descriptor plus one `Config` field.
 - `internal/lock`: the single-instance lock on the data directory.
 - `internal/buildinfo`: version, commit and build date.
-- `internal/store` (feature 002, in progress on branch `002-sqlite-storage`): the one SQLite file `whatsapp.db`
-  with the whatsmeow device schema and the message schema (embedded migrations), the approved limits, the write
-  side (`StoreMessages`, `UpdateChats`, `MergeLID`) and the lifecycle (`Open`, `Close`, `Device`). `stdio`,
-  `serve` and `pair` open it after the lock. The chat, contact and message queries
-  (`queries.go`, `contacts.go`) are implemented and tested, with the limit, abuse and memory tests. The open work is
-  the Phase 11 convergence tasks in `specs/002-sqlite-storage/tasks.md`. `OPERATIONS.md` is the operator guide.
+- `internal/store` (feature 002): the one SQLite file `whatsapp.db` with the whatsmeow device schema and the message
+  schema (embedded migrations), the approved limits, the write side (`StoreMessages`, `UpdateChats`, `MergeLID`), the
+  read side (the chat, contact and message queries in `queries.go` and `contacts.go`) and the lifecycle (`Open`,
+  `Close`, `Device`). `stdio`, `serve` and `pair` open it after the lock. `OPERATIONS.md` is the operator guide. A
+  LID sender whose name is only on the phone-number chat has no sender name until `MergeLID` runs (owner decision in
+  `specs/002-sqlite-storage/verification.md`). The store tests write several GB of temporary databases, so `TEMP`
+  needs room; two heavy tests (a 500 MiB listing and a 400,000-message memory check) run only with
+  `WA_HEAVY_TESTS=1`.
 - `internal/private`: also `CheckFile` and file identities, for the database and its sidecars.
-- `.github/workflows/ci.yml`: one `check` job (gofmt, go vet, five cross-builds) and `go test` on Linux, plus
-  Windows and macOS for pull requests and `main`.
+- `.github/workflows/ci.yml`: one `check` job (gofmt, go vet, five cross-builds) and `go test` on Linux, Windows and
+  macOS for every push and pull request (the Windows job keeps its temporary directory on the `D:` drive, which is
+  about 12 times faster than the runner's default). A nightly `heavy` job on Linux runs the heavy store tests when
+  `main` has changed; it can also be started by hand.
 
 Spike results are in `docs/spikes.md`.
 S1 (§8.5) is done: `sqlstore` works on `modernc.org/sqlite` with the dialect name `"sqlite"`. Nothing is
