@@ -8,6 +8,14 @@
 
 **Input**: User description: "@docs/roadmap.md 003". Roadmap specify input: "Connect whatsmeow from the shared database, pair with a terminal QR code, report status, keep the WhatsApp Web version current, and recover from logout without a restart."
 
+## Clarifications
+
+### Session 2026-11-02
+
+- Q: Should feature 003 adopt the proposed resource limits as fixed acceptance requirements? -> A: Approve the proposed limits as fixed constants; changes require explicit review. The existing retry budget and refresh interval remain unchanged.
+- Q: Should `whatsapp-mcp status` remain an offline local inspection that fails when another process owns the data directory? -> A: Yes. No network or pairing; saved credentials are labelled as unverified online, and an active owner causes a lock-holder error. Live owner queries remain outside feature 003.
+- Q: During one owner-approved pairing attempt, should replacement QR codes be displayed automatically until the attempt times out? -> A: Yes. Replacement codes rotate automatically within that attempt. Its final timeout requires Enter to start another attempt; cancellation or end-of-input exits unsuccessfully without starting another attempt.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Link a Device and Reuse Its Session (Priority: P1)
@@ -39,11 +47,13 @@ As the account owner, I can request a fresh QR after an earlier QR expires or th
 
 **Acceptance Scenarios**:
 
-1. **Given** a QR has expired during `pair`, **When** the owner requests another attempt in that interactive command, **Then** a new QR is displayed without a process restart and the expired QR is no longer available.
+1. **Given** a pairing attempt has reached its final timeout during `pair`, **When** the owner presses Enter to retry in that interactive command, **Then** a new attempt produces a fresh QR without a process restart and the expired QR is no longer available.
 2. **Given** a running session receives a logout event, **When** its in-process status snapshot is inspected, **Then** connected and logged-in are false and no previous QR is available; logout alone does not open a new pairing window.
 3. **Given** that logged-out process, **When** a new owner-approved pairing request is made through the connection boundary, **Then** fresh pairing can complete in the same process while existing conversation data is preserved.
 4. **Given** pairing is already in progress, **When** concurrent requests ask for a QR, **Then** they share the current unexpired attempt rather than starting competing connections.
 5. **Given** an old attempt completes after it was cancelled or superseded, **When** its delayed events arrive, **Then** they cannot replace the current QR or incorrectly mark the new session as connected.
+6. **Given** an active owner-approved attempt, **When** WhatsApp supplies a replacement QR, **Then** it replaces the previous code automatically without another approval and only the current unexpired code is available. Expiry of one code alone does not authorize starting another attempt.
+7. **Given** the retry prompt after an attempt's final timeout, **When** the owner cancels or input ends, **Then** `pair` exits unsuccessfully after orderly shutdown and starts no further attempt.
 
 ---
 
@@ -85,6 +95,7 @@ As an operator, I can keep a connection running while the application refreshes 
 - A network disconnect leaves saved login state intact, marks connected false and does not generate a QR. Ordinary network reconnection remains the protocol client's responsibility as in the reference behaviour, stops on shutdown and cannot bypass terminal logout or the 405 budget. Planning must document its resource limits under the security profile below.
 - A saved device identifier is not proof that WhatsApp still accepts the device. Live connection failure must not be presented as a successful login verification.
 - Expiry, successful connection, logout and cancellation racing each other must leave one consistent status snapshot and no stale pairing material.
+- A code's expiry is distinct from the pairing attempt's final timeout. An expired code is cleared immediately; the same approved attempt may supply a replacement, but a terminal timeout requires a new explicit request. End-of-input at the retry prompt is failure, not authorization to retry.
 - Cancelling during the five-second retry wait or version discovery prevents subsequent connection attempts.
 - Version discovery can stall, redirect unexpectedly, return oversized content, omit its revision, or return an invalid revision. These cases preserve the prior usable version and do not consume unlimited resources.
 - An empty or malformed QR event cannot be rendered or retained as a valid QR. Untrusted diagnostic text containing terminal controls cannot execute terminal actions.
@@ -96,12 +107,12 @@ As an operator, I can keep a connection running while the application refreshes 
 ### Functional Requirements
 
 - **FR-001**: Connection-owning commands MUST use the single device session in the existing shared data directory, after taking its exclusive lock and validating storage. They MUST NOT introduce another device database or import an earlier deployment.
-- **FR-002**: `pair` MUST support QR-only interactive linking, display each current QR in the terminal, report success only after confirmed connection and saved credentials, and exit successfully after quiescing the connection. It MUST allow an explicit retry in the same process after QR expiry; cancellation and unrecoverable errors MUST exit unsuccessfully with a useful diagnostic.
+- **FR-002**: `pair` MUST support QR-only interactive linking, display each current QR in the terminal, report success only after confirmed connection and saved credentials, and exit successfully after quiescing the connection. During one owner-approved attempt, replacement codes MUST be displayed automatically while invalidating the previous code. After the attempt's final timeout, it MUST prompt for Enter to start a new attempt in the same process. Cancellation, end-of-input at that prompt and unrecoverable errors MUST exit unsuccessfully with a useful diagnostic and MUST NOT start another attempt.
 - **FR-003**: A valid saved session MUST be reused without starting QR pairing. Connection failure alone MUST NOT erase that session or silently replace it with a new device.
 - **FR-004**: The running connection owner MUST maintain a coherent status snapshot with `connected`, `logged_in`, `pairing_required` and `wa_version`. Confirmed connection sets connected and logged-in true and clears QR material. Disconnect clears only connected; confirmed logout clears connected and logged-in and invalidates pairing material.
 - **FR-005**: `pairing_required` MUST retain the reference meaning: true only when not logged in and an unexpired QR is available. An expired QR or logged-out session without a new pairing request MUST report false. A returned QR MUST represent the current pairing attempt only.
 - **FR-006**: A new explicit pairing request after timeout or confirmed logout MUST work within the existing owner process, without deleting conversation data, reusing revoked credentials or requiring a process restart. Logout MUST NOT itself authorize a new pairing window.
-- **FR-007**: Concurrent pairing requests MUST share one active attempt. Requests during shutdown MUST be rejected. Events from cancelled, expired or superseded attempts MUST NOT mutate current pairing or login state.
+- **FR-007**: Concurrent pairing requests MUST share one active attempt, including while its current code is expired and awaiting replacement; they MUST NOT silently start another attempt. Requests during shutdown MUST be rejected. Events from cancelled, timed-out or superseded attempts MUST NOT mutate current pairing or login state. Expiry of an individual code invalidates that code, not its still-active attempt.
 - **FR-008**: `status` MUST print the four status fields and exit without connecting, fetching a version, generating a QR, migrating storage or altering saved account state. Missing storage MUST be reported as an unpaired local snapshot without creating artifacts. Existing storage inspection MUST respect the exclusive owner lock and private-storage checks; corrupt, unsupported, unsafe or locked storage MUST cause a clear failure.
 - **FR-009**: Standalone `status` MUST distinguish local saved-session presence from live authentication: connected is false, logged-in reflects saved device identity, pairing-required is false, and the output warns that credentials have not been verified online. Its version is the locally available bundled version, explicitly labelled as not refreshed. It MUST NOT query or imply live knowledge of a running daemon.
 - **FR-010**: Connection startup MUST attempt to discover the current WhatsApp Web version before connecting and MUST refresh it every six hours while running. Successful refresh applies to subsequent connections only; failure retains the last usable version or the bundled fallback and emits a warning.
@@ -115,7 +126,7 @@ As an operator, I can keep a connection running while the application refreshes 
 
 - **Device Session**: The one saved linked-device identity and credentials for the selected data directory; may exist locally while offline or be revoked by the phone.
 - **Connection Status**: A consistent snapshot of connection, login, active-pairing availability and selected WhatsApp Web version, distinguished from the standalone offline snapshot.
-- **Pairing Attempt**: A single owner-requested linking window, with current QR, expiry and outcome; terminal states invalidate its QR and delayed events.
+- **Pairing Attempt**: A single owner-requested linking window that may supply multiple replacement codes, retaining only the current code and its expiry. A code's expiry does not end the attempt; final timeout, cancellation, logout or success ends it and invalidates its QR and delayed events.
 - **Version Selection**: The bundled fallback and the latest successfully discovered WhatsApp Web version, used on the next connection.
 - **Recovery Budget**: Up to three delayed outdated-client retries since the last confirmed connection; distinct from pairing requests and ordinary network recovery.
 
@@ -135,11 +146,11 @@ As an operator, I can keep a connection running while the application refreshes 
 ## Assumptions
 
 - Feature 002 is the storage foundation. Its existing permissions, migrations, lock behaviour and data-directory rules remain binding; this feature extends lifecycle ownership rather than redesigning storage.
-- `status` is an offline local inspection because feature 009 has not yet provided a daemon query path. It may take the existing lock for safe inspection, but does not create a lock file for absent storage. It is not a health probe for another process.
+- The owner confirmed `status` as an offline local inspection for feature 003, not a health probe for another process. It may take the existing lock for safe inspection, but does not create a lock file for absent storage. It fails with a lock-holder error when another process owns the directory; live owner queries remain outside this feature.
 - `pair` ends after successful linking. Same-process logout recovery is a capability of a long-running connection owner, tested with simulated requests here and exposed through the later pairing tool in feature 005. Running `pair` beside an existing owner still fails on the lock; no implicit proxy is introduced.
-- The terminal `pair` invocation is the owner's authorization to start one pairing window. After expiry another attempt requires an explicit interactive retry. Future MCP authorization policy is not inferred from tool arguments or authentication alone.
+- The terminal `pair` invocation is the owner's authorization to start one pairing attempt, including automatically supplied replacement codes within it. After its final timeout, Enter explicitly authorizes another attempt; cancellation or end-of-input exits unsuccessfully. Future MCP authorization policy is not inferred from tool arguments or authentication alone.
 - The phone, WhatsApp service and network may delay or refuse linking. No fixed end-to-end pairing duration or guarantee of upstream availability is promised.
-- The bounded acceptance profile below is a proposed conservative default for design review, not a claim that the owner has already approved new thresholds. No new configuration knobs are required by this specification.
+- The bounded acceptance profile below is owner-approved as fixed constants, not configurable settings. Any incompatibility discovered during planning must be raised for explicit review before changing those limits.
 
 ## Scope and References
 
@@ -157,7 +168,7 @@ Assets are device credentials and identities, shared storage and its sidecars, t
 
 ### Security Requirements
 
-- **SEC-001**: QR material MUST remain transient, available only in the active owner-approved attempt, and be cleared on expiry, cancellation, success or logout. QR payloads and session secrets MUST NOT appear in logs, errors, ordinary status output, temporary files or verification evidence, including at debug level. Deliberate terminal QR display is the sole human-display exception in this feature.
+- **SEC-001**: QR material MUST remain transient and available only in the active owner-approved attempt. Each code MUST be cleared on its expiry or replacement; all pairing material MUST be cleared on the attempt's final timeout, cancellation, success or logout. QR payloads and session secrets MUST NOT appear in logs, errors, ordinary status output, temporary files or verification evidence, including at debug level. Deliberate terminal QR display is the sole human-display exception in this feature.
 - **SEC-002**: Pairing MUST only begin on explicit owner request, not on status reads, startup without credentials, network disconnection or unsolicited events. This feature MUST NOT expose an unauthenticated listener or a remotely callable pairing endpoint.
 - **SEC-003**: Existing private-file and handle-identity protections MUST remain effective for client-created device data and sidecars. Unsafe storage MUST fail before account connection or pairing. No revoked-session cleanup may delete chats, messages or unrelated files. Private storage is not encryption; host and backup encryption remain operator responsibilities.
 - **SEC-004**: Version discovery MUST validate a secure upstream response, reject invalid certificates and unexpected redirects, consume bounded time and bytes, and accept only a well-formed supported version. Rejected discovery MUST preserve the prior version, expose no credentials, and never redirect account credentials to another service.
@@ -166,9 +177,9 @@ Assets are device credentials and identities, shared storage and its sidecars, t
 - **SEC-007**: Automated tests MUST use synthetic credentials, simulated events and controlled version responses, never real account data or live account connections. Real-account verification MUST obtain the user's explicit permission separately for each account-affecting step and record changes and cleanup without secrets.
 - **SEC-008**: Dependencies MUST preserve the existing exact-version, module-integrity, reachable-vulnerability and five-platform build rules. No connection or QR dependency may require a C toolchain.
 
-### Proposed Bounded Acceptance Profile
+### Bounded Acceptance Profile
 
-These limits concern application-owned discovery and lifecycle work; they do not claim to bound all resources internal to the WhatsApp service or its protocol library. Planning must enumerate the library's relevant limits and any remaining exposure before implementation is approved.
+These owner-approved fixed limits concern application-owned discovery and lifecycle work; they do not claim to bound all resources internal to the WhatsApp service or its protocol library. Planning must enumerate the library's relevant limits and any remaining exposure before implementation is approved. Changes to this profile require explicit review rather than silent adjustment during implementation.
 
 | Resource | Required bound and failure behaviour |
 | --- | --- |
