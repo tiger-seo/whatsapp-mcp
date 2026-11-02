@@ -15,6 +15,8 @@
 - Q: Should feature 003 adopt the proposed resource limits as fixed acceptance requirements? -> A: Approve the proposed limits as fixed constants; changes require explicit review. The existing retry budget and refresh interval remain unchanged.
 - Q: Should `whatsapp-mcp status` remain an offline local inspection that fails when another process owns the data directory? -> A: Yes. No network or pairing; saved credentials are labelled as unverified online, and an active owner causes a lock-holder error. Live owner queries remain outside feature 003.
 - Q: During one owner-approved pairing attempt, should replacement QR codes be displayed automatically until the attempt times out? -> A: Yes. Replacement codes rotate automatically within that attempt. Its final timeout requires Enter to start another attempt; cancellation or end-of-input exits unsuccessfully without starting another attempt.
+- Q: How should the upstream receive-resource gaps be handled for feature 003? -> A: Use temporary exception E003-RX-01 in verification.md, owner tiger-seo, expiry 2026-12-02, with earlier reassessment before public release/broader deployment and on an upstream fix or resource incident. Application limits, device-store safeguards and other security requirements remain mandatory; no fork or protocol patch is authorized.
+- Q: Should device calls reuse the approved store budgets and persist repair needs across restart? -> A: Yes. Add one embedded migration for bounded collection-level repair markers and bounded full-resync through the existing API after an authorized connection. Retain markers on failure; do not claim whole-sync rollback or delete chats, credentials or session keys.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -54,6 +56,7 @@ As the account owner, I can request a fresh QR after an earlier QR expires or th
 5. **Given** an old attempt completes after it was cancelled or superseded, **When** its delayed events arrive, **Then** they cannot replace the current QR or incorrectly mark the new session as connected.
 6. **Given** an active owner-approved attempt, **When** WhatsApp supplies a replacement QR, **Then** it replaces the previous code automatically without another approval and only the current unexpired code is available. Expiry of one code alone does not authorize starting another attempt.
 7. **Given** the retry prompt after an attempt's final timeout, **When** the owner cancels or input ends, **Then** `pair` exits unsuccessfully after orderly shutdown and starts no further attempt.
+8. **Given** an interrupted app-state/contact sync with a durable repair indication, **When** the owner restarts and authorizes the connection, **Then** bounded recovery preserves chats/credentials/session keys, clears only successfully repaired state, and retains the indication after failed or superseded recovery rather than silently accepting stale state.
 
 ---
 
@@ -67,7 +70,7 @@ As an operator, I can run `whatsapp-mcp status` to inspect whether a local sessi
 
 **Acceptance Scenarios**:
 
-1. **Given** no data directory or session exists, **When** `status` runs, **Then** it reports not connected, not logged in, pairing-required false and the bundled version labelled as not refreshed, exits successfully, and creates no data directory, database or lock file.
+1. **Given** no data directory or database/sidecar artifacts exist, **When** `status` runs, **Then** it reports not connected, not logged in, pairing-required false and the bundled version labelled as not refreshed, exits successfully, and creates no data directory, database or lock file; an existing held lock still causes the holder error even before its owner creates the database.
 2. **Given** a saved session and no running owner, **When** `status` runs, **Then** it reports a local snapshot with connected false, logged-in true based on saved credentials, pairing-required false, and the bundled version labelled as not refreshed; it explicitly says the saved session has not been verified with WhatsApp.
 3. **Given** another process owns the data directory, **When** `status` runs, **Then** it exits with a clear locked-data-directory error naming the holder rather than reading concurrently or claiming to know that process's live connection state.
 4. **Given** unsafe, corrupt or unsupported existing storage, **When** `status` runs, **Then** it reports an actionable error without repairing, creating or migrating that storage.
@@ -121,6 +124,7 @@ As an operator, I can keep a connection running while the application refreshes 
 - **FR-013**: In this feature, the existing `stdio` and `serve` command shells MUST start the embedded connection owner, reuse a saved session or retain recoverable unpaired status when none exists, and remain running until cancellation. They MUST NOT print terminal QRs or automatically start pairing without an explicit pairing request. Their transport/tool implementations remain in features 005 and 009; these shells MUST NOT expose tools or a network listener here.
 - **FR-014**: Shutdown MUST stop version refresh, pairing, reconnect work, event handling and all client-originated device writes before closing shared storage, then release the lock. It MUST not report clean shutdown or release ownership while those writes can still occur.
 - **FR-015**: WhatsApp client and device-store diagnostics MUST use the existing unified, level-controlled logger. All logs and any human pairing output in stdio mode MUST stay off stdout. No transport behaviour introduced by this feature may consume or contaminate protocol stdout.
+- **FR-016**: Device operations MUST share the approved store admission, deadline, input/output and disk policy. Before changing app-state sync progress or a bulk contact snapshot, the owner MUST durably record the affected collection's repair need. An interrupted/failed sync MUST retain that need across restart. After an explicitly authorized connection, bounded re-synchronization MAY repair only the affected protocol metadata/contact snapshot; clear the indication only after complete verified success. Failure MUST remain visible and retryable without automatic unpairing, deleting chats/credentials/session keys, silently truncating data or claiming rollback of earlier committed operations.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -142,6 +146,7 @@ As an operator, I can keep a connection running while the application refreshes 
 - **SC-006**: Captured diagnostics at every supported log level contain zero QR payloads or session credentials; stdio stdout contains zero human-readable pairing or log output.
 - **SC-007**: The owner can follow the documented manual journey of fresh pairing, local status, restart without another scan, phone logout, and same-process re-pairing. Each account-affecting step has separate recorded permission and a redacted result; unperformed checks are reported as unverified.
 - **SC-008**: Offline substitute tests cover every connection-boundary capability in FR-012 without a real account. Simulated command tests cover both `stdio` and `serve`, with and without saved sessions, and observe zero exposed tools, listeners or unsolicited QR attempts in this feature.
+- **SC-009**: Every scripted interruption between app-state version, MAC and contact writes leaves a durable repair indication; restart observes it, success clears only the repaired indication, and failed/interleaved recovery retains it. Tests show zero deletion of chats, credentials or session keys and no unbounded retry loop.
 
 ## Assumptions
 
@@ -151,6 +156,7 @@ As an operator, I can keep a connection running while the application refreshes 
 - The terminal `pair` invocation is the owner's authorization to start one pairing attempt, including automatically supplied replacement codes within it. After its final timeout, Enter explicitly authorizes another attempt; cancellation or end-of-input exits unsuccessfully. Future MCP authorization policy is not inferred from tool arguments or authentication alone.
 - The phone, WhatsApp service and network may delay or refuse linking. No fixed end-to-end pairing duration or guarantee of upstream availability is promised.
 - The bounded acceptance profile below is owner-approved as fixed constants, not configurable settings. Any incompatibility discovered during planning must be raised for explicit review before changing those limits.
+- The owner approved reusing the existing store budgets on device calls and adding an embedded repair-metadata migration. Schema/transport safeguards are mandatory and outside the receive exception; repair metadata does not imply message ingest or a new account-management interface.
 
 ## Scope and References
 
@@ -202,7 +208,7 @@ These owner-approved fixed limits concern application-owned discovery and lifecy
 | F05 - filesystem containment | Device-store paths retain 002's controls under SEC-003; outbound paths and cache namespace/cleanup remain in 007/008. |
 | F06 - media processing | No media parser/converter enabled; defer to 007/008. |
 | F07/F08 - webhook destination/replay | No webhook enabled; defer to 010. |
-| F09 - resource exhaustion | SEC-004/005 and the bounded profile cover this feature's discovery/pairing/retry work. Ingest bounds belong to 004, tool bounds to 005-006, media bounds to 007-008, transport bounds to 009 and webhook bounds to 010. |
+| F09 - resource exhaustion | SEC-004/005 and the bounded profile cover discovery/pairing/retry work. E003-RX-01 in verification.md temporarily accepts only documented upstream receive-resource gaps: owner tiger-seo, expiry 2026-12-02, compensating controls and earlier-review triggers. Device/application-owned controls are not excepted and F09 is not closed. Follow-up: docs/backlog/003-whatsmeow-receive-resource-bounds.md. Ingest bounds belong to 004, tool bounds to 005-006, media bounds to 007-008, transport bounds to 009 and webhook bounds to 010. |
 | F10 - input and output validation | SEC-004/005/006 cover version, QR and terminal input boundaries; message/tool/media validation remains with 004-008 and HTTP validation with 009. |
 | F11 - sensitive logs and audit | SEC-001/006 cover lifecycle events and redaction here. Durable audit collection, protected retention and operator review guidance remain in 011; this feature does not claim a complete security audit trail. |
 | F12 - retention/privacy | No QR persistence or transcript evidence under SEC-001. Message/client data flows remain with 004-006; media/webhook flows with 008/010; full retention and decommissioning guidance with 011, extending existing storage operations guidance. |

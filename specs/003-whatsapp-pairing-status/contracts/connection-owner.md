@@ -1,0 +1,75 @@
+# Contract: Connection Owner and Offline Substitutes
+
+**Scope**: Internal Go boundary for feature 003 and later adapters. No MCP tool, HTTP endpoint or new CLI command is exposed here. Use pinned WhatsApp domain/protobuf types where appropriate; this document specifies obligations without complete implementation bodies.
+
+## Public Capability Surface
+
+| Capability | Contract |
+| --- | --- |
+| Lifecycle | Start(ctx) creates the one owner and selects a version; reconnect an existing saved identity, otherwise remain unpaired without Connect/QR until an explicit request. BeginStop/Done distinguish stop requested from quiescence completed. |
+| Status | Snapshot() returns a copied coherent four-field status; no I/O or pairing side effect. |
+| Pairing | RequestPairing(ctx) explicitly authorizes a window or shares an existing one; return copied current-code/state, not the raw upstream channel. CancelPairing is explicit. Already-paired, pending, expired/failed and stopping outcomes are distinguishable. |
+| Events | Subscribe/register through a narrow owner interface; current epoch is checked before mutation and stale callbacks are denied. No raw client handle is handed to consumers. |
+| Health | Internal device-data readiness/recovery-pending/fault state, separate from login fields. Later contact-dependent tools must check it; no extra login-schema field is invented. |
+| Future services | Narrow Sender, Uploader, Downloader, ContactLookup and GroupLookup interfaces. Fake implements all with in-memory responses. Real tool routing/sends/media remain disabled in 003; unsupported calls fail explicitly. |
+
+Mirror SendMessage(ctx,JID,*Message), Upload(ctx,bytes,MediaType), GetUserInfo(ctx,[]JID) and GetGroupInfo(ctx,JID) through narrow subsets of the pin, not the whole client. Future download must support persisted metadata rather than assume feature 002 stored an original full message. Types/signatures are compile-checked against the pin during implementation; changing the pin requires re-audit. Fake results/fixtures must not alias mutable state across calls or contact a network.
+
+## Protocol Adapter and State
+
+- Construct from the locked/open shared store; load/wrap device before NewClient. No second database or raw storage outside internal/store.
+- Set options and log bridge before Connect. EnableAutoReconnect=true, InitialAutoReconnect=false, DisableLoginAutoReconnect=true. Lifetime cancellation and expected-disconnect are the primary terminal brakes; AutoReconnectHook is a post-error supplementary brake.
+- One explicit connection attempt in flight. Start the 30-second watchdog independently of the connection lifetime; disarm on valid initial QR or Connected. On timeout flag termination, cancel first, then Disconnect and drain. A successful connection must survive the old watchdog deadline.
+- Forward 515 to serialized manual login reconnect and 405 to one coalesced retry controller; keep ordinary pinned backoff. Reset outdated budget only on current Connected, not refresh success or a stale event.
+- GetQRChannel occurs before Connect; one dedicated consumer reads it promptly for the whole attempt. Do not stop draining when one requester cancels. Window lifetime belongs to owner approval/upstream terminal state, not a returned request context.
+- Before a new logical window, retire/drain and replace the old client, then reload saved identity so late durable pairing is reused rather than overwritten. Untagged library events cannot be safely relabelled by installing a new callback on the same stale client. A recoverable 405 may refresh/reconnect inside a still-approved logical window, but a final timeout/cancel cannot automatically open another one.
+- PairSuccess clears QR and records durable identity; command success still needs Connected. On logout clear status immediately and schedule retirement outside event-handler locks. Remove/drain old access and persist revocation before a fresh device can be constructed.
+- Do not remove identity for ordinary disconnect, invalid version response or failed retry. If revocation cleanup cannot be persisted, fail stopped/retain ownership rather than reuse known-revoked state or pretend re-pair succeeded.
+
+## Versions and Discovery
+
+The provider exposes immutable bundled/selected version values and one shared in-flight refresh. A waiting caller's cancellation does not create a parallel request or silently cancel another caller's owner-managed refresh. Owner stop cancels the actual request.
+
+Callback requirements: clone fresh default device payload; snapshot candidate once; patch only AppVersion and registration BuildHash, leaving keys and identifiers intact. No SetWAVersion/global mutation, locks acquired under socketLock, network or SQL. A refresh may update next-handshake candidate while a socket stays connected. The bundled offline-status version remains available without provider startup.
+
+Discovery requires fixed secure origin, certificate verification, redirects rejected, 15 seconds and at most 1 MiB consumed application body. Reject advertised oversize before reads and unknown-length responses that exhaust the budget without completion; never accept a truncated revision prefix. Preserve the prior candidate, emit safe category-only warning. Accept decimal revision representable by uint32, including zero, with fixed pinned major/minor. No credentials, response body or arbitrary upstream text in error output.
+
+## Device Store API and Admission
+
+Proposed Store additions live in internal/store:
+
+| API | Obligation |
+| --- | --- |
+| Inspect(ctx,dataDir) | Read-only committed-view snapshot of saved identity; no writable Open, upgrades, migrations or new device. Caller owns present storage; missing-artifact path does no database read. |
+| LoadDevice(ctx) | Load/create local device through shared admission and disk readiness, attach one generation barrier before return, and return only guarded device plus barrier. Replace raw Device() container exposure; no second live session until retirement. Wrapper construction is package-private and reused after first Save. |
+| DeviceBarrier.Retire(ctx), Done | Reject new old-generation access, drain admitted work; timeout cannot imply Done. Does not close the shared store for future pairing. |
+| Quiesce(ctx), Quiesced | Permanently close shared admission, cancel/drain using existing profile. Completion signal means zero active operations, not merely grace elapsed. |
+| Close(ctx) | Return not-quiescent without closing pools while active; set closed only after true drain/pool close. Retry/finalize after completion with live cleanup context. |
+| PendingRepairs / BeginRepair / CompleteRepair | At most five known collections for the owned device; bounded validated rows and ticket-fenced clear as in data-model.md. No external repair endpoint. |
+| Controlled revoked-device removal | After old-client drain, remove only the confirmed revoked local device through admitted maintenance; never application chat/message tables or a phone-side unlink. |
+
+Store retains the same dbutil.Database supplied to NewWithWrappedDB. Raw vendor delegates and custom contact/LID operations preserve its transaction key. DoDecryptionTxn owns one lease; nested compatible operations preserve values/deadline/cancellation without re-admission or another writer. Reject incompatible nested bulk/marker work before mutation rather than deadlock. Do not embed raw interfaces in a way that silently promotes a future unguarded method.
+
+All guarded calls validate before their own writes, use shared admission/deadline/disk classification and return safe errors. No whole-sync rollback is promised: later policy errors can follow earlier sibling commits. Existing message-count caps do not silently truncate address books; aggregate typed input and bounded SQL batches govern bulk contacts. Device GetAllContacts/GetAllAppStateSyncKeys are explicitly unsupported/resource-limited in 003; later application tools use bounded store queries. Use a cache-less MigratePNToLID implementation, preserving its transactional session-migration semantics without raw SQLStore.migratedPNSessionsCache. Do not classify a store-resident cache as excepted receive work merely because traffic populates it.
+
+## Durable Recovery Protocol
+
+1. Commit a dirty marker before each protected version/MAC/bulk-contact mutation; fail before mutation if the marker cannot be recorded. Marker input is validated before either write. Partial commit is visible and recoverable, not called corruption-free atomic whole-sync completion.
+2. Following an authorized connection, one worker reads startup/fault-pending collections and performs at most one automatic full-resync per collection per owner generation, using the existing API and ten-second context. No gate lease or SQL transaction across network I/O. App-state HTTP body/deadline use the approved reused 16-MiB/ten-second profile and reject redirects/truncated responses.
+3. Repair receives a unique ticket. Guarded writes preserve it only for that repair; unrelated writes supersede it. Record/latch guarded errors even if upstream discards the returned error.
+4. Clear only after successful full call, no guarded error, current epoch and compare-and-delete under a marker-admission fence. Late ordinary writes must either defeat the clear or establish a new marker before their mutation. Do not clear because MAC insertion returned, Connected arrived or bare AppStateSyncComplete was dispatched.
+5. Failure, timeout, clear conflict or shutdown retains marker and appropriate health state. No unlimited retry, data truncation, key deletion or automatic phone unlink. Restart can retry after fixing the cause. Normal successful updates can conservatively retain a marker for next-start verification.
+
+Gate storage-dependent later operations on startup recovery/fault health, not merely Connected. Pair success proves authentication/linking only; pending repair must not be misrepresented as completed contact sync.
+
+## Stop and Failure Contract
+
+Register owner after store, so reverse cleanup is owner -> store -> lock. Stop request rejects windows/new attempts, clears QR, cancels refresh/repair/lifetime and callback admissions, removes handler/disconnects outside callbacks, and waits generation drain. Then shared store quiesces and pools close. On ten-second notification latch unsuccessful exit and keep waiting; use fresh cleanup contexts, not the expired deadline for later steps. Never advance from not-quiescent to lock release. One completion waiter prevents close retries leaking goroutines.
+
+After quiescence, pool-close I/O errors remain unsuccessful but do not imply a still-admitted writer. Second signal/OS kill is explicitly unclean. A device mutation/repair failure during active use is surfaced and fail-stopped where necessary, not masked by an automatic reconnect. Expected stop cancellation is not an account/logout error.
+
+## Diagnostics, Exception and Tests
+
+One stderr slog bridge drops upstream format arguments at every level, including QR, keys, bodies and errors. Audit module/template treatment and preserve existing storage log contracts. Owned events use bounded reason codes and an opaque epoch, never account identifiers/QR/tickets. Emit coarse heap/goroutine samples at fixed one-minute debug cadence with no history; operator OS monitoring and a stop/reassess runbook are compensating controls, not prevention of upstream exhaustion.
+
+E003-RX-01 excepts only recorded upstream receive bounds until its expiry/trigger. Tests must prove the non-excepted fake/session/QR/version/store/repair/stop contracts, plus zero-effect rejection, stale events, nested tx rollback, first-Save rewrap, marker/late-clear races, failure between every sibling state write and cleanup with held I/O. Negative platform claims require native tests. No real-account test or protocol patch is included in automated suites.
