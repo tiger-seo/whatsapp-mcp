@@ -15,7 +15,11 @@ Use the existing whatsmeow device row, keys and session-specific/global interfac
 | phase | idle, connecting, pairing, connected, disconnected, logged_out, retiring, storage_failed, stopping or stopped. |
 | storage health | Separate from physical connection; startup repair pending, guarded-write fault and ready are internal, not extra login-tool fields. |
 
-Only confirmed logout permits revocation cleanup/new device. Ordinary disconnect preserves credentials and logged-in state. Save/storage failure cannot count as successful durable linking. Forced termination/disk failure is not described as clean recovery.
+Only confirmed logout permits revocation cleanup/replacement of a saved identity. A new unpaired client may be created after the prior window drains and a reload confirms no saved identity exists. Ordinary disconnect preserves credentials and logged-in state. Save/storage failure cannot count as successful durable linking. Forced termination/disk failure is not described as clean recovery.
+
+Guard interface fields are installed before client creation and stay stable throughout the generation. Initialized denotes interface wiring, not durable identity; ordinary pre-ready calls fail fast before gate admission/SQL until first Save succeeds, rather than exhausting slots waiting for Save. Private raw delegates may bind on that Save's validated JID without being published in device fields. Client delete requests retire the generation and return deferred cleanup rather than allowing the library to reset live fields; confirmed-revocation SQL cleanup happens after drain. Failed pairing preserves any saved identity for explicit verification rather than silently deleting it.
+
+Failed revocation persistence blocks new generations in the current owner, not safe finalization forever: on explicit stop, close/unlock only after true quiescence and exit unsuccessfully with an unresolved-state warning. Remediation/reassessment is required before restart; no promise of persisted deletion is made when storage rejected it.
 
 ## Connection Status
 
@@ -60,7 +64,7 @@ Application migration 2 adds `device_repair`; device schema 16 and chats/message
 | device_jid | Required, canonical saved device identity, at most 256 bytes; foreign key to whatsmeow_device.jid with ON DELETE CASCADE. |
 | collection | Required, exactly one of critical_block, critical_unblock_low, regular_high, regular, regular_low. |
 | revision | Required positive signed 64-bit integer; increments before each protected mutation; overflow fails without resetting live state. |
-| target_version | Nullable fixed 8-byte encoding of the protocol uint64 version; NULL means reset/unknown rather than an integer-domain truncation. |
+| target_version | Nullable fixed 8-byte big-endian encoding of the protocol uint64 version; NULL means reset/unknown rather than an integer-domain truncation. |
 | repair_ticket | Nullable fixed 16-byte non-secret uniqueness token for an owner-controlled repair; do not log it. Ordinary mutations do not inherit another repair's ticket. |
 | updated_at_ms | Required UTC Unix milliseconds, diagnostic only, never a correctness/ordering substitute for revision. |
 

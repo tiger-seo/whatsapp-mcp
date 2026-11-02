@@ -2,7 +2,7 @@
 
 **Branch**: `003-whatsapp-pairing-status` | **Date**: 2026-11-02 | **Spec**: [spec.md](spec.md)
 
-**Status**: Phase 0 research and Phase 1 design complete under approved exception E003-RX-01. No feature implementation, task regeneration or owner-judge PASS is claimed. The exception is owned by `tiger-seo`, expires at the start of `2026-12-02` UTC, and requires earlier reassessment on its recorded triggers.
+**Status**: Phase 0 research and Phase 1 design complete under approved exception E003-RX-01. Task generation is a separate subsequent stage; no feature implementation or owner-judge PASS is claimed here. The exception is owned by `tiger-seo`, expires at the start of `2026-12-02` UTC, and requires earlier reassessment on its recorded triggers.
 
 ## Summary
 
@@ -73,7 +73,9 @@ ConnectContext receives a generation lifetime, not a 30-second deadline that kil
 
 ### Device Admission and Persistence
 
-Construct and retain one dbutil.Database over the existing writer, configure it equivalently to the pinned NewWithDB, and pass it to NewWithWrappedDB. The same transaction context works in vendor delegates and cache-less ContactStore/LIDStore implementations. Replace the raw exported Device() container accessor with LoadDevice(ctx), returning only a guarded device and its retirement barrier; no production caller outside internal/store receives the raw container. Wrap Container, all 12 session stores and LIDStore before return; reattach after load and first Save initialization. Reject another loaded session until the existing barrier is retired. Existing internal tests may seed through package-private fixtures rather than preserving an unguarded compatibility accessor. Explicit method coverage and upgrade-audit tests prevent accidental raw-interface promotion.
+Construct and retain one dbutil.Database over the existing writer, configure it equivalently to the pinned NewWithDB, and pass it to NewWithWrappedDB. The same transaction context works in vendor delegates and cache-less ContactStore/LIDStore implementations. Replace exported raw Device() with LoadDevice(ctx), returning only guarded device/barrier; reject a second live session. Install stable guard fields before NewClient, never briefly publish raw stores. For a fresh device, mark interface wiring Initialized before client use (not durable-login state), bind private delegates with exported sqlstore.NewSQLStore when the first validated JID is known, and let raw PutDevice skip its initializer. Ordinary calls before save-readiness fail fast before admission/SQL; do not let them occupy all active slots waiting for the Save that needs one. Failed save never signals success. Loaded devices bind before exposure. Audit every field/method and adapt internal fixtures rather than retaining a raw compatibility accessor.
+
+Client-originated DeleteDevice must retire admission and return a typed deferred result without invoking Device.Delete's successful reset path; that path otherwise rewrites live interface/identity fields. After drain, the owner performs admitted confirmed-revocation removal through the private container. Failure blocks new generations/account work and reports unresolved cleanup, never success. On an explicit stop, still drain all work then close/unlock and exit unsuccessfully; do not hang forever after quiescence solely because deletion could not persist. Warn that saved state remains unverified and require operator remediation/reassessment before restart. A failed fresh pairing alone never erases a saved identity. Do not mutate live interface fields to reattach guards/Noop stores; see R22.
 
 All device calls share the existing store gate: 16 active/64 waiting, 5-second admission, 10-second operation context, 256-MiB disk reserve/512-MiB resume, 30-second disk-check cache. Reuse 16-MiB aggregate input, 32-MiB output, 256-byte JIDs and 1-KiB names. Account typed element overhead and guard integer overflow before copying. Do not blindly cap an entire contact snapshot to the message API's 1,000 messages; process bounded SQL chunks within the admitted aggregate budget. Refuse unused unbounded device exports (GetAllContacts/GetAllAppStateSyncKeys); future tools use existing bounded application queries. Implement cache-less session migration as well as contacts/LIDs: do not delegate MigratePNToLID to the raw SQLStore's growing migratedPNSessionsCache. Audit every store-resident cache; upstream processor/receive caches are distinct from this non-excepted device-store surface.
 
@@ -113,7 +115,7 @@ specs/003-whatsapp-pairing-status/
   verification.md
 ```
 
-`tasks.md` is deliberately absent from disk and is not recreated by planning. The old staged copy is not part of a planning commit. Requirements checklist remains local/ignored. Local source/backlog documents carry the owner decisions; portable approval is in verification.md.
+`tasks.md` is generated separately after planning from this completed design; the discarded earlier draft is not reused. Requirements checklist remains local/ignored. Local source/backlog documents carry the owner decisions; portable approval is in verification.md.
 
 ### Source Destinations for Implementation
 
@@ -134,7 +136,7 @@ internal/store/
   device_lids.go          # cache-less LID view
   repair.go               # durable marker/ticket/fence queries
   inspect.go              # read-only committed-view inspection
-  migrations/002_device_repair.sql
+  migrations/0002_device_repair.sql
 internal/walog/           # relocated shared bridge
 internal/lock/            # no-create acquisition using existing safety checks
 internal/wa/testdata/cmd/session-check/
@@ -146,9 +148,9 @@ Keep code within these existing responsibilities; no protocol fork, general fram
 
 ## Phase Outputs and Verification Strategy
 
-Phase 0: research R1-R21, baseline R17, explicit decisions R18/R21. Phase 1: data model, connection/CLI contracts and quickstart. The owner approval resolves the prior research stop; it does not resolve F09 globally or pass implementation tests.
+Phase 0: research R1-R22, baseline R17, explicit decisions R18/R21 and publication refinement R22. Phase 1: data model, connection/CLI contracts and quickstart. The owner approval resolves the prior research stop; it does not resolve F09 globally or pass implementation tests.
 
-Required later coverage: fake capabilities; QR renewal/EOF and stale epochs; first-Save reattachment and nested transactions; direct writes held through shutdown; migration 1 -> 2 and fresh startup; marker-before-write/crash/late-clear races; errors between version/MAC/contact methods and successful/failed full recovery; exact discovery consumption and payload/hash snapshots; coalesced 405/515/ordinary recovery; empty/locked/unsafe/committed-WAL offline status; secret-free logs and no stdio/listener/tool side effects. Replace CI's stub-status privacy fixture with an offline seed helper.
+Required later coverage: fake capabilities; QR renewal/EOF and stale epochs; stable first-Save guard publication/readiness, deferred deletion and nested transactions; direct writes held through shutdown; migration 1 -> 2 and fresh startup; marker-before-write/crash/late-clear races; errors between version/MAC/contact methods and successful/failed full recovery; exact discovery consumption and payload/hash snapshots; coalesced 405/515/ordinary recovery; empty/locked/unsafe/committed-WAL offline status; secret-free logs and no stdio/listener/tool side effects. Replace CI's stub-status privacy fixture with an offline seed helper.
 
 Run formatting, vet, bounded-time Go tests, module integrity, CI-pinned vulnerability/libc checks, five CGO-free cross-builds and native Windows/Linux/macOS tests. No unperformed platform control is passed. Preserve heavy-store-test opt-in. Real-account acceptance is manual, separately permissioned and redacted; no command in planning executes it. Evidence goes in verification.md, not in assertions that baseline reproduction proves a fix.
 

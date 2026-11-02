@@ -68,13 +68,28 @@ All feature implementation/acceptance tests, device failure/recovery, compensati
 | Requirements quality checklist | 16/16 still passing after approved exception/recovery amendments; quality, not implementation evidence. |
 | Read-only design coherence pass | Found one logout-state wording contradiction and one historical client-reuse ambiguity; both corrected. Other checked contracts coherent for task generation, with implementation/native/manual proof still required. Not an owner-judge verdict. |
 | Scoped whitespace check | PASS, git diff --check. |
-| User task deletion | tasks.md remains absent on disk. Existing staged copy is not adopted as a completed task breakdown and must not enter the planning commit. |
+| User task deletion at the planning checkpoint | tasks.md was absent and the discarded staged draft was excluded from the planning commit. The subsequent task-generation stage creates a fresh list from the completed design, not that old draft. |
 
 The source specification and backlog exist locally under the repository's intentionally ignored docs directory; the owner decisions were recorded there and the complete portable exception is retained above. No production Go, project dependency, real-account action or feature implementation was changed by this planning pass.
+
+## Task-generation Validation
+
+**Date**: 2026-11-02. No implementation task has run and all checkboxes remain unchecked.
+
+| Check | Result |
+| --- | --- |
+| Checklist/ID/path/phase validation | PASS: 64 unique sequential tasks, correct story labels and explicit destination paths; setup 3, foundation 18, US1 8, US2 12, US3 7, US4 8, polish 8. |
+| Parallel scheduling | 13 marked tasks in four explicit story waves plus stable-behaviour docs; shared owner/session/recovery/command edits are serialized. |
+| Planned coverage | 33/33 FR/SC/SEC identifiers have build/integration and test/evidence mappings. Mapping is not a passed-control claim. |
+| Model constraints | 28/28 table-field constraints appear verbatim in task descriptions. Target-version encoding is explicit big-endian; migration filename uses the existing four-digit loader convention. |
+| Source-backed design refinements | R22 replaces unsafe post-Save reattachment with stable pre-client guards/readiness and deferred deletion; T006/T008/T035 require runtime proof. The QR-only unarmed-passkey invariant has a real pinned-channel test in T022, not only fake-consumer coverage. These are planned controls, not executed tests. |
+| Exception | E003-RX-01 remains the same named/scoped/expiring approval; T001 rechecks it at actual implementation start. No private fork, account action or threshold change is authorized. |
+
+Validation utility: `D:\wa-003-repro-20261102-202105\validate-tasks.py`, run successfully against the generated file. The durable requirement/dependency details are in tasks.md; the temporary utility is not a CI dependency. Owner-judge design review is performed against the committed task/design set and recorded below, separately from these mechanical checks.
 
 ## Owner Reviews
 
 | Stage | Date | Commit | Verdict | Owner decision |
 | --- | --- | --- | --- | --- |
 
-No owner-judge review of the completed design/task set yet. Generate tasks after planning, commit the feature directory and obtain design review before implementation; obtain code review before a PR. Exception approval is not a design/code PASS.
+The latest design row governs implementation readiness; an absent/BLOCK row stops implementation and CONCERNS requires the owner's recorded decision. Exception approval is not a design/code PASS. Obtain code review on committed implementation/evidence before a PR; re-review covered changes as required.
