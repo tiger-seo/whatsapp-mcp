@@ -5,7 +5,7 @@
 ## Prerequisites
 
 - Go 1.27.3 and `CGO_ENABLED=0`; repository dependencies pinned/verified. Use the existing CI-pinned vulnerability checker.
-- Current design review after task generation, and valid E003-RX-01 in verification.md. Check owner/expiry/earlier triggers before proceeding; approval is not a claim of tested compensating controls.
+- Current committed design review of the aligned artifacts against constitution 2.0.0, and valid E003-RX-01 in verification.md. The historical d044f73 PASS predates this alignment. Check owner/expiry/earlier triggers before proceeding; the approved temporary deviation is not a satisfied receive bound or a claim of tested compensating controls.
 - Several GB free for ordinary store tests; on Windows prefer an owner-controlled temporary directory on D. Do not point tests at a real data directory or account.
 - Native Linux/Windows/macOS runners for claimed platform controls; a cross-build is not a native verification result.
 

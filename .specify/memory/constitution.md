@@ -55,9 +55,13 @@ or credentials.
 ### V. Secure by Default
 
 - Input from WhatsApp (messages, captions, names, media) and from MCP clients is untrusted data. It is
-  validated and bounded before use, and never treated as an instruction to the server.
+  validated before use and never treated as an instruction to the server. Its resource bounds follow
+  the next rule.
 - Every resource that input can drive has a limit: bytes read, items returned, time, concurrency and
   disk. A limit is enforced on what is actually consumed, not only on a size checked beforehand.
+  Only resource bounds on specifically identified upstream dependency receive paths may be temporarily
+  deferred through an explicitly owner-approved exception under Principle X. Application-owned and
+  device-store resource bounds remain mandatory.
 - Sensitive data (the WhatsApp session, the database, secrets, media) lives only in private
   directories and files: owner-only on Unix; on Windows an access list limited to the user, SYSTEM and
   Administrators. Paths are opened without following links and checked on the open handle. An existing
@@ -139,6 +143,25 @@ project.
 - The plan's Constitution Check fails if a capability the feature enables has an applicable High
   finding that is neither resolved nor recorded as an exception with a named owner, compensating
   controls and an expiry date. Exceptions are listed in the feature's `verification.md`.
+- Deferring a resource bound under Principle V requires the user's explicit approval of that specific
+  unmet obligation. The exception records the finding, exact dependency version, affected receive
+  paths and resources, residual exposure, deployment scope, accountable owner, compensating controls,
+  UTC expiry, earlier reassessment triggers, evidence limitations and backlog follow-up. A feature or
+  agent cannot grant this approval itself.
+- This authority defers only the identified upstream receive-resource bounds. It does not waive input
+  validation, private-file protection, application or device-store limits, shutdown safety,
+  authentication, credential protection, real-account permissions or any other constitutional MUST.
+  The existing unreachable-vulnerability exception in Principle V remains separate and unchanged.
+- Check the exception at implementation readiness, code review and release/deployment. Expiry or a
+  recorded trigger blocks the affected work, deployment or continued operation until the user records
+  a new explicit decision. Reassessment is also required before public release or broader deployment,
+  on a dependency version change, and on a relevant upstream fix or resource incident. There is no
+  automatic renewal or inheritance by another feature or workload.
+- The Constitution Check labels a permitted deferral as an approved temporary deviation, not as a
+  satisfied resource bound. The finding remains open until its resolution is verified; monitoring is
+  not an enforced limit. All non-excepted obligations still apply. This authority does not itself
+  approve, renew or expand an individual exception, replace owner reviews or permit parking findings
+  that the Development Workflow forbids parking.
 - Abuse cases are negative tests with synthetic data. They show that the rejected action has no side
   effect: nothing is written, sent or created. A platform-specific control is tested on each platform
   it claims to cover.
@@ -193,6 +216,10 @@ user from being made inside a feature.
 
 - This constitution overrides other practices. Every `/speckit-plan` includes a Constitution Check
   against Principles I–X, and any deviation is justified in the plan's Complexity Tracking table.
+- Amendments require the user's explicit approval and record the version, date, reason and affected
+  rules. A deviation justification or feature-level approval alone does not amend the constitution.
+  Compliance reviews use the current constitution; an earlier verdict does not establish compliance
+  with changed rules. Required artifact alignment and renewed reviews precede implementation.
 - Amendments use semantic versioning:
   - MAJOR: a principle is removed or redefined;
   - MINOR: a principle is added or expanded;
@@ -204,6 +231,13 @@ user from being made inside a feature.
 
 **Amendments:**
 
+- 2.0.0 (2026-11-03): Principles V/X now explicitly permit owner-approved temporary deferral of
+  identified upstream receive-resource bounds, with scoped controls, expiry and reassessment gates.
+  Application/device-store bounds and all other mandatory protections remain binding. Reason: the
+  recorded feature 003 risk acceptance did not itself authorize deviation from Principle V's
+  unconditional resource-limit requirement. This redefines that requirement rather than treating
+  monitoring or a feature exception as proof of enforcement; individual exceptions and reviews are
+  not automatically approved by this amendment.
 - 1.3.0 (2026-10-28): Development Workflow expanded so that, after 3 `BLOCK` rounds of one review stage,
   the user may park the open findings against the tasks they block, except high-severity data-loss,
   security or real-account findings. Reason: on feature 002 the design review returned `BLOCK` seven times
@@ -218,4 +252,4 @@ user from being made inside a feature.
   secret handling and supply-chain rules, replacing the Unix-only "0600" rule; Principle X added. Reason:
   the security review of 2026-10-27 and the hardening of feature 001 that followed it.
 
-**Version**: 1.3.0 | **Ratified**: 2026-10-27 | **Last Amended**: 2026-10-28
+**Version**: 2.0.0 | **Ratified**: 2026-10-27 | **Last Amended**: 2026-11-03

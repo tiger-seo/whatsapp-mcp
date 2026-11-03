@@ -2,7 +2,7 @@
 
 **Branch**: `003-whatsapp-pairing-status` | **Date**: 2026-11-02 | **Spec**: [spec.md](spec.md)
 
-**Status**: Phase 0 research and Phase 1 design complete under approved exception E003-RX-01. Task generation is a separate subsequent stage; no feature implementation or owner-judge PASS is claimed here. The exception is owned by `tiger-seo`, expires at the start of `2026-12-02` UTC, and requires earlier reassessment on its recorded triggers.
+**Status**: Phase 0 research, Phase 1 design and task generation are complete. Governance alignment on 2026-11-03 applies constitution 2.0.0 to the existing E003-RX-01 approval; its upstream receive bounds remain unmet, not passed controls. The historical design PASS at d044f73 does not cover this alignment; a fresh committed design review is required, recorded in verification.md. Implementation has not started. The exception remains owned by `tiger-seo`, expires at the start of `2026-12-02` UTC, and requires earlier reassessment on its recorded triggers.
 
 ## Summary
 
@@ -32,7 +32,7 @@ Retain the exact upstream client rather than maintaining a fork. The user explic
 
 ## Constitution Check
 
-*Initial stop*: earlier Phase 0 failed V/X because no complete upstream control or approved exception existed. The owner subsequently approved E003-RX-01 and durable device recovery. *Post-design check*: the gates below permit task generation while the exception is valid. Implementation proof and owner reviews remain later gates.
+*Historical context*: Phase 0 initially stopped for missing upstream controls. The owner subsequently approved E003-RX-01 and durable device recovery, but that risk acceptance did not itself amend Principle V. *Current authority*: constitution 2.0.0 explicitly permits the identified upstream receive-resource deferral through Principles V/X. The existing approval supplies its scope, owner, compensating controls and expiry; the amendment neither renews nor expands it. The table distinguishes that approved temporary deviation from satisfied requirements. Fresh design review and implementation proof remain separate gates.
 
 | Principle | Post-design disposition | Gate |
 | --- | --- | --- |
@@ -40,14 +40,14 @@ Retain the exact upstream client rather than maintaining a fork. The user explic
 | II. Self-contained binary | Same root module/five CGO-free targets; one justified pure-Go encoder, no external runtime. | PASS by design |
 | III. Exclusive ownership | Shared gate, per-generation retirement, committed-view status, migration 2 and truthful quiescence before pool close/lock release. | PASS by design; tests pending |
 | IV. Clean stdout | Shared argument-dropping stderr bridge; only pair may render a terminal QR; owner events omit secrets. | PASS by design; tests pending |
-| V. Secure defaults | Mandatory private-file, device, application, transport and error controls; only listed upstream receive bounds use E003-RX-01. | PASS with the scoped exception, not an upstream fix |
+| V. Secure defaults | Constitution 2.0.0 permits only the identified upstream receive-resource deferral in E003-RX-01. Private-file, device, application, transport and error controls remain mandatory. | Approved temporary deviation; upstream receive bounds remain unmet |
 | VI. Testability | Narrow fake capabilities and synthetic negative/race/SQLite/command tests; baseline probes distinguished from control evidence. | PASS by design; implementation pending |
 | VII. Predictable tools | No tools here; preserve four login-status fields and bounded future pairing boundary. | PASS for scope |
 | VIII. Real systems | No account operations in planning; manual guide requires separate permission for each connect/pair action. | PASS |
 | IX. Simplicity | No speculative flags/IPC, custom protocol stack, general repair command or total DB quota. Durable marker is necessary for the approved recovery policy. | PASS |
-| X. Per-feature security | Named approval, controls, expiry, backlog and limitations in verification.md; no broader F09 waiver or fake owner-review verdict. | PASS while E003-RX-01 is valid and controls remain implementation requirements |
+| X. Per-feature security | The existing named approval, exact pin, receive scope, controls, expiry, backlog and limitations are recorded in verification.md under constitution 2.0.0. F09 remains open; monitoring is not a limit. | Exception obligations recorded; fresh design review and control verification required |
 
-Check approval/expiry again at tasks, implementation, code review and release. Public release/broader deployment requires reassessment even before expiry; an upstream fix or resource incident also triggers it. This is a workflow gate, not an undocumented expiration timer in the binary. Future features cannot assume the exception automatically covers additional workloads. Do not claim controls passed on untested platforms.
+Check approval/expiry at implementation readiness, code review and release/deployment. Reassessment is required before public release/broader deployment, on a dependency version change, or on a relevant upstream fix/resource incident. Expiry or a trigger blocks affected work/deployment/continued operation pending a new explicit owner decision. This is a workflow gate, not an undocumented expiration timer in the binary. Future features cannot inherit the exception for additional workloads. Do not claim controls passed on untested platforms.
 
 ## Architecture and Ownership
 
@@ -119,7 +119,7 @@ specs/003-whatsapp-pairing-status/
   verification.md
 ```
 
-`tasks.md` is generated separately after planning from this completed design; the discarded earlier draft is not reused. Requirements checklist remains local/ignored. Local source/backlog documents carry the owner decisions; portable approval is in verification.md.
+`tasks.md` was generated after planning from this completed design; all 64 tasks remain unchecked and the discarded earlier draft was not reused. Requirements checklist remains local/ignored. Local source/backlog documents carry the owner decisions; portable approval and review history are in verification.md.
 
 ### Source Destinations for Implementation
 
@@ -131,6 +131,7 @@ internal/wa/
   session.go              # pinned adapter, payload callback, login/logout
   pairing.go              # one QR attempt and current-code lifecycle
   version.go              # discovery/immutable candidate
+  http.go                 # bounded discovery/app-state HTTP clients
   recovery.go             # 405, 515 and bounded durable-sync recovery
   qr.go                   # deterministic root-encoder renderer
   fake.go                 # offline substitute capabilities
@@ -158,13 +159,13 @@ Required later coverage: fake capabilities; QR renewal/EOF and stale epochs; sta
 
 Run formatting, vet, bounded-time Go tests, module integrity, CI-pinned vulnerability/libc checks, five CGO-free cross-builds and native Windows/Linux/macOS tests. No unperformed platform control is passed. Preserve heavy-store-test opt-in. Real-account acceptance is manual, separately permissioned and redacted; no command in planning executes it. Evidence goes in verification.md, not in assertions that baseline reproduction proves a fix.
 
-Next: `/speckit.tasks`, then cross-artifact analysis and the committed owner-judge design review. Do not implement before a current passing review/owner-resolved CONCERNS decision. Stop/reevaluate if the exception expires or a trigger occurs.
+Readiness workflow: task generation is complete. Re-run `/speckit-analyze` after covered artifact changes and obtain a current committed owner-judge design review against constitution 2.0.0 before `/speckit-implement`. A historical PASS does not cover the governance alignment; CONCERNS requires an explicit owner decision. Stop/reevaluate if the exception expires or a trigger occurs.
 
 ## Complexity Tracking
 
 | Deviation | Why accepted / simpler alternative rejected | Control and owner |
 | --- | --- | --- |
-| V/X: pinned receive expansion/retained work lacks complete hard bounds | User selected temporary acceptance after source research and 21 synthetic baseline measurements; an upgrade alone does not fix it and maintaining a broad fork is not automatically proportionate. | E003-RX-01, tiger-seo, expires 2026-12-02; mandatory controls, earlier review and backlog; not F09 closure. |
+| V/X: approved temporary deviation for pinned upstream receive expansion/retained work | Constitution 2.0.0 expressly authorizes the narrowly scoped deferral; the user selected temporary acceptance after source research and 21 synthetic baseline measurements. An upgrade alone does not fix it; this is not proof of enforced receive bounds. | Existing E003-RX-01 approval, tiger-seo, expires 2026-12-02; unchanged pin/scope/controls, earlier review and backlog; not F09 closure or automatic approval of this revised design. |
 | Added durable repair metadata | User chose restart-safe recovery over accepting indefinitely stale partial app-state/contact sync. Existing sibling methods have no whole-sync transaction seam. | One bounded migration, mark-before-write, ticket-fenced clear, bounded full resync and failure evidence; no key/chat deletion. |
 
 The inherited feature 002 sidecar-creation deviation remains in its plan. It does not enlarge this exception. No other constitution deviation or new account action is authorized.

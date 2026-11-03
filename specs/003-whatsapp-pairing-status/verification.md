@@ -1,8 +1,8 @@
 # Verification: WhatsApp Connection, Pairing and Status
 
-**Date**: 2026-11-02
+**Date**: 2026-11-03
 **Feature**: `003-whatsapp-pairing-status`
-**Implementation status**: Not implemented. Design review PASS is recorded below; no feature/control acceptance or code-review PASS is claimed. Baseline probes are separate evidence.
+**Implementation status**: Not implemented. Historical design reviews are retained below; the constitution 2.0.0 alignment requires a fresh committed design review. The current verdict is recorded in Owner Reviews, not inferred from an earlier PASS. No feature/control acceptance or code-review PASS is claimed. Baseline probes are separate evidence.
 
 ## Security Exceptions
 
@@ -10,7 +10,8 @@
 
 | Field | Approved policy |
 | --- | --- |
-| Finding | F09, limited to upstream receive expansion and retained receive-work resource bounds. Principles V/X use the exception mechanism; the finding is not closed. |
+| Finding | F09, limited to upstream receive expansion and retained receive-work resource bounds. Approved temporary deviation, not a satisfied bound or closed finding. |
+| Constitutional authority | Constitution 2.0.0, Principles V/X, explicitly authorizes only identified upstream receive-resource deferrals. The existing 2026-11-02 approval below is unchanged; the amendment does not approve, renew or expand this exception or replace design review. |
 | Approved by / accountable owner | `tiger-seo`, explicitly confirmed by the user on 2026-11-02, including expiry and earlier-review triggers. |
 | Approved direction | Retain the exact current dependency for feature 003; no private fork, protocol patch, automatic upgrade or binding new upstream resource thresholds are authorized. |
 | Dependency | `go.mau.fi/whatsmeow v0.0.0-20261027104441-1eec1136a50b`, commit `1eec1136a50b2ef148b05f1819e77a9d989e0457`. A pin change requires reassessment, not automatic inheritance. |
@@ -38,6 +39,25 @@ These are binding design/implementation obligations, not controls already proved
 | Review discipline | Check approval at planning, implementation readiness, code review and release/deployment; block continuation on expiry/earlier trigger pending a new explicit decision. Never auto-renew. | Approval recorded; later workflow checks pending. |
 
 F09 remains open during this exception. Keep the original threat-model review unchanged. The approval is not an owner-judge verdict.
+
+## Governance Alignment - 2026-11-03
+
+Constitution 2.0.0 supplies explicit authority for the recorded resource-bound deviation; the earlier risk acceptance alone did not amend Principle V. The exception owner, exact dependency, receive paths/resources, residual exposure, local deployment scope, controls, expiry and backlog are unchanged. Dependency changes, broader deployment, relevant upstream fixes/incidents and expiry still require reassessment; no renewal or expanded workload is approved here.
+
+The plan now labels the unmet bounds as an approved temporary deviation and describes task generation as complete. Research, spec, task readiness and quickstart references use the current authority without changing functional requirements, the fixed acceptance profile or any task checkbox. The historical PASS at d044f73 does not cover these changed artifacts. Cross-artifact reanalysis and a new committed design review are required before implementation; neither is claimed by this alignment text.
+
+### Alignment Validation
+
+| Check, 2026-11-03 | Result | Limitation |
+| --- | --- | --- |
+| `bash .specify/scripts/bash/setup-plan.sh --json` | PASS; existing plan retained, feature 003 resolved. | No design regeneration or implementation. |
+| `bash .specify/scripts/bash/check-prerequisites.sh --json --require-spec --require-tasks --include-tasks` | PASS; required feature artifacts present. | Presence is not behavioural verification. |
+| Cross-artifact reanalysis against constitution 2.0.0 | No remaining findings: 0 critical issues, ambiguities, duplications or unmapped tasks. The prior authority conflict, stale status wording and missing HTTP source entry are addressed. | Read-only document analysis, not an owner-judge verdict or runtime control evidence. |
+| Requirement/task inventory (`rg -c` on declarations and task lines) | 33 identifiers: 16 FR, 9 SC and 8 SEC; 64 unchecked tasks and 13 parallel markers. Planned core coverage 25/25 and security coverage 8/8. | Task bodies/coverage mappings remain unchanged; no feature test has run. |
+| Exception boundary comparison | Original owner, pin, receive scope, deployment scope, controls, expiry and reassessment obligations retained. | No renewal, new workload approval or claim of a new upstream-fix/incident investigation; T001 must recheck at actual start. |
+| `git diff --check -- .specify/memory/constitution.md specs/003-whatsapp-pairing-status` | PASS. | Formatting check only. |
+
+Reanalysis is complete. The fresh owner-judge verdict must identify the committed alignment and is recorded in Owner Reviews; until then the historical PASS remains stale for this changed design. No code, dependency, account operation, native test or feature-control acceptance was performed by this alignment workflow.
 
 ## Existing Baseline Evidence
 
@@ -84,7 +104,7 @@ The source specification and backlog exist locally under the repository's intent
 | Model constraints | 32/32 table-field constraints appear verbatim in task descriptions, including the four repair-coordinator constraints added after review. Target-version encoding is explicit big-endian; migration filename uses the existing four-digit loader convention. |
 | Source-backed design refinements | R22 replaces unsafe post-Save reattachment with stable pre-client guards/readiness and deferred deletion; T006/T008/T035 require runtime proof. The QR-only unarmed-passkey invariant has a real pinned-channel test in T022, not only fake-consumer coverage. These are planned controls, not executed tests. |
 | Exception | E003-RX-01 remains the same named/scoped/expiring approval; T001 rechecks it at actual implementation start. No private fork, account action or threshold change is authorized. |
-| Committed design review | PASS at d044f73 after correcting two prior CONCERNS findings; implementation/native/manual tests remain planned. |
+| Historical committed design review | PASS at d044f73 after correcting two prior CONCERNS findings. It predates constitution 2.0.0 and the current alignment; use a fresh review for implementation readiness. Implementation/native/manual tests remain planned. |
 
 Validation utility: `D:\wa-003-repro-20261102-202105\validate-tasks.py`, run successfully against the generated file. The durable requirement/dependency details are in tasks.md; the temporary utility is not a CI dependency. Owner-judge design review is performed against the committed task/design set and recorded below, separately from these mechanical checks.
 
@@ -96,7 +116,7 @@ Validation utility: `D:\wa-003-repro-20261102-202105\validate-tasks.py`, run suc
 | design | 2026-11-03 | 0e2473c | CONCERNS | |
 | design | 2026-11-03 | d044f73 | PASS | |
 
-The latest design row governs implementation readiness; an absent/BLOCK row stops implementation and CONCERNS requires the owner's recorded decision. Exception approval is not a design/code PASS. Obtain code review on committed implementation/evidence before a PR; re-review covered changes as required.
+The latest non-stale design row governs implementation readiness; an absent/BLOCK/stale row stops implementation and CONCERNS requires the owner's recorded decision. In particular, d044f73 remains historical evidence, not approval of constitution 2.0.0 alignment. Exception approval is not a design/code PASS. Obtain code review on committed implementation/evidence before a PR; re-review covered changes as required.
 
 The c8455f4 review identified context-blind appStateSyncLock contention defeating repair timing. R23 and re-review resolved it; the concern was not accepted or added to E003-RX-01. This historical CONCERNS row is superseded by the later PASS, not self-cleared.
 

@@ -2,7 +2,7 @@
 
 **Input**: Completed design in `specs/003-whatsapp-pairing-status/`: spec.md, plan.md, research.md, data-model.md, contracts/ and quickstart.md. Exception approval/evidence is in verification.md.
 
-**Readiness**: This replaces the discarded pre-design draft. Implementation requires a current owner-judge design review of the committed feature directory. No task is executed by generation. Do not begin T001 until that review permits implementation; check E003-RX-01 remains valid again at execution time.
+**Readiness**: This replaces the discarded pre-design draft. Implementation requires a current owner-judge design review of the committed feature directory against constitution 2.0.0. The historical d044f73 PASS does not cover the governance alignment. No task is executed by generation. Do not begin T001 until a fresh review permits implementation; check E003-RX-01 remains valid again at execution time as an approved temporary deviation, not a satisfied upstream resource bound.
 
 **Tests**: Required by the spec's independent journeys, SC-001 through SC-009, security abuse cases and constitution Principles VI/X. Write the relevant tests before implementation and observe a meaningful failing case; do not substitute source-text assertions for runtime behaviour. Use channels/barriers and fake time, not sleeps, for concurrency. Keep OS/SQLite/HTTP fixtures outside testing/synctest bubbles.
 
