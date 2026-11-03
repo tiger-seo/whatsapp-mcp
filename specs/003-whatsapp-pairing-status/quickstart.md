@@ -29,6 +29,7 @@ The new tests must use injected fake clients/providers, synthetic keys and contr
 | Scenario | Required observation |
 | --- | --- |
 | Link/restart | One synthetic save, Connected confirmation, zero QR on next saved-session run; failed save cannot succeed. |
+| Startup/reconnect bounds | Both shells: initial failure/timeout, up to three five-second retries, no fourth, success and stop cancellation, 405 handoff and exhausted disconnected diagnostic. Stall initial, startup, 405 and 515 owner connects and verify the 30-second watchdog and no overlap before drain. |
 | QR/window | First/replacement expiry, automatic code rotation within one window, Enter after final timeout, EOF failure, concurrent sharing and stale-epoch rejection. |
 | Offline status | Four fields/caveats, zero client/version/network calls, no missing artifacts created, held lock PID, committed WAL and unchanged DB/sidecars. |
 | Version/retries | Real consumed-byte counting, redirects/TLS/oversize/stall rejection, no valid truncated prefix, immutable payload/hash snapshots, six-hour fake time and exactly three five-second 405 retries. |

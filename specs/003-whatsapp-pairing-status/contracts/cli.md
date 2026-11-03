@@ -47,7 +47,7 @@ AcquireExisting must retain Acquire's no-link/open-handle/same-file rules and re
 
 ## stdio and serve in Feature 003
 
-Both remain existing command shells, acquire private storage ownership, reuse valid session or remain running unpaired. No automatic QR or pairing window, MCP tools, HTTP listener or webhook is exposed by this feature. Version discovery and lifecycle are active; stdin EOF stops stdio. Retain truthful status during disconnect/logout/recovery.
+Both remain existing command shells, acquire private storage ownership, reuse valid session or remain running unpaired. A saved-session initial failure or timeout permits three retries after cancellable five-second waits; exhaustion leaves the shell running disconnected with an actionable diagnostic and preserved identity. Stop the startup sequence on Connected, shutdown, logout, storage fault or handoff to the separate 405 controller. No automatic QR or pairing window, MCP tools, HTTP listener or webhook is exposed by this feature. Version discovery and lifecycle are active; stdin EOF stops stdio. Retain truthful status during disconnect/logout/recovery.
 
 Later features add transports through the same owner boundary. No early IPC/query path is added for status; running pair/status beside an active owner still fails on its lock. The manual testdata harness, not a shipped new command, demonstrates same-process re-pair before tools exist.
 

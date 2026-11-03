@@ -2,7 +2,7 @@
 
 **Date**: 2026-11-03
 **Feature**: `003-whatsapp-pairing-status`
-**Implementation status**: Not implemented. The fresh design review of 630bef6 returned CONCERNS; its initial-connection timeout policy needs an explicit owner decision before implementation. Historical reviews are retained below, not substituted for this verdict. No feature/control acceptance or code-review PASS is claimed. Baseline probes are separate evidence.
+**Implementation status**: Not implemented. The design review of 630bef6 returned CONCERNS; the user has chosen a bounded initial-connection retry policy and the covered design is being revised. That review is stale for the revised artifacts, so a fresh committed design review is required before implementation. No feature/control acceptance or code-review PASS is claimed. Baseline probes are separate evidence.
 
 ## Security Exceptions
 
@@ -65,7 +65,9 @@ On 2026-11-03, owner-judge reviewed 630bef6 in design mode and returned CONCERNS
 
 **Medium concern - initial saved-session connection timeout in long-running shells**: plan.md Version and Reconnect, contracts/connection-owner.md Protocol Adapter and State, and T023/T025-T026 specify a 30-second watchdog and InitialAutoReconnect=false but do not define a recovery policy after that initial attempt is cancelled. If stdio/serve starts with saved credentials and a handshake stalls, it can remain alive disconnected without an initial retry; ordinary reconnect backoff covers dropped established connections. The owner must choose or explicitly accept the post-timeout policy (for example, bounded retry or restart-only recovery) before implementation. Pair's specified unsuccessful exit on connection failure is unaffected.
 
-No owner decision has been recorded for this concern, no retry policy has been selected by the agent and no finding has been parked. The CONCERNS verdict therefore does not authorize implementation. Any chosen design change requires reanalysis and a fresh committed review. E003-RX-01 remains unrenewed and F09 remains open; native-platform/manual evidence is still unverified.
+On 2026-11-03 the user chose at most three retries, each after five cancellable seconds, after a saved-session initial failure or timeout in `stdio`/`serve`; exhaustion leaves the shell disconnected with an actionable diagnostic. The 30-second watchdog remains per attempt. The covered design changes also clarify 405/515 attempt watchdogs and require reanalysis and a fresh committed review; the historical CONCERNS row does not authorize implementation. E003-RX-01 remains unrenewed and F09 remains open; native-platform/manual evidence is still unverified. The earlier inventory and analysis counts below are historical and predate SC-010 and the revised tasks.
+
+**Revision checks, 2026-11-03**: `bash .specify/scripts/bash/check-prerequisites.sh --json --require-spec --require-tasks --include-tasks` resolved feature 003 and its required artifacts; `git diff --check` passed; the Grep tool found 34 requirement declarations, 34 coverage rows and 64 unchecked tasks. `git ls-files --eol -- specs/003-whatsapp-pairing-status` reported LF for all tracked feature files. PowerShell `rg` was unavailable, so no `rg` count is claimed for this revision. These checks do not establish runtime behavior, complete cross-artifact reanalysis or a new owner review.
 
 ## Existing Baseline Evidence
 
@@ -123,7 +125,7 @@ Validation utility: `D:\wa-003-repro-20261102-202105\validate-tasks.py`, run suc
 | design | 2026-11-02 | c8455f4 | CONCERNS | |
 | design | 2026-11-03 | 0e2473c | CONCERNS | |
 | design | 2026-11-03 | d044f73 | PASS | |
-| design | 2026-11-03 | 630bef6 | CONCERNS | |
+| design | 2026-11-03 | 630bef6 | CONCERNS | User chose up to three five-second startup retries; revised design requires fresh review. |
 
 The latest non-stale design row governs implementation readiness; an absent/BLOCK/stale row stops implementation and CONCERNS requires the owner's recorded decision. In particular, d044f73 remains historical evidence, not approval of constitution 2.0.0 alignment. Exception approval is not a design/code PASS. Obtain code review on committed implementation/evidence before a PR; re-review covered changes as required.
 

@@ -24,7 +24,7 @@ Retain the exact upstream client rather than maintaining a fork. The user explic
 
 **Project Type**: Single-module CLI/server. Existing stdio/serve shells own the connection but expose no tools/listener until later features.
 
-**Performance Goals**: Approved application limits remain one owned client/attempt; 30-second initial/explicit connection watchdog; discovery 15 seconds and at most 1 MiB consumed; one QR up to 4 KiB and min(upstream expiry, 60 seconds); three five-second outdated retries; six-hour refresh; ten-second stop-failure notification without premature release. These are design acceptance targets, not feature measurements.
+**Performance Goals**: Approved application limits remain one owned client/attempt; 30-second watchdog for every owner-initiated connection, including startup, 405 and 515; at most three five-second saved-session shell startup retries; discovery 15 seconds and at most 1 MiB consumed; one QR up to 4 KiB and min(upstream expiry, 60 seconds); three five-second outdated retries; six-hour refresh; ten-second stop-failure notification without premature release. These are design acceptance targets, not feature measurements.
 
 **Constraints**: No protocol patch/fork, runtime global-version mutation, implicit pairing, credential logging, old-deployment import, new account-management command or second database. Device work reuses the approved store gate/disk/input/output limits, not independent quotas. Monitoring and the Go soft memory target used in baseline probes are not hard upstream memory controls.
 
@@ -69,7 +69,9 @@ Discovery is single-flight: fixed verified HTTPS origin, no redirects/proxy surp
 
 Set EnableAutoReconnect=true, InitialAutoReconnect=false and DisableLoginAutoReconnect=true before use. Ordinary library backoff remains; a post-error AutoReconnectHook is supplementary, not a pre-connect authorization check. Cancel lifetime/set expected-disconnect through Disconnect on retirement/terminal states. Route 515 manual login reconnect through one owner attempt; 405 through one coalesced three-by-five-second budget. Confirmed Connected alone resets that budget.
 
-ConnectContext receives a generation lifetime, not a 30-second deadline that kills healthy connections. A separate watchdog limits initial/explicit progress to first valid QR or Connected; timeout cancels before Disconnect so socketLock can unwind. The QR window and code lifetimes are separate from that initial watchdog. Dedicated one-consumer QR channels are drained promptly; replacement codes share approval until final timeout.
+ConnectContext receives a generation lifetime, not a 30-second deadline that kills healthy connections. Each owner-initiated initial, explicit, startup-retry, 405 and 515 attempt gets a separate 30-second watchdog, disarmed by the first valid QR for an initial pairing connection or by Connected. Timeout cancels before Disconnect so socketLock can unwind; retain the sole attempt slot until the old call and generation access drain, never overlap a replacement. QR window and code lifetimes are separate from that watchdog. Dedicated one-consumer QR channels are drained promptly; replacement codes share approval until final timeout.
+
+For `stdio`/`serve` with a saved identity, an initial failure or timeout starts at most three additional attempts, each after a cancellable five-second wait. The sequence ends on current Connected, shutdown, logout, storage fault or 405 handoff; 405 is handled exclusively by its existing budget, never supplemented by startup retries. On exhaustion retain the saved identity and disconnected snapshot, keep the shell running and emit an actionable restart/reassessment diagnostic. No automatic QR or fresh keys. `pair` retains its existing unsuccessful-exit behavior on saved-session connection failure; ordinary reconnect after a confirmed connection remains the library's separate policy.
 
 ### Device Admission and Persistence
 

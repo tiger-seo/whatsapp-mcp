@@ -54,6 +54,8 @@ A client generation is bound to its logical pairing window; retire/drain it befo
 - Handshake freezes one candidate and registration hash together in a fresh cloned payload. Library globals remain immutable. Refresh never changes an in-flight payload or disconnects a healthy socket.
 - One version request in flight, 15 seconds, at most 1 MiB actual application-body consumption, complete response required, redirects/TLS errors rejected. Unknown-length bodies reaching the budget without proving completion are conservatively rejected, never accepted as prefixes.
 - The 405 budget is three retries after the initial rejection, each five seconds and a refresh attempt; duplicate events share it. Only current Connected resets it. Ordinary network backoff is separate and cannot bypass terminal state.
+- Saved-session shell startup recovery has a distinct budget of three retries after the initial failure/timeout, each after a cancellable five-second wait. Connected, shutdown, logout, storage fault or 405 handoff ends that sequence. Exhaustion retains identity and a disconnected shell; it never starts pairing or replenishes the 405 budget.
+- Each owner-initiated initial, explicit, startup-retry, 405 or 515 connection attempt has a 30-second watchdog; timeout cancels and drains before another attempt. A still-undrained call retains the single attempt slot and ownership. A healthy connection is not bounded by that watchdog.
 
 ## Durable Repair Metadata
 
