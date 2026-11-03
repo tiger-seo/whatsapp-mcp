@@ -2,7 +2,7 @@
 
 **Date**: 2026-11-02
 **Feature**: `003-whatsapp-pairing-status`
-**Implementation status**: Not implemented. Planning and baseline evidence only; no feature acceptance or owner-review PASS is claimed.
+**Implementation status**: Not implemented. Design review PASS is recorded below; no feature/control acceptance or code-review PASS is claimed. Baseline probes are separate evidence.
 
 ## Security Exceptions
 
@@ -84,6 +84,7 @@ The source specification and backlog exist locally under the repository's intent
 | Model constraints | 32/32 table-field constraints appear verbatim in task descriptions, including the four repair-coordinator constraints added after review. Target-version encoding is explicit big-endian; migration filename uses the existing four-digit loader convention. |
 | Source-backed design refinements | R22 replaces unsafe post-Save reattachment with stable pre-client guards/readiness and deferred deletion; T006/T008/T035 require runtime proof. The QR-only unarmed-passkey invariant has a real pinned-channel test in T022, not only fake-consumer coverage. These are planned controls, not executed tests. |
 | Exception | E003-RX-01 remains the same named/scoped/expiring approval; T001 rechecks it at actual implementation start. No private fork, account action or threshold change is authorized. |
+| Committed design review | PASS at d044f73 after correcting two prior CONCERNS findings; implementation/native/manual tests remain planned. |
 
 Validation utility: `D:\wa-003-repro-20261102-202105\validate-tasks.py`, run successfully against the generated file. The durable requirement/dependency details are in tasks.md; the temporary utility is not a CI dependency. Owner-judge design review is performed against the committed task/design set and recorded below, separately from these mechanical checks.
 
@@ -93,11 +94,12 @@ Validation utility: `D:\wa-003-repro-20261102-202105\validate-tasks.py`, run suc
 | --- | --- | --- | --- | --- |
 | design | 2026-11-02 | c8455f4 | CONCERNS | |
 | design | 2026-11-03 | 0e2473c | CONCERNS | |
+| design | 2026-11-03 | d044f73 | PASS | |
 
 The latest design row governs implementation readiness; an absent/BLOCK row stops implementation and CONCERNS requires the owner's recorded decision. Exception approval is not a design/code PASS. Obtain code review on committed implementation/evidence before a PR; re-review covered changes as required.
 
-The c8455f4 design review identified context-blind appStateSyncLock contention defeating the stated repair deadline/attempt policy. The finding is being addressed by design amendment and re-review, not accepted or added to E003-RX-01. No implementation may start under this CONCERNS row.
+The c8455f4 review identified context-blind appStateSyncLock contention defeating repair timing. R23 and re-review resolved it; the concern was not accepted or added to E003-RX-01. This historical CONCERNS row is superseded by the later PASS, not self-cleared.
 
-Amendment R23 establishes repair admission before competing SDK sync, permits key delivery, coalesces deferred ordinary demand, bounds caller wait separately from non-preemptible SDK return, and retains one actual-call lease across timeout/generation changes. T036-T038 add source-real contention, late-completion and scheduling tests. The approved full-resync count/time/byte values are unchanged; mechanical task counts remain 64/13-parallel/33-requirement mappings. A new committed design review must judge the amendment before readiness is claimed.
+R23 establishes early repair admission, permits key delivery, coalesces ordinary demand, bounds caller wait separately from SDK return and retains one FetchAppState invocation lease across timeout/generation changes. T036-T038 require runtime proof. Approved budgets are unchanged; counts remain 64 tasks/13 parallel/33 requirement mappings.
 
-The 0e2473c re-review confirmed the mutex mechanism but found that R23 incorrectly described missing-key request context lifetime: the pin explicitly uses context.WithoutCancel. The next amendment removes the invented tail-ctx mechanism, scopes the one-call lease to owner-invoked FetchAppState calls, and records SDK response-wait/disconnect plus device-guard protection accurately. It is a source-correctness fix, not an acceptance of CONCERNS or new exception/limit; implementation remains gated on a later verdict.
+The 0e2473c re-review confirmed the mutex mechanism but corrected the SDK's context.WithoutCancel key-request lifetime. d044f73 removes the invented tail timer, scopes the lease to owner-invoked FetchAppState and documents actual response-wait/disconnect/device-guard behaviour. The final review verified both corrections against the pin and returned PASS with no outstanding owner decision. Neither CONCERNS was accepted and no exception/limit expanded. Recheck E003-RX-01 and follow task order before implementation; feature/code/native/manual evidence remains pending.
