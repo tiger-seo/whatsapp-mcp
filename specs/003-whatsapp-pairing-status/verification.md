@@ -2,7 +2,7 @@
 
 **Date**: 2026-11-03
 **Feature**: `003-whatsapp-pairing-status`
-**Implementation status**: Not implemented. The design review of 630bef6 returned CONCERNS; the user has chosen a bounded initial-connection retry policy and the covered design is being revised. That review is stale for the revised artifacts, so a fresh committed design review is required before implementation. No feature/control acceptance or code-review PASS is claimed. Baseline probes are separate evidence.
+**Implementation status**: Not implemented. Owner-judge design review of the revised artifacts at 71f9004 returned PASS. Recheck E003-RX-01 and its triggers at implementation start. No feature/control acceptance or code-review PASS is claimed. Baseline probes are separate evidence.
 
 ## Security Exceptions
 
@@ -59,13 +59,17 @@ The plan now labels the unmet bounds as an approved temporary deviation and desc
 
 Reanalysis is complete. The fresh owner-judge review of committed alignment 630bef6 is recorded below; the historical PASS remains stale for this changed design. No code, dependency, account operation, native test or feature-control acceptance was performed by this alignment workflow.
 
-### Current Design Review
+### Previous Design Review
 
 On 2026-11-03, owner-judge reviewed 630bef6 in design mode and returned CONCERNS. Read-only inspection validated the constitution 2.0.0 authority, unchanged E003-RX-01 boundaries, 33 requirement mappings and 64-task ordering. Pinned-source checks included handshake version payloads, context-blind app-state locking/detached key requests, logout/deferred deletion, QR-only passkey prevention and guarded contact-export assumptions. These are design/source checks, not executed feature-control tests.
 
 **Medium concern - initial saved-session connection timeout in long-running shells**: plan.md Version and Reconnect, contracts/connection-owner.md Protocol Adapter and State, and T023/T025-T026 specify a 30-second watchdog and InitialAutoReconnect=false but do not define a recovery policy after that initial attempt is cancelled. If stdio/serve starts with saved credentials and a handshake stalls, it can remain alive disconnected without an initial retry; ordinary reconnect backoff covers dropped established connections. The owner must choose or explicitly accept the post-timeout policy (for example, bounded retry or restart-only recovery) before implementation. Pair's specified unsuccessful exit on connection failure is unaffected.
 
 On 2026-11-03 the user chose at most three retries, each after five cancellable seconds, after a saved-session initial failure or timeout in `stdio`/`serve`; exhaustion leaves the shell disconnected with an actionable diagnostic. The 30-second watchdog remains per attempt. The covered design changes also clarify 405/515 attempt watchdogs and require reanalysis and a fresh committed review; the historical CONCERNS row does not authorize implementation. E003-RX-01 remains unrenewed and F09 remains open; native-platform/manual evidence is still unverified. The earlier inventory and analysis counts below are historical and predate SC-010 and the revised tasks.
+
+### Current Design Review
+
+On 2026-11-03, owner-judge reviewed committed design 71f9004 and returned PASS. The review checked the bounded startup and 405/515 recovery design, requirement/task mappings, device-store and repair races, shutdown ordering, hostile discovery inputs and offline status. Pinned-source mechanisms were inspected; their runtime correctness remains unverified. No code, builds, tests or real-account operations were run; historical probes were not rerun, and no fresh upstream-fix or operational-incident investigation was performed. Supplementary subagent checks did not complete and were not relied upon. T001 must recheck exception expiry and earlier triggers before implementation.
 
 **Revision checks, 2026-11-03**: `bash .specify/scripts/bash/check-prerequisites.sh --json --require-spec --require-tasks --include-tasks` resolved feature 003 and its required artifacts; `git diff --check` passed; the Grep tool found 34 requirement declarations, 34 coverage rows and 64 unchecked tasks. `git ls-files --eol -- specs/003-whatsapp-pairing-status` reported LF for all tracked feature files. PowerShell `rg` was unavailable, so no `rg` count is claimed for this revision. These checks do not establish runtime behavior, complete cross-artifact reanalysis or a new owner review.
 
@@ -126,6 +130,7 @@ Validation utility: `D:\wa-003-repro-20261102-202105\validate-tasks.py`, run suc
 | design | 2026-11-03 | 0e2473c | CONCERNS | |
 | design | 2026-11-03 | d044f73 | PASS | |
 | design | 2026-11-03 | 630bef6 | CONCERNS | User chose up to three five-second startup retries; revised design requires fresh review. |
+| design | 2026-11-03 | 71f9004 | PASS | |
 
 The latest non-stale design row governs implementation readiness; an absent/BLOCK/stale row stops implementation and CONCERNS requires the owner's recorded decision. In particular, d044f73 remains historical evidence, not approval of constitution 2.0.0 alignment. Exception approval is not a design/code PASS. Obtain code review on committed implementation/evidence before a PR; re-review covered changes as required.
 
