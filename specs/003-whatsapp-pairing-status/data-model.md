@@ -81,6 +81,21 @@ Primary key is (device_jid, collection). At most one row per five known collecti
 
 The marker-admission/clear fence must not deadlock nested Signal transactions or hold a transaction/SQL writer across network calls. Fault-injection and interleaving tests are part of the acceptance contract, not assumed proof.
 
+### Repair Coordinator
+
+| Field | Constraint |
+| --- | --- |
+| admission_mode | Before connecting with pending repair, ordinary untagged app-state progress/MAC and bulk-snapshot calls fail fast; tagged repair and sync-key delivery remain permitted. Resume ordinary sync only after required recovery succeeds. |
+| actual_call | At most one owner-invoked SDK sync call is outstanding across client generations; timeout/retirement does not release its slot before actual return. |
+| deadline_outcome | Ten-second caller wait; cancel/invalidate the repair ticket, retain the marker, discard late results, and start no replacement SDK call while the prior call remains outstanding. |
+| deferred_sync | Coalesce deferred ordinary sync demand in a five-collection bitset; replay through the same single SDK-call slot after repair, never as another full-resync retry or an unbounded per-notification goroutine. |
+
+The SDK's appStateSyncLock is a plain mutex before its context-aware calls. A context alone cannot bound that wait. Startup admission mode is established before NewClient/Connect, not merely after an error: untagged background FetchAppState then fails its first guarded progress call before SQL/HTTP, rather than holding that mutex across network sync ahead of repair. Expected deferral does not become a storage fault or consume a repair attempt. Never block sync-key delivery needed by a tagged repair. A dirty marker created during otherwise successful ordinary sync does not by itself switch admission mode.
+
+The controller waits on result/cancellation/deadline, not directly on an uninterruptible SDK call; its one actual-call lease remains held until that call returns. Late work sees an inactive ticket/cancelled context and cannot clear a marker or mutate through a retired guard. Deferred ordinary requests are coalesced/replayed as ordinary incremental sync after repair, not extra full-resync attempts; failure leaves demand pending for a new notification/connection event, never a tight autonomous retry loop. A guarded-write fault during active use pauses/cancels that generation and requires an operator-authorized restart, whose pending markers activate startup admission before competing SDK work. Missing sync keys are transient: retain pending state and allow key delivery, without repeatedly retrying full resync.
+
+For an early missing-key result, keep the SDK's asynchronous key-request ctx alive only through its original ten-second budget instead of cancelling it immediately on return; retain the same slot/tail timer, forbid clear/protected progress, allow necessary protocol key crypto/delivery and cancel on generation stop. This tail adds no retry or deadline extension and cannot accumulate one context per notification. Timeout results are delivered without blocking the SDK-return goroutine; a success selected concurrently with cancellation must recheck the deadline before clear.
+
 ## Store and Stop States
 
 | State | Invariant |

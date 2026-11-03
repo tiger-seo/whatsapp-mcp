@@ -81,7 +81,7 @@ The source specification and backlog exist locally under the repository's intent
 | Checklist/ID/path/phase validation | PASS: 64 unique sequential tasks, correct story labels and explicit destination paths; setup 3, foundation 18, US1 8, US2 12, US3 7, US4 8, polish 8. |
 | Parallel scheduling | 13 marked tasks in four explicit story waves plus stable-behaviour docs; shared owner/session/recovery/command edits are serialized. |
 | Planned coverage | 33/33 FR/SC/SEC identifiers have build/integration and test/evidence mappings. Mapping is not a passed-control claim. |
-| Model constraints | 28/28 table-field constraints appear verbatim in task descriptions. Target-version encoding is explicit big-endian; migration filename uses the existing four-digit loader convention. |
+| Model constraints | 32/32 table-field constraints appear verbatim in task descriptions, including the four repair-coordinator constraints added after review. Target-version encoding is explicit big-endian; migration filename uses the existing four-digit loader convention. |
 | Source-backed design refinements | R22 replaces unsafe post-Save reattachment with stable pre-client guards/readiness and deferred deletion; T006/T008/T035 require runtime proof. The QR-only unarmed-passkey invariant has a real pinned-channel test in T022, not only fake-consumer coverage. These are planned controls, not executed tests. |
 | Exception | E003-RX-01 remains the same named/scoped/expiring approval; T001 rechecks it at actual implementation start. No private fork, account action or threshold change is authorized. |
 
@@ -91,5 +91,10 @@ Validation utility: `D:\wa-003-repro-20261102-202105\validate-tasks.py`, run suc
 
 | Stage | Date | Commit | Verdict | Owner decision |
 | --- | --- | --- | --- | --- |
+| design | 2026-11-02 | c8455f4 | CONCERNS | |
 
 The latest design row governs implementation readiness; an absent/BLOCK row stops implementation and CONCERNS requires the owner's recorded decision. Exception approval is not a design/code PASS. Obtain code review on committed implementation/evidence before a PR; re-review covered changes as required.
+
+The c8455f4 design review identified context-blind appStateSyncLock contention defeating the stated repair deadline/attempt policy. The finding is being addressed by design amendment and re-review, not accepted or added to E003-RX-01. No implementation may start under this CONCERNS row.
+
+Amendment R23 establishes repair admission before competing SDK sync, permits key delivery, coalesces deferred ordinary demand, bounds caller wait separately from non-preemptible SDK return, and retains one actual-call lease across timeout/generation changes. T036-T038 add source-real contention, late-completion and scheduling tests. The approved full-resync count/time/byte values are unchanged; mechanical task counts remain 64/13-parallel/33-requirement mappings. A new committed design review must judge the amendment before readiness is claimed.

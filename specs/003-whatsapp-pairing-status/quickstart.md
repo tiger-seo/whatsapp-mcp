@@ -33,7 +33,7 @@ The new tests must use injected fake clients/providers, synthetic keys and contr
 | Offline status | Four fields/caveats, zero client/version/network calls, no missing artifacts created, held lock PID, committed WAL and unchanged DB/sidecars. |
 | Version/retries | Real consumed-byte counting, redirects/TLS/oversize/stall rejection, no valid truncated prefix, immutable payload/hash snapshots, six-hour fake time and exactly three five-second 405 retries. |
 | Device admission | Shared gate limits, field/aggregate overflow before copying, no raw caches, nested transaction rollback, stable first-Save publication/readiness and deferred client-delete cleanup after retirement. |
-| Repair | Fresh and 1 -> 2 migration; marker before mutation; failures/crashes between version/MAC/contact calls; restart retains need; bounded full recovery; ignored upstream write errors still prevent clear; late/interleaved CAS cannot erase new work. |
+| Repair | Fresh and 1 -> 2 migration; mark-before-write and sibling failures; startup admission defers ordinary SDK sync but permits key delivery; real mutex-contention cancellation vs separate fake-time caller deadline; actual-call slot retained until return, no late clear; bounded full recovery and coalesced incremental replay without extra full-resync attempts. |
 | Stop | Hold a direct device call; ten-second warning cannot close pools/release lock; true quiescence eventually permits close; cancellation/retry/QR work cannot restart after stop. |
 | Secrecy/surface | All-level captures contain no QR/key/body/ticket/account identifier, no input terminal controls, no stdio human stdout, no tools/listener/implicit pairing. |
 

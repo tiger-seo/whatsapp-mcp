@@ -21,6 +21,7 @@ Concretely, Downloader declares `DownloadMedia(ctx context.Context, kind whatsme
 
 - Construct from the locked/open shared store; load/wrap device before NewClient. No second database or raw storage outside internal/store.
 - Set options and log bridge before Connect. EnableAutoReconnect=true, InitialAutoReconnect=false, DisableLoginAutoReconnect=true. Lifetime cancellation and expected-disconnect are the primary terminal brakes; AutoReconnectHook is a post-error supplementary brake.
+- Set BackgroundEventCtx to the generation lifetime before client use, not the temporary load/operation/watchdog context. Configure pending-repair admission before NewClient/Connect so SDK background sync cannot race ahead of the controller.
 - One explicit connection attempt in flight. Start the 30-second watchdog independently of the connection lifetime; disarm on valid initial QR or Connected. On timeout flag termination, cancel first, then Disconnect and drain. A successful connection must survive the old watchdog deadline.
 - Forward 515 to serialized manual login reconnect and 405 to one coalesced retry controller; keep ordinary pinned backoff. Reset outdated budget only on current Connected, not refresh success or a stale event.
 - GetQRChannel occurs before Connect; one dedicated consumer reads it promptly for the whole attempt. Do not stop draining when one requester cancels. Window lifetime belongs to owner approval/upstream terminal state, not a returned request context.
@@ -69,6 +70,16 @@ All guarded calls validate before their own writes, use shared admission/deadlin
 5. Failure, timeout, clear conflict or shutdown retains marker and appropriate health state. No unlimited retry, data truncation, key deletion or automatic phone unlink. Restart can retry after fixing the cause. Normal successful updates can conservatively retain a marker for next-start verification.
 
 Gate storage-dependent later operations on startup recovery/fault health, not merely Connected. Pair success proves authentication/linking only; pending repair must not be misrepresented as completed contact sync.
+
+### Contention and Caller Deadlines
+
+FetchAppState locks a plain appStateSyncLock before its ctx-aware work. Do not implement the deadline as only passing ctx to that method. Before connecting a generation with pending repair, reject untagged app-state progress/MAC/bulk-snapshot calls for all collections immediately with an expected recovery-pending outcome, before SQL/HTTP/shared admission. Essential AppStateSyncKey writes/reads and current tagged repair remain permitted. This keeps ordinary automatic sync from holding the global mutex across a fetch before repair, without disabling key delivery. Creating a normal dirty marker alone is not a trigger to interrupt healthy sync.
+
+Use one actual-call lease for all owner-invoked SDK sync calls, retained until real return even when a caller timed out or a generation retired. The caller selects deadline/cancellation/result; timeout cancels/inactivates its ticket, retains durable pending state, returns the appropriate outcome and never clears on late return. No replacement goroutine/call may bypass the held lease. Tests must distinguish caller completion from SDK completion.
+
+Use bounded/nonblocking result delivery and recheck deadline before acting on a selected success. The pin spawns missing-key requests using the repair ctx: an early ErrKeyNotFound must not immediately cancel that ctx and suppress its request. Keep that bounded tail alive only until the original ten-second deadline (generation stop still cancels it), retain the same call slot for the tail, and mark the ticket ineligible for clear/progress writes. Necessary key-request crypto operations/key delivery remain allowed under their budgets. Do not create an unbounded population of retained timer contexts, a new full-resync attempt or a fresh deadline for the tail.
+
+Record deferred ordinary collection requests in a bounded five-name bitset. After required recovery succeeds, release ordinary admission and replay coalesced demands incrementally through the same call slot; they are not extra full-resync retries. A failed replay waits for new notification/connection demand rather than an autonomous spin. Guarded-write faults during active use pause/cancel the generation; recovery proceeds after explicit restart with admission configured early. Transient missing-key failure keeps the marker and key-delivery path alive. The one-full-resync-per-collection/generation budget and all existing time/byte limits remain unchanged.
 
 ## Stop and Failure Contract
 
