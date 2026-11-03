@@ -2,7 +2,7 @@
 
 **Date**: 2026-11-03
 **Feature**: `003-whatsapp-pairing-status`
-**Implementation status**: Not implemented. Historical design reviews are retained below; the constitution 2.0.0 alignment requires a fresh committed design review. The current verdict is recorded in Owner Reviews, not inferred from an earlier PASS. No feature/control acceptance or code-review PASS is claimed. Baseline probes are separate evidence.
+**Implementation status**: Not implemented. The fresh design review of 630bef6 returned CONCERNS; its initial-connection timeout policy needs an explicit owner decision before implementation. Historical reviews are retained below, not substituted for this verdict. No feature/control acceptance or code-review PASS is claimed. Baseline probes are separate evidence.
 
 ## Security Exceptions
 
@@ -57,7 +57,15 @@ The plan now labels the unmet bounds as an approved temporary deviation and desc
 | Exception boundary comparison | Original owner, pin, receive scope, deployment scope, controls, expiry and reassessment obligations retained. | No renewal, new workload approval or claim of a new upstream-fix/incident investigation; T001 must recheck at actual start. |
 | `git diff --check -- .specify/memory/constitution.md specs/003-whatsapp-pairing-status` | PASS. | Formatting check only. |
 
-Reanalysis is complete. The fresh owner-judge verdict must identify the committed alignment and is recorded in Owner Reviews; until then the historical PASS remains stale for this changed design. No code, dependency, account operation, native test or feature-control acceptance was performed by this alignment workflow.
+Reanalysis is complete. The fresh owner-judge review of committed alignment 630bef6 is recorded below; the historical PASS remains stale for this changed design. No code, dependency, account operation, native test or feature-control acceptance was performed by this alignment workflow.
+
+### Current Design Review
+
+On 2026-11-03, owner-judge reviewed 630bef6 in design mode and returned CONCERNS. Read-only inspection validated the constitution 2.0.0 authority, unchanged E003-RX-01 boundaries, 33 requirement mappings and 64-task ordering. Pinned-source checks included handshake version payloads, context-blind app-state locking/detached key requests, logout/deferred deletion, QR-only passkey prevention and guarded contact-export assumptions. These are design/source checks, not executed feature-control tests.
+
+**Medium concern - initial saved-session connection timeout in long-running shells**: plan.md Version and Reconnect, contracts/connection-owner.md Protocol Adapter and State, and T023/T025-T026 specify a 30-second watchdog and InitialAutoReconnect=false but do not define a recovery policy after that initial attempt is cancelled. If stdio/serve starts with saved credentials and a handshake stalls, it can remain alive disconnected without an initial retry; ordinary reconnect backoff covers dropped established connections. The owner must choose or explicitly accept the post-timeout policy (for example, bounded retry or restart-only recovery) before implementation. Pair's specified unsuccessful exit on connection failure is unaffected.
+
+No owner decision has been recorded for this concern, no retry policy has been selected by the agent and no finding has been parked. The CONCERNS verdict therefore does not authorize implementation. Any chosen design change requires reanalysis and a fresh committed review. E003-RX-01 remains unrenewed and F09 remains open; native-platform/manual evidence is still unverified.
 
 ## Existing Baseline Evidence
 
@@ -115,6 +123,7 @@ Validation utility: `D:\wa-003-repro-20261102-202105\validate-tasks.py`, run suc
 | design | 2026-11-02 | c8455f4 | CONCERNS | |
 | design | 2026-11-03 | 0e2473c | CONCERNS | |
 | design | 2026-11-03 | d044f73 | PASS | |
+| design | 2026-11-03 | 630bef6 | CONCERNS | |
 
 The latest non-stale design row governs implementation readiness; an absent/BLOCK/stale row stops implementation and CONCERNS requires the owner's recorded decision. In particular, d044f73 remains historical evidence, not approval of constitution 2.0.0 alignment. Exception approval is not a design/code PASS. Obtain code review on committed implementation/evidence before a PR; re-review covered changes as required.
 
