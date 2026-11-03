@@ -74,7 +74,7 @@ The source specification and backlog exist locally under the repository's intent
 
 ## Task-generation Validation
 
-**Date**: 2026-11-02. No implementation task has run and all checkboxes remain unchecked.
+**Generated**: 2026-11-02; review amendments/revalidation: 2026-11-03. No implementation task has run and all checkboxes remain unchecked.
 
 | Check | Result |
 | --- | --- |
@@ -92,9 +92,12 @@ Validation utility: `D:\wa-003-repro-20261102-202105\validate-tasks.py`, run suc
 | Stage | Date | Commit | Verdict | Owner decision |
 | --- | --- | --- | --- | --- |
 | design | 2026-11-02 | c8455f4 | CONCERNS | |
+| design | 2026-11-03 | 0e2473c | CONCERNS | |
 
 The latest design row governs implementation readiness; an absent/BLOCK row stops implementation and CONCERNS requires the owner's recorded decision. Exception approval is not a design/code PASS. Obtain code review on committed implementation/evidence before a PR; re-review covered changes as required.
 
 The c8455f4 design review identified context-blind appStateSyncLock contention defeating the stated repair deadline/attempt policy. The finding is being addressed by design amendment and re-review, not accepted or added to E003-RX-01. No implementation may start under this CONCERNS row.
 
 Amendment R23 establishes repair admission before competing SDK sync, permits key delivery, coalesces deferred ordinary demand, bounds caller wait separately from non-preemptible SDK return, and retains one actual-call lease across timeout/generation changes. T036-T038 add source-real contention, late-completion and scheduling tests. The approved full-resync count/time/byte values are unchanged; mechanical task counts remain 64/13-parallel/33-requirement mappings. A new committed design review must judge the amendment before readiness is claimed.
+
+The 0e2473c re-review confirmed the mutex mechanism but found that R23 incorrectly described missing-key request context lifetime: the pin explicitly uses context.WithoutCancel. The next amendment removes the invented tail-ctx mechanism, scopes the one-call lease to owner-invoked FetchAppState calls, and records SDK response-wait/disconnect plus device-guard protection accurately. It is a source-correctness fix, not an acceptance of CONCERNS or new exception/limit; implementation remains gated on a later verdict.
