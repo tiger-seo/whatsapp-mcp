@@ -2,7 +2,7 @@
 
 **Branch**: `003-whatsapp-pairing-status` | **Date**: 2026-11-02 | **Spec**: [spec.md](spec.md)
 
-**Status**: Phase 0 research, Phase 1 design and task generation are complete. Governance alignment on 2026-11-03 applies constitution 2.0.0 to the existing E003-RX-01 approval; its upstream receive bounds remain unmet, not passed controls. The historical design PASS at d044f73 does not cover this alignment; a fresh committed design review is required, recorded in verification.md. Implementation has not started. The exception remains owned by `tiger-seo`, expires at the start of `2026-12-02` UTC, and requires earlier reassessment on its recorded triggers.
+**Status**: Implementation is in progress. The 2026-11-04 Linux/Chrome pairing compatibility change modifies reviewed design artifacts; prior design verdicts do not cover it. Re-run consistency analysis and obtain a fresh design review of the committed revised feature directory before further implementation. E003-RX-01's upstream receive bounds remain unmet; its owner is `tiger-seo`, expiry is the start of `2026-12-02` UTC, and its earlier reassessment triggers remain unchanged.
 
 ## Summary
 
@@ -65,6 +65,8 @@ Initial saved identity means locally logged-in, not verified online. PairSuccess
 
 Leave library globals immutable. Before first Connect install a payload callback that clones a fresh default device payload, freezes one atomic candidate version and updates AppVersion plus registration BuildHash consistently. Never hold socket/owner locks or perform I/O inside the callback. Preserve every identity/key field.
 
+Restore the previous service's Linux/Chrome identification for fresh registration: decode the cloned registration's serialized companion properties, set OS `Linux`, platform `CHROME` and its version to the same selected handshake triple, and re-encode without changing other fields, including unknown protobuf fields. Set the cloned user-agent OS version and build number from that triple as the previous `SetOSInfo` call did, and configure the client-specific Chrome QR client type before acquiring the QR channel. On decode or encode failure, return a nil payload to the pinned handshake's existing rejection path, record a bounded nonblocking failure category for a secret-free diagnostic outside the callback, and never send an unmodified or partially modified registration; preserve credentials. The callback has no error return, so do not panic or assume it can propagate an ordinary error. Do not mutate `DeviceProps`, `BaseClientPayload`, version globals or any shared protobuf; do not change saved identity, force a new pairing, add a setting, or claim an exact WhatsApp-controlled phone label. Keep the paired-session path and immutable version/hash snapshot coherent. Synthetic tests must decode the actual registration payload, inject decode/encode failures and exercise the pinned QR construction path without contacting WhatsApp; the phone label remains a separately permissioned manual observation.
+
 Discovery is single-flight: fixed verified HTTPS origin, no redirects/proxy surprise/credential headers, 15-second deadline, actual 1-MiB consumption cap, complete-body validation and uint32 decimal revision. Zero is allowed as upstream syntax; no invented floor. A truncated prefix is failure. Refresh only changes the next-handshake candidate; status describes the selected version, not a version negotiated by the active socket.
 
 Set EnableAutoReconnect=true, InitialAutoReconnect=false and DisableLoginAutoReconnect=true before use. Ordinary library backoff remains; a post-error AutoReconnectHook is supplementary, not a pre-connect authorization check. Cancel lifetime/set expected-disconnect through Disconnect on retirement/terminal states. Route 515 manual login reconnect through one owner attempt; 405 through one coalesced three-by-five-second budget. Confirmed Connected alone resets that budget.
@@ -121,7 +123,7 @@ specs/003-whatsapp-pairing-status/
   verification.md
 ```
 
-`tasks.md` was generated after planning from this completed design; all 64 tasks remain unchecked and the discarded earlier draft was not reused. Requirements checklist remains local/ignored. Local source/backlog documents carry the owner decisions; portable approval and review history are in verification.md.
+`tasks.md` retains the original task history and adds an unchecked US1 compatibility follow-up. Requirements checklist remains local/ignored. Local source/backlog documents carry the owner decisions; portable approval and review history are in verification.md.
 
 ### Source Destinations for Implementation
 

@@ -22,6 +22,10 @@
 
 - Q: How should a long-running shell recover when its initial saved-session connection fails or times out? -> A: Retry at most three times after the initial attempt, waiting five cancellable seconds before each; each attempt retains the 30-second watchdog. On exhaustion remain disconnected with an actionable diagnostic. This is separate from the 405 budget and cannot bypass logout or shutdown.
 
+### Session 2026-11-04
+
+- Q: What device identification should fresh QR pairing send? -> A: Preserve the previous service's Linux/Chrome companion identification, rather than the pinned library's default unknown platform. WhatsApp controls the phone's displayed label, so the exact label is not guaranteed. This does not authorize connecting, pairing, unlinking or re-pairing a real account.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Link a Device and Reuse Its Session (Priority: P1)
@@ -41,6 +45,7 @@ As the account owner, I can run `whatsapp-mcp pair`, scan a terminal QR with my 
 5. **Given** an active connection or pairing attempt, **When** the owner interrupts the command, **Then** connection work and device writes stop before storage closes and the data-directory lock is released.
 6. **Given** either existing `stdio` or `serve` command shell, **When** it starts with a saved session, **Then** it connects and remains running until cancellation; with no saved session it remains running with an unpaired in-process snapshot and no QR. Neither shell exposes tools or a network listener in this feature, and both shut down with device writes quiescent before releasing ownership.
 7. **Given** a saved-session startup attempt fails or times out in `stdio` or `serve`, **When** it is not superseded by a terminal event or 405 recovery, **Then** the shell makes at most three additional attempts after five cancellable seconds each; on exhaustion it remains disconnected, preserves the saved identity and reports an actionable diagnostic without opening a pairing window.
+8. **Given** a fresh device and an explicitly approved QR pairing attempt, **When** the registration payload and QR client type are prepared, **Then** they identify the companion as Linux/Chrome as the previous service did, without modifying global library state or saved credentials. The phone's displayed label is observed separately and is not guaranteed by this application.
 
 ---
 
@@ -130,6 +135,7 @@ As an operator, I can keep a connection running while the application refreshes 
 - **FR-014**: Shutdown MUST stop version refresh, pairing, reconnect work, event handling and all client-originated device writes before closing shared storage, then release the lock. It MUST not report clean shutdown or release ownership while those writes can still occur.
 - **FR-015**: WhatsApp client and device-store diagnostics MUST use the existing unified, level-controlled logger. All logs and any human pairing output in stdio mode MUST stay off stdout. No transport behaviour introduced by this feature may consume or contaminate protocol stdout.
 - **FR-016**: Device operations MUST share the approved store admission, deadline, input/output and disk policy. Before changing app-state sync progress or a bulk contact snapshot, the owner MUST durably record the affected collection's repair need. An interrupted/failed sync MUST retain that need across restart. After an explicitly authorized connection, bounded re-synchronization MAY repair only the affected protocol metadata/contact snapshot; clear the indication only after complete verified success. Failure MUST remain visible and retryable without automatic unpairing, deleting chats/credentials/session keys, silently truncating data or claiming rollback of earlier committed operations.
+- **FR-017**: Fresh QR registration MUST use the previous service's companion OS `Linux` and platform `CHROME`, including the matching Chrome QR client type. Its registration version and user-agent OS version/build MUST use one selected handshake version, as in the previous service. The adapter MUST preserve credentials and all unrelated payload properties, including unknown protobuf fields, keep shared library globals immutable, and reuse an existing saved identity without forcing re-pairing. A failure to decode or encode companion properties MUST fail the handshake without sending an incorrectly identified registration, preserve saved credentials and produce only a secret-free diagnostic. WhatsApp determines the displayed name; no exact phone label or retroactive relabelling is promised.
 
 ### Key Entities *(include if feature involves data)*
 
