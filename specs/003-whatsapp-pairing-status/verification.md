@@ -193,6 +193,9 @@ Validation utility: `D:\wa-003-repro-20261102-202105\validate-tasks.py`, run suc
 | design | 2026-11-03 | d044f73 | PASS | |
 | design | 2026-11-03 | 630bef6 | CONCERNS | User chose up to three five-second startup retries; revised design requires fresh review. |
 | design | 2026-11-03 | 71f9004 | PASS | |
+| design | 2026-11-04 | c832c39 | BLOCK | |
+
+**Design review at c832c39**: Owner-judge returned BLOCK on the revised design. Findings concerned identifying the correct phone-side linked device, recovery after forced termination, marker clearing under the disk reserve, macOS power-loss durability, the definition of an unresolved pairing attempt, interactive-terminal detection, missing pinned-source evidence, logout racing marker clear, and design artifact alignment. The review identified several owner decisions and explicitly did not verify pinned sources outside the repository, native platform behavior, phone labels or real-account behavior. No account action or tests were performed. The findings require resolution and a fresh review; this record does not approve a change, exception, or parked finding.
 
 The latest non-stale design row governs implementation readiness; an absent/BLOCK/stale row stops implementation and CONCERNS requires the owner's recorded decision. In particular, d044f73 remains historical evidence, not approval of constitution 2.0.0 alignment. Exception approval is not a design/code PASS. Obtain code review on committed implementation/evidence before a PR; re-review covered changes as required.
 
