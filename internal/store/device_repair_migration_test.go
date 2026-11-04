@@ -14,16 +14,16 @@ func repairMigrations(t *testing.T) []migration {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 2 || list[1].version != 2 || list[1].name != "device_repair" {
-		t.Fatalf("embedded migration count = %d, want init and device_repair", len(list))
+	if len(list) != 3 || list[1].version != 2 || list[1].name != "device_repair" || list[2].name != "unsafe_run" {
+		t.Fatalf("embedded migrations = %v, want init, device_repair and unsafe_run", list)
 	}
 	return list
 }
 
 func TestDeviceRepairMigrationFresh(t *testing.T) {
 	st, recs := openTest(t, newDataDir(t))
-	if got := mcpVersion(t, st); got != 2 {
-		t.Errorf("message schema = %d, want 2", got)
+	if got := mcpVersion(t, st); got != 3 {
+		t.Errorf("message schema = %d, want 3", got)
 	}
 	var deviceVersion int
 	if err := st.reader.QueryRow("SELECT version FROM whatsmeow_version").Scan(&deviceVersion); err != nil || deviceVersion != 16 {
@@ -34,8 +34,8 @@ func TestDeviceRepairMigrationFresh(t *testing.T) {
 		t.Errorf("fresh repair table count = %d, err = %v", count, err)
 	}
 	events := recs.events("store.migrate")
-	if len(events) != 2 || events[0].attrs["to"] != "1" || events[1].attrs["to"] != "2" {
-		t.Errorf("fresh migration events = %v, want 1 then 2", events)
+	if len(events) != 3 || events[0].attrs["to"] != "1" || events[1].attrs["to"] != "2" || events[2].attrs["to"] != "3" {
+		t.Errorf("fresh migration events = %v, want 1, 2, then 3", events)
 	}
 }
 
@@ -54,12 +54,13 @@ func TestDeviceRepairMigrationUpgradePreservesData(t *testing.T) {
 		t.Fatal(err)
 	}
 	upgraded, recs := openTest(t, dir)
-	if got := mcpVersion(t, upgraded); got != 2 {
-		t.Errorf("upgraded schema = %d, want 2", got)
+	if got := mcpVersion(t, upgraded); got != 3 {
+		t.Errorf("upgraded schema = %d, want 3", got)
 	}
-	if len(recs.events("store.migrate")) != 1 || !messageExists(t, upgraded, alice, "migration-sentinel") {
-		t.Error("upgrade did not preserve message or did not apply exactly one migration")
+	if len(recs.events("store.migrate")) != 2 || !messageExists(t, upgraded, alice, "migration-sentinel") {
+		t.Error("upgrade did not preserve message or did not apply both migrations")
 	}
+	assertRunGuardState(t, upgraded, "unsafe")
 	var keyAfter []byte
 	if err := upgraded.reader.QueryRow("SELECT identity_key FROM whatsmeow_device WHERE jid = ?", jid).Scan(&keyAfter); err != nil || !bytes.Equal(keyBefore, keyAfter) {
 		t.Errorf("device identity key changed during upgrade: %v", err)
@@ -165,7 +166,7 @@ func TestDeviceRepairMigrationFailureIsAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 	reopened, _ := openTest(t, dir)
-	if mcpVersion(t, reopened) != 2 || !messageExists(t, reopened, alice, "rollback-sentinel") {
+	if mcpVersion(t, reopened) != 3 || !messageExists(t, reopened, alice, "rollback-sentinel") {
 		t.Error("reopen did not upgrade or preserve message")
 	}
 }

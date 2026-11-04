@@ -33,6 +33,7 @@ type ownerStub struct{}
 func (ownerStub) Start(context.Context) error                          { return nil }
 func (ownerStub) BeginStop()                                           {}
 func (ownerStub) Done() <-chan struct{}                                { return nil }
+func (ownerStub) StopError() error                                     { return nil }
 func (ownerStub) Snapshot() Status                                     { return Status{} }
 func (ownerStub) RequestPairing(context.Context) (PairingState, error) { return PairingState{}, nil }
 func (ownerStub) PairingSnapshot() (PairingState, bool)                { return PairingState{}, false }

@@ -225,8 +225,13 @@ func (f *Fake) Start(ctx context.Context) error {
 }
 func (f *Fake) BeginStop()            { f.stopOnce.Do(func() { close(f.done) }) }
 func (f *Fake) Done() <-chan struct{} { return f.done }
-func (f *Fake) Snapshot() Status      { f.mu.Lock(); defer f.mu.Unlock(); return f.fixtures.Status }
-func (f *Fake) Health() Health        { f.mu.Lock(); defer f.mu.Unlock(); return f.fixtures.Health }
+func (f *Fake) StopError() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.failures["stop"]
+}
+func (f *Fake) Snapshot() Status { f.mu.Lock(); defer f.mu.Unlock(); return f.fixtures.Status }
+func (f *Fake) Health() Health   { f.mu.Lock(); defer f.mu.Unlock(); return f.fixtures.Health }
 func (f *Fake) RequestPairing(ctx context.Context) (PairingState, error) {
 	if err := ctx.Err(); err != nil {
 		return PairingState{}, err

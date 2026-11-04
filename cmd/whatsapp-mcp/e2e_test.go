@@ -22,6 +22,9 @@ import (
 var binary string
 
 func TestMain(m *testing.M) {
+	if os.Getenv("WA_TEST_FORCED_SHUTDOWN_DIR") != "" {
+		os.Exit(m.Run())
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--synthetic-process" {
 		newOwner = func(ownerDeps) (*ownerHandle, error) {
 			fake := wa.NewFake(wa.FakeFixtures{})

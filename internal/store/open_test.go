@@ -22,8 +22,8 @@ func TestOpenFreshDirectory(t *testing.T) {
 	if err := st.reader.QueryRow("SELECT version FROM whatsmeow_version").Scan(&device); err != nil || device != 16 {
 		t.Errorf("whatsmeow_version = %d, %v; want 16", device, err)
 	}
-	if err := st.reader.QueryRow("SELECT version FROM mcp_version").Scan(&messages); err != nil || messages != 2 {
-		t.Errorf("mcp_version = %d, %v; want 2", messages, err)
+	if err := st.reader.QueryRow("SELECT version FROM mcp_version").Scan(&messages); err != nil || messages != 3 {
+		t.Errorf("mcp_version = %d, %v; want 3", messages, err)
 	}
 	if got := len(recs.events("store.ready")); got != 1 {
 		t.Errorf("store.ready events = %d, want 1", got)
@@ -46,7 +46,7 @@ func TestReopenKeepsVersionsAndData(t *testing.T) {
 	st.Close(context.Background())
 
 	again, recs := openTest(t, dir)
-	if got := mcpVersion(t, again); got != 2 || deviceVersion(t, again) != 16 {
+	if got := mcpVersion(t, again); got != 3 || deviceVersion(t, again) != 16 {
 		t.Errorf("versions = %d / %d", got, deviceVersion(t, again))
 	}
 	if !messageExists(t, again, "491511234567@s.whatsapp.net", "A") {
@@ -121,9 +121,10 @@ func TestOpenZeroLengthFileIsFresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, _ := openTest(t, dir)
-	if mcpVersion(t, st) != 2 {
+	if mcpVersion(t, st) != 3 {
 		t.Error("an empty file was not initialised")
 	}
+	assertRunGuardState(t, st, "unsafe")
 }
 
 // pinned returns n connections of a pool, all open at once.

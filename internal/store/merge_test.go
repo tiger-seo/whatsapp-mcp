@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func merge(t *testing.T, st *Store) {
@@ -180,9 +181,9 @@ func TestMergeValidation(t *testing.T) {
 }
 
 func TestMergeUnderLowDisk(t *testing.T) {
-	st, _ := openTestWith(t, newDataDir(t), openOptions{hooks: testHooks{
-		free: func(string) (uint64, error) { return diskReserve - 1, nil },
-	}})
+	st, _ := openTest(t, newDataDir(t))
+	st.disk.free = func(string) (uint64, error) { return diskReserve - 1, nil }
+	st.disk.measured = time.Time{}
 	// Seed around the guard, which is for writes the store makes.
 	exec(t, st.writer, "INSERT INTO chats (jid) VALUES ('"+lidAlice+"')")
 	before := tableDump(t, st)

@@ -45,8 +45,8 @@ func TestPreflightRefusalsChangeNothing(t *testing.T) {
 		want   error
 		text   []string
 	}{
-		{"message schema too new", []string{"UPDATE mcp_version SET version = 3"}, ErrSchemaTooNew,
-			[]string{"message schema", "3", "(2)"}},
+		{"message schema too new", []string{"UPDATE mcp_version SET version = 4"}, ErrSchemaTooNew,
+			[]string{"message schema", "4", "(3)"}},
 		{"device schema too new", []string{"UPDATE whatsmeow_version SET compat = 17"}, ErrSchemaTooNew,
 			[]string{"device schema", "17", "16"}},
 		{"mcp_version without rows", []string{"DELETE FROM mcp_version"}, ErrSchemaInvalid, []string{"message schema"}},

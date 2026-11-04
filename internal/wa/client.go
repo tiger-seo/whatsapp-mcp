@@ -86,6 +86,8 @@ type Owner interface {
 	Start(context.Context) error
 	BeginStop()
 	Done() <-chan struct{}
+	// StopError is final after Done closes and reports an unsuccessful shutdown.
+	StopError() error
 	Snapshot() Status
 	RequestPairing(context.Context) (PairingState, error)
 	// PairingSnapshot returns the current pairing window's copied state; ok is false when no window is

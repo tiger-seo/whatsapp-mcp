@@ -91,12 +91,14 @@ var newOwner = productionOwner
 // lifecycleFactory builds the lifecycle; tests replace it to drive signals.
 var lifecycleFactory = newLifecycle
 
+var recoveryInteractive = terminalStreams
+
 // stopStep is the owner's ordered cleanup: stop, then wait for the drain, before the store closes.
 func (h *ownerHandle) stopStep() func(context.Context) error {
 	return func(context.Context) error {
 		h.owner.BeginStop()
 		<-h.owner.Done()
-		return nil
+		return h.owner.StopError()
 	}
 }
 
@@ -130,6 +132,20 @@ func runPair(cmd *command, args []string, s *streams) int {
 	lc.addStoreStop(st.Close, st.Quiesced())
 	if lc.ctx.Err() != nil {
 		return lc.shutdown()
+	}
+	state, _, err := st.RunGuard(lc.ctx)
+	if err != nil {
+		fmt.Fprintln(s.stderr, "whatsapp-mcp: pair: invalid or missing run marker; external remediation is required")
+		lc.shutdown()
+		return exitError
+	}
+	if state == "unsafe" {
+		ok := recoverOffline(lc.ctx, st, s)
+		lc.requestStop("offline recovery finished")
+		if lc.shutdown() != exitOK || !ok {
+			return exitError
+		}
+		return exitOK
 	}
 	oh, err := newOwner(ownerDeps{ctx: lc.ctx, log: logger, store: st})
 	if err != nil {
@@ -256,7 +272,7 @@ func pairingWindowFlow(owner wa.Owner, events <-chan wa.Event, s *streams, ctx c
 		case wa.PairingSucceeded:
 			return waitSavedConnection(owner, events, s, ctx)
 		case wa.PairingTimedOut:
-			fmt.Fprintln(s.stderr, "whatsapp-mcp: pair: the pairing attempt timed out; no pairing was completed")
+			fmt.Fprintln(s.stderr, "whatsapp-mcp: pair: the pairing attempt timed out; an orphaned phone link may exist. Offline recovery is required before another attempt")
 			return false
 		case wa.PairingCancelled:
 			fmt.Fprintln(s.stderr, "whatsapp-mcp: pair: the pairing attempt was cancelled")
@@ -349,6 +365,12 @@ func runShell(kind string, cmd *command, args []string, s *streams, body func(co
 	lc.addStoreStop(st.Close, st.Quiesced())
 	if lc.ctx.Err() != nil {
 		return lc.shutdown()
+	}
+	state, _, err := st.RunGuard(lc.ctx)
+	if err != nil || state != "clean" {
+		fmt.Fprintf(s.stderr, "whatsapp-mcp: %s: unsafe or invalid run marker; offline recovery is required using pair\n", kind)
+		lc.shutdown()
+		return exitError
 	}
 	failed := body(lc.ctx, lc, logger, st, s)
 	lc.requestStop("shell finished")

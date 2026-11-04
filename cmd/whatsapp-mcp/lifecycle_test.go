@@ -4,16 +4,19 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/tiger-seo/whatsapp-mcp/internal/lock"
 	"github.com/tiger-seo/whatsapp-mcp/internal/store"
+	"github.com/tiger-seo/whatsapp-mcp/internal/wa"
 	"go.mau.fi/whatsmeow/proto/waAdv"
 	"go.mau.fi/whatsmeow/types"
 )
@@ -23,6 +26,7 @@ type syncBuffer struct {
 	mu          sync.Mutex
 	buf         bytes.Buffer
 	timedOut    chan struct{}
+	firstSignal chan struct{}
 	timeoutOnce sync.Once
 }
 
@@ -32,6 +36,10 @@ func (b *syncBuffer) Write(p []byte) (int, error) {
 	n, err := b.buf.Write(p)
 	if b.timedOut != nil && strings.Contains(string(p), "shutdown timed out") {
 		b.timeoutOnce.Do(func() { close(b.timedOut) })
+	}
+	if b.firstSignal != nil && strings.Contains(string(p), "first stop signal received") {
+		close(b.firstSignal)
+		b.firstSignal = nil
 	}
 	return n, err
 }
@@ -317,6 +325,194 @@ func TestStdinClosedRequest(t *testing.T) {
 		t.Errorf("exit code = %d, want 0", code)
 	}
 	tl.expectLog(t, `msg="shutting down" reason="stdin closed"`)
+}
+
+func TestNonSignalStopFirstSignalKeepsDrain(t *testing.T) {
+	for _, reason := range []string{"pair finished", "stdin closed"} {
+		t.Run(reason, func(t *testing.T) {
+			tl := newTestLifecycle(t, time.Minute)
+			tl.logs.firstSignal = make(chan struct{})
+			firstSignal := tl.logs.firstSignal
+			entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan int, 1)
+			tl.addStop("lock", func(context.Context) error { return nil })
+			tl.addStop("owner", func(context.Context) error { close(entered); <-release; return nil })
+			tl.requestStop(reason)
+			tl.waitStopping(t)
+			go func() { finished <- tl.shutdown() }()
+			<-entered
+			tl.signals <- os.Interrupt
+			select {
+			case <-firstSignal:
+			case <-tl.exits:
+				t.Fatal("first signal forced exit")
+			case <-time.After(5 * time.Second):
+				t.Fatal("first signal not observed")
+			}
+			select {
+			case <-finished:
+				t.Fatal("shutdown completed before drain")
+			default:
+			}
+			tl.signals <- syscall.SIGTERM
+			select {
+			case code := <-tl.exits:
+				if code != exitError {
+					t.Fatalf("forced exit = %d", code)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("second signal did not force exit")
+			}
+			close(release)
+			<-finished
+		})
+	}
+}
+
+// heldLifecycleSession uses a real guarded store but no protocol client or network.
+type heldLifecycleSession struct {
+	cfg      wa.SessionConfig
+	barrier  *store.DeviceBarrier
+	connect  chan struct{}
+	retiring chan struct{}
+	fault    chan struct{}
+}
+
+func (s *heldLifecycleSession) Epoch() uint64                   { return s.cfg.Epoch }
+func (s *heldLifecycleSession) HasIdentity() bool               { return true }
+func (s *heldLifecycleSession) RecoveryPending() bool           { return false }
+func (s *heldLifecycleSession) StorageFaulted() <-chan struct{} { return s.fault }
+func (s *heldLifecycleSession) Disconnect()                     {}
+func (s *heldLifecycleSession) Connect(ctx context.Context) error {
+	select {
+	case <-s.connect:
+		s.cfg.Dispatch(s.cfg.Epoch, wa.SessionConnected)
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (s *heldLifecycleSession) Retire(ctx context.Context) error {
+	close(s.retiring)
+	return s.barrier.Retire(ctx)
+}
+
+func TestCommandCompletionFirstSignalDrainsRealStore(t *testing.T) {
+	for _, kind := range []string{"pair", "stdio"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := privateDir(t)
+			seedSavedIdentity(t, dir)
+			signals := make(chan os.Signal, 2)
+			exits := make(chan int, 1)
+			logs := &syncBuffer{firstSignal: make(chan struct{})}
+			firstSignal := logs.firstSignal
+			oldLifecycle, oldOwner, oldSeam := lifecycleFactory, newOwner, ownerSeam
+			t.Cleanup(func() { lifecycleFactory, newOwner, ownerSeam = oldLifecycle, oldOwner, oldSeam })
+			lifecycleFactory = func(logger *slog.Logger) *lifecycle {
+				return newLifecycleWith(logger, signals, func(code int) { exits <- code }, time.Minute)
+			}
+			newOwner = productionOwner
+			sessionReady := make(chan *heldLifecycleSession, 1)
+			storeReady := make(chan *store.Store, 1)
+			release := make(chan struct{})
+			transaction := make(chan error, 1)
+			var calls atomic.Int64
+			ownerSeam = &ownerSeamConfig{discoveryRoundTripper: roundTripCount{counter: &calls}, sessionFactory: func(cfg wa.SessionConfig) (wa.SessionHandle, error) {
+				dev, barrier, err := cfg.Store.LoadDevice(context.Background())
+				if err != nil {
+					return nil, err
+				}
+				entered := make(chan struct{})
+				go func() {
+					transaction <- dev.EventBuffer.DoDecryptionTxn(context.Background(), func(context.Context) error { close(entered); <-release; return nil })
+				}()
+				<-entered
+				s := &heldLifecycleSession{cfg: cfg, barrier: barrier, connect: make(chan struct{}), retiring: make(chan struct{}), fault: make(chan struct{})}
+				storeReady <- cfg.Store
+				sessionReady <- s
+				return s, nil
+			}}
+			input, inputWriter := io.Pipe()
+			defer input.Close()
+			defer inputWriter.Close()
+			finished := make(chan int, 1)
+			go func() { finished <- run([]string{kind, "--data-dir", dir}, input, io.Discard, logs, nil) }()
+			sess := <-sessionReady
+			st := <-storeReady
+			close(sess.connect)
+			if kind == "stdio" {
+				inputWriter.Close()
+			}
+			select {
+			case <-sess.retiring:
+			case <-time.After(10 * time.Second):
+				t.Fatal("command did not initiate owner retirement")
+			}
+			wantReason := "pair finished"
+			if kind == "stdio" {
+				wantReason = "stdin closed"
+			}
+			if !strings.Contains(logs.String(), `reason="`+wantReason+`"`) {
+				t.Fatalf("missing actual shutdown reason %q: %s", wantReason, logs.String())
+			}
+			signals <- os.Interrupt
+			select {
+			case <-firstSignal:
+			case code := <-exits:
+				t.Fatalf("first signal forced exit %d", code)
+			case <-time.After(5 * time.Second):
+				t.Fatal("first signal not observed")
+			}
+			select {
+			case code := <-finished:
+				t.Fatalf("command returned %d before drain", code)
+			default:
+			}
+			select {
+			case <-st.Quiesced():
+				t.Fatal("store quiesced before held transaction drained")
+			default:
+			}
+			state, _, err := st.RunGuard(context.Background())
+			if err != nil || state != "unsafe" {
+				t.Fatalf("before drain marker=%q error=%v", state, err)
+			}
+			if other, err := lock.Acquire(dir); err == nil {
+				other.Release()
+				t.Fatal("lock released before drain")
+			}
+			close(release)
+			if err := <-transaction; err != nil {
+				t.Fatalf("held transaction: %v", err)
+			}
+			select {
+			case code := <-finished:
+				if code != exitOK {
+					t.Fatalf("exit %d: %s", code, logs.String())
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("command did not finish after drain")
+			}
+			select {
+			case code := <-exits:
+				t.Fatalf("forced exit after one signal: %d", code)
+			default:
+			}
+			other, err := lock.Acquire(dir)
+			if err != nil {
+				t.Fatalf("lock after drain: %v", err)
+			}
+			defer other.Release()
+			reopened, err := store.Open(context.Background(), dir, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close(context.Background())
+			state, _, err = reopened.RunGuard(context.Background())
+			if err != nil || state != "clean" {
+				t.Fatalf("after drain marker=%q error=%v", state, err)
+			}
+		})
+	}
 }
 
 func TestStopDuringStartup(t *testing.T) {

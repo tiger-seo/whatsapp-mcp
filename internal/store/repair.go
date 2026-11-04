@@ -16,6 +16,17 @@ var (
 
 var repairCollections = [...]string{"critical_block", "critical_unblock_low", "regular_high", "regular", "regular_low"}
 
+func (sess *deviceSession) validateRunMarker(ctx context.Context) error {
+	var count int
+	if err := sess.st.wrapped.QueryRow(ctx, `SELECT count(*) FROM unsafe_run WHERE id=1 AND typeof(id)='integer' AND typeof(state)='text' AND state IN ('clean','unsafe') AND typeof(repair_bits)='integer' AND repair_bits BETWEEN 0 AND 31 AND (SELECT count(*) FROM unsafe_run)=1`).Scan(&count); err != nil {
+		return err
+	}
+	if count != 1 {
+		return ErrUnsafeRun
+	}
+	return nil
+}
+
 type repairContextKey struct{}
 
 // RepairTicket belongs to exactly one device generation and collection.
@@ -58,13 +69,16 @@ func (sess *deviceSession) markProgress(ctx context.Context, name string, versio
 	if ticket != nil {
 		token = ticket.value[:]
 	}
-	_, err := sess.st.writer.ExecContext(ctx, `INSERT INTO device_repair
+	res, err := sess.st.writer.ExecContext(ctx, `INSERT INTO device_repair
 		(device_jid, collection, revision, target_version, repair_ticket, updated_at_ms)
-		VALUES (?, ?, 1, ?, ?, ?)
+		SELECT ?, ?, 1, ?, ?, ? FROM unsafe_run WHERE id=1 AND typeof(id)='integer' AND typeof(state)='text' AND state IN ('clean','unsafe') AND typeof(repair_bits)='integer' AND repair_bits BETWEEN 0 AND 31 AND (SELECT count(*) FROM unsafe_run)=1
 		ON CONFLICT (device_jid, collection) DO UPDATE SET
 		 revision = device_repair.revision + 1, target_version = excluded.target_version,
 		 repair_ticket = excluded.repair_ticket, updated_at_ms = excluded.updated_at_ms`,
 		sess.id.String(), name, target, token, time.Now().UTC().UnixMilli())
+	if err == nil {
+		err = requireOne(res)
+	}
 	if err == nil && ticket == nil {
 		sess.repairMu.Lock()
 		previous := sess.repairs[collectionIndex(name)]
@@ -101,6 +115,22 @@ func (sess *deviceSession) protected(ctx context.Context, name, op string, write
 		}
 		return validateCollection(name)
 	}
+	// Readiness is published only after transferred repair admission is set.
+	// Do not let a pre-save check run later against a newly ready device.
+	if !nested {
+		if sess.st.gate.isClosed() {
+			return ErrClosed
+		}
+		sess.mu.Lock()
+		retired, ready := sess.retired, sess.ready
+		sess.mu.Unlock()
+		if retired {
+			return ErrRetired
+		}
+		if !ready {
+			return ErrNotReady
+		}
+	}
 	check := func() error {
 		sess.repairMu.Lock()
 		defer sess.repairMu.Unlock()
@@ -135,6 +165,9 @@ func (sess *deviceSession) protected(ctx context.Context, name, op string, write
 	defer sess.repairFence.Unlock()
 	if err := check(); err != nil {
 		return err
+	}
+	if sess.st.hooks.protectedHold != nil {
+		sess.st.hooks.protectedHold()
 	}
 	if ticket != nil {
 		var cancel context.CancelFunc
@@ -357,6 +390,13 @@ func (b *DeviceBarrier) CompleteRepair(ctx context.Context, ticket *RepairTicket
 			}
 			if count != 1 {
 				return ErrRepairInvalid
+			}
+			res, err = s.st.wrapped.Exec(tx, `UPDATE unsafe_run SET repair_bits=repair_bits & ? WHERE id=1 AND typeof(id)='integer' AND typeof(state)='text' AND state IN ('clean','unsafe') AND typeof(repair_bits)='integer' AND repair_bits BETWEEN 0 AND 31 AND (SELECT count(*) FROM unsafe_run)=1`, 31 & ^(1<<ticket.index))
+			if err != nil {
+				return err
+			}
+			if err := requireOne(res); err != nil {
+				return err
 			}
 			return ticket.ctx.Err()
 		})

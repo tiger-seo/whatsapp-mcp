@@ -67,6 +67,7 @@ type connectionOwner struct {
 	pairing *pairingWindow
 
 	started   bool
+	ready     bool
 	startDone chan struct{}
 	stopping  bool
 	identity  bool
@@ -75,6 +76,10 @@ type connectionOwner struct {
 	// outdated records a 405 handoff for the current generation; the 405 recovery owns reconnection.
 	outdated      bool
 	manualPending bool
+	guardArmed    bool
+	unresolved    bool
+	unsafeStop    bool
+	stopErr       error
 
 	phase  Phase
 	health Health
@@ -93,6 +98,7 @@ type genState struct {
 	retireOnce sync.Once
 	retiring   bool // guarded by connectionOwner.mu
 	timingOut  bool // guarded by connectionOwner.mu
+	loggedOut  bool // guarded by connectionOwner.mu
 }
 
 // NewOwner creates the owner; call Start once to load the device and begin the lifecycle.
@@ -134,9 +140,18 @@ func (o *connectionOwner) Start(ctx context.Context) error {
 	o.mu.Unlock()
 	defer close(o.startDone)
 
+	if o.cfg.Store != nil {
+		if err := o.cfg.Store.ArmRunGuard(ctx); err != nil {
+			return err
+		}
+		o.mu.Lock()
+		o.guardArmed = true
+		o.mu.Unlock()
+	}
 	gen, err := o.openGeneration()
 	if err != nil {
 		o.mu.Lock()
+		o.unsafeStop = true
 		if !o.stopping {
 			o.phase = PhaseStopped
 		}
@@ -151,6 +166,7 @@ func (o *connectionOwner) Start(ctx context.Context) error {
 		return ErrStopping
 	}
 	o.gen = gen
+	o.ready = true
 	o.identity = gen.handle.HasIdentity()
 	if pending := gen.handle.RecoveryPending(); pending {
 		o.health.RecoveryPending = true
@@ -241,6 +257,9 @@ func (o *connectionOwner) storageFault(gen *genState) {
 // dispatch admits one upstream event of the current generation; stale epochs are denied.
 func (o *connectionOwner) dispatch(epoch uint64, ev SessionEvent) {
 	o.mu.Lock()
+	if ev == SessionLoggedOut && o.gen != nil && o.gen.epoch == epoch {
+		o.gen.loggedOut = true
+	}
 	if o.stopping || o.gen == nil || o.gen.epoch != epoch || o.gen.retiring {
 		o.mu.Unlock()
 		return
@@ -260,6 +279,9 @@ func (o *connectionOwner) dispatch(epoch uint64, ev SessionEvent) {
 		o.connected = true
 		o.outdated = false
 		o.phase = PhaseConnected
+		if o.identity {
+			o.unresolved = false
+		}
 		o.log.Debug("connection confirmed", "event", "connection_confirmed")
 	case SessionDisconnected:
 		o.connected = false
@@ -269,6 +291,9 @@ func (o *connectionOwner) dispatch(epoch uint64, ev SessionEvent) {
 	case SessionPairSuccess:
 		// PairSuccess proves the durable save happened in the guarded container.
 		o.identity = true
+		if o.connected {
+			o.unresolved = false
+		}
 		if o.phase != PhaseConnected {
 			o.phase = PhaseConnecting
 		}
@@ -282,6 +307,9 @@ func (o *connectionOwner) dispatch(epoch uint64, ev SessionEvent) {
 			w.clearCodeLocked()
 		}
 	case SessionLoggedOut:
+		// Prevent a concurrent pairing request from reusing this generation before
+		// the retirement goroutine starts.
+		gen.retiring = true
 		o.identity = false
 		o.connected = false
 		o.phase = PhaseLoggedOut
@@ -405,6 +433,14 @@ func (o *connectionOwner) BeginStop() {
 // Done closes after BeginStop and the generation drain.
 func (o *connectionOwner) Done() <-chan struct{} { return o.done }
 
+// StopError reports whether shutdown left the run marker requiring recovery.
+// It is final after Done closes.
+func (o *connectionOwner) StopError() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.stopErr
+}
+
 func (o *connectionOwner) finishStop() {
 	o.mu.Lock()
 	started := o.started
@@ -427,6 +463,23 @@ func (o *connectionOwner) finishStop() {
 	o.slot <- struct{}{}
 	<-o.slot
 	o.mu.Lock()
+	clear := o.guardArmed && !o.unresolved && !o.unsafeStop && !o.health.StorageFault
+	if o.guardArmed && !clear {
+		if o.stopErr == nil {
+			o.stopErr = store.ErrUnsafeRun
+		}
+		o.log.Error("run remains unsafe; offline recovery is required", "event", "run_guard_recovery_required")
+	}
+	o.mu.Unlock()
+	if clear {
+		if err := o.cfg.Store.ClearRunGuard(context.Background()); err != nil {
+			o.mu.Lock()
+			o.stopErr = err
+			o.mu.Unlock()
+			o.log.Error("run marker could not be cleared; restore disk space and perform offline recovery", "event", "run_guard_clear_failed", "error", err)
+		}
+	}
+	o.mu.Lock()
 	o.phase = PhaseStopped
 	o.publishLocked()
 	o.mu.Unlock()
@@ -444,6 +497,44 @@ func (o *connectionOwner) retireGeneration(gen *genState) {
 		gen.handle.Disconnect()
 		if err := gen.handle.Retire(context.Background()); err != nil {
 			o.log.Warn("generation drain did not quiesce", "event", "owner_drain_failed")
+			o.mu.Lock()
+			o.unsafeStop = true
+			o.mu.Unlock()
+		}
+		if upstream, ok := gen.handle.(interface{ UpstreamDrainUnproven() bool }); ok && upstream.UpstreamDrainUnproven() {
+			o.mu.Lock()
+			o.unsafeStop = true
+			o.mu.Unlock()
+			o.log.Error("upstream handlers may outlive retirement; offline recovery is required", "event", "upstream_drain_unproven")
+		}
+		// The watcher can exit on cancellation before a previously admitted write
+		// reports its fault. Retirement has drained those writes, so inspect the
+		// latched signal before releasing this generation or clearing the marker.
+		select {
+		case <-gen.handle.StorageFaulted():
+			o.mu.Lock()
+			o.health.StorageFault = true
+			o.unsafeStop = true
+			o.mu.Unlock()
+		default:
+		}
+		o.mu.Lock()
+		confirmed := gen.loggedOut
+		o.mu.Unlock()
+		if cleanup, ok := gen.handle.(interface {
+			FinishRevocation(context.Context, bool) error
+		}); ok {
+			if err := cleanup.FinishRevocation(context.Background(), confirmed); err != nil {
+				o.mu.Lock()
+				o.unsafeStop = true
+				o.stopErr = err
+				o.mu.Unlock()
+				o.log.Error("revocation cleanup failed; offline recovery is required", "event", "revocation_cleanup_failed", "error", err)
+			}
+		} else if confirmed && o.cfg.Store != nil {
+			o.mu.Lock()
+			o.unsafeStop = true
+			o.mu.Unlock()
 		}
 		o.mu.Lock()
 		if o.gen == gen {

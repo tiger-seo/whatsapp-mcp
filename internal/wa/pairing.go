@@ -7,6 +7,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/tiger-seo/whatsapp-mcp/internal/store"
 	"go.mau.fi/whatsmeow"
 	"rsc.io/qr"
 )
@@ -43,6 +44,10 @@ func (o *connectionOwner) RequestPairing(ctx context.Context) (PairingState, err
 		o.mu.Unlock()
 		return PairingState{}, ErrStopping
 	}
+	if o.unsafeStop || !o.ready {
+		o.mu.Unlock()
+		return PairingState{}, store.ErrUnsafeRun
+	}
 	if o.identity {
 		o.mu.Unlock()
 		return PairingState{}, ErrAlreadyPaired
@@ -51,6 +56,10 @@ func (o *connectionOwner) RequestPairing(ctx context.Context) (PairingState, err
 		snap := w.snapshotLocked()
 		o.mu.Unlock()
 		return snap, nil
+	}
+	if o.unresolved {
+		o.mu.Unlock()
+		return PairingState{}, store.ErrUnsafeRun
 	}
 	previous := o.pairing
 	o.mu.Unlock()
@@ -76,6 +85,7 @@ func (o *connectionOwner) RequestPairing(ctx context.Context) (PairingState, err
 		return PairingState{}, ErrStopping
 	}
 	o.pairing = w
+	o.unresolved = true
 	o.phase = PhasePairing
 	o.publishLocked()
 	o.mu.Unlock()
@@ -98,6 +108,12 @@ func (o *connectionOwner) ensureFreshGeneration() (*genState, error) {
 	}
 	if gen != nil {
 		o.retireGeneration(gen)
+	}
+	o.mu.Lock()
+	blocked := o.unsafeStop || o.stopping
+	o.mu.Unlock()
+	if blocked {
+		return nil, store.ErrUnsafeRun
 	}
 	fresh, err := o.openGeneration()
 	if err != nil {

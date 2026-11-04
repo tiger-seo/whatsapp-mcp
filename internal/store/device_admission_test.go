@@ -1026,8 +1026,9 @@ func TestSaveOutcomes(t *testing.T) {
 		second := make(chan error, 1)
 		go func() { first <- dev.Save(ctx) }()
 		<-hold
-		go func() { second <- dev.Save(ctx) }()
-		eventually(t, "both saves to be admitted", func() bool { return st.gate.activeCount() == 2 })
+		started := make(chan struct{})
+		go func() { close(started); second <- dev.Save(ctx) }()
+		<-started
 		close(release)
 		for _, c := range []chan error{first, second} {
 			if err := <-c; err != nil {

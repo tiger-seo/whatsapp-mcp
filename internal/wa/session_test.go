@@ -1,15 +1,18 @@
 package wa
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"log/slog"
 	"net/http"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,6 +25,8 @@ import (
 	"go.mau.fi/whatsmeow"
 	waBinary "go.mau.fi/whatsmeow/binary"
 	"go.mau.fi/whatsmeow/proto/waAdv"
+	"go.mau.fi/whatsmeow/proto/waCompanionReg"
+	"go.mau.fi/whatsmeow/proto/waWa6"
 	wastore "go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -285,7 +290,7 @@ func TestSessionVersionSelectedBeforeConnect(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 	payload := s.client.GetClientPayload()
-	if payload.UserAgent.AppVersion == nil || payload.UserAgent.AppVersion.GetTertiary() != 4242 {
+	if payload.UserAgent.AppVersion == nil || payload.UserAgent.AppVersion.GetPrimary() != selected[0] || payload.UserAgent.AppVersion.GetSecondary() != selected[1] || payload.UserAgent.AppVersion.GetTertiary() != selected[2] {
 		t.Fatalf("app version = %v", payload.UserAgent.AppVersion)
 	}
 	if payload.DevicePairingData == nil {
@@ -314,6 +319,372 @@ func TestSessionVersionSelectedBeforeConnect(t *testing.T) {
 	}
 	if err := s2.Retire(context.Background()); err != nil {
 		t.Fatalf("retire: %v", err)
+	}
+}
+
+func TestSessionFreshRegistrationIdentification(t *testing.T) {
+	st := openWADir(t)
+	lifetime, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg := newSessionTestConfig(st, lifetime)
+	cfg.Versions.selected.Store(&Version{2, 3000, 4242})
+	s, err := OpenSession(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Retire(context.Background())
+	payload := s.client.GetClientPayload()
+	var props waCompanionReg.DeviceProps
+	if err := proto.Unmarshal(payload.GetDevicePairingData().GetDeviceProps(), &props); err != nil {
+		t.Fatal("failed to decode synthetic companion properties")
+	}
+	if props.GetOs() != "Linux" || props.GetPlatformType() != waCompanionReg.DeviceProps_CHROME {
+		t.Errorf("unexpected companion identification: OS=%q platform=%v", props.GetOs(), props.GetPlatformType())
+	}
+	if props.GetVersion().GetPrimary() != 2 || props.GetVersion().GetSecondary() != 3000 || props.GetVersion().GetTertiary() != 4242 {
+		t.Error("companion version does not match the selected version")
+	}
+}
+
+func TestSessionPayloadPreservesUnknownFields(t *testing.T) {
+	st := openWADir(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg := newSessionTestConfig(st, ctx)
+	s, err := OpenSession(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Retire(context.Background())
+	base := proto.Clone(wastore.BaseClientPayload)
+	globalProps := proto.Clone(wastore.DeviceProps)
+	template := s.dev.GetClientPayload()
+	unknown := []byte{0xf8, 0x07, 0x01}
+	template.ProtoReflect().SetUnknown(unknown)
+	template.UserAgent.ProtoReflect().SetUnknown(unknown)
+	template.UserAgent.AppVersion.ProtoReflect().SetUnknown(unknown)
+	var props waCompanionReg.DeviceProps
+	if err := proto.Unmarshal(template.DevicePairingData.DeviceProps, &props); err != nil {
+		t.Fatal(err)
+	}
+	props.ProtoReflect().SetUnknown(unknown)
+	props.Version.ProtoReflect().SetUnknown(unknown)
+	template.DevicePairingData.DeviceProps, err = proto.Marshal(&props)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.buildPayload = func() *waWa6.ClientPayload { return proto.Clone(template).(*waWa6.ClientPayload) }
+	for _, v := range []Version{{2, 3000, 0}, {2, 3000, 4294967295}} {
+		cfg.Versions.selected.Store(&v)
+		p := s.client.GetClientPayload()
+		if !bytes.Equal(p.ProtoReflect().GetUnknown(), unknown) || !bytes.Equal(p.UserAgent.ProtoReflect().GetUnknown(), unknown) || !bytes.Equal(p.UserAgent.AppVersion.ProtoReflect().GetUnknown(), unknown) {
+			t.Fatal("payload unknown fields lost")
+		}
+		var got waCompanionReg.DeviceProps
+		if err := proto.Unmarshal(p.DevicePairingData.DeviceProps, &got); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got.ProtoReflect().GetUnknown(), unknown) || !bytes.Equal(got.Version.ProtoReflect().GetUnknown(), unknown) {
+			t.Fatal("companion unknown fields lost")
+		}
+		if got.GetVersion().GetPrimary() != v[0] || got.GetVersion().GetSecondary() != v[1] || got.GetVersion().GetTertiary() != v[2] || p.UserAgent.AppVersion.GetPrimary() != v[0] || p.UserAgent.AppVersion.GetSecondary() != v[1] || p.UserAgent.AppVersion.GetTertiary() != v[2] || p.UserAgent.GetOsVersion() != wastore.WAVersionContainer(v).String() || p.UserAgent.GetOsBuildNumber() != wastore.WAVersionContainer(v).String() {
+			t.Fatal("handshake version fields disagree")
+		}
+		hash := wastore.WAVersionContainer(v).Hash()
+		if !bytes.Equal(p.DevicePairingData.BuildHash, hash[:]) || !bytes.Equal(p.DevicePairingData.EIdent, template.DevicePairingData.EIdent) || !proto.Equal(got.HistorySyncConfig, props.HistorySyncConfig) {
+			t.Fatal("registration hash or unrelated properties changed")
+		}
+		// Normalize only the documented changes and compare the complete messages.
+		got.Os, got.PlatformType = props.Os, props.PlatformType
+		got.Version.Primary, got.Version.Secondary, got.Version.Tertiary = props.Version.Primary, props.Version.Secondary, props.Version.Tertiary
+		if !proto.Equal(&got, &props) {
+			t.Fatal("unrelated companion properties changed")
+		}
+		p.UserAgent.AppVersion.Primary, p.UserAgent.AppVersion.Secondary, p.UserAgent.AppVersion.Tertiary = template.UserAgent.AppVersion.Primary, template.UserAgent.AppVersion.Secondary, template.UserAgent.AppVersion.Tertiary
+		p.UserAgent.OsVersion, p.UserAgent.OsBuildNumber = template.UserAgent.OsVersion, template.UserAgent.OsBuildNumber
+		p.DevicePairingData.BuildHash = template.DevicePairingData.BuildHash
+		p.DevicePairingData.DeviceProps = template.DevicePairingData.DeviceProps
+		if !proto.Equal(p, template) {
+			t.Fatal("unrelated payload or registration fields changed")
+		}
+	}
+	if !proto.Equal(base, wastore.BaseClientPayload) || !proto.Equal(globalProps, wastore.DeviceProps) {
+		t.Fatal("library globals changed")
+	}
+}
+
+func TestSessionSyntheticQRConstruction(t *testing.T) {
+	st := openWADir(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	network := &countingTransport{}
+	cfg := newSessionTestConfig(st, ctx)
+	cfg.PreLoginHTTP, cfg.WebsocketHTTP = countingClient(network), countingClient(network)
+	s, err := OpenSession(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Retire(context.Background())
+	qr := make(chan *events.QR, 1)
+	s.client.AddEventHandler(func(event any) {
+		if e, ok := event.(*events.QR); ok {
+			qr <- e
+		}
+	})
+	node := &waBinary.Node{Attrs: waBinary.Attrs{"from": types.ServerJID, "id": "synthetic"}, Content: []waBinary.Node{{Tag: "pair-device", Content: []waBinary.Node{{Tag: "ref", Content: []byte("synthetic-reference")}}}}}
+	s.client.DangerousInternals().HandlePairDevice(ctx, node)
+	select {
+	case event := <-qr:
+		if len(event.Codes) != 1 {
+			t.Fatal("expected one synthetic QR")
+		}
+		parts := strings.Split(strings.TrimPrefix(event.Codes[0], "https://wa.me/settings/linked_devices#"), ",")
+		if len(parts) != 5 || parts[0] != "synthetic-reference" || parts[4] != "1" {
+			t.Fatal("synthetic QR reference or client type mismatch")
+		}
+		if parts[1] != base64.StdEncoding.EncodeToString(s.dev.NoiseKey.Pub[:]) || parts[2] != base64.StdEncoding.EncodeToString(s.dev.IdentityKey.Pub[:]) || parts[3] != base64.StdEncoding.EncodeToString(s.dev.AdvSecretKey) {
+			t.Fatal("synthetic QR key fields mismatch")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no synthetic QR event")
+	}
+	if network.count() != 0 {
+		t.Fatal("unexpected network request")
+	}
+}
+
+type stalledDiagnosticHandler struct {
+	entered chan struct{}
+	release chan struct{}
+	records chan slog.Record
+	once    sync.Once
+}
+
+func (h *stalledDiagnosticHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *stalledDiagnosticHandler) Handle(_ context.Context, r slog.Record) error {
+	h.once.Do(func() { close(h.entered); <-h.release })
+	h.records <- r.Clone()
+	return nil
+}
+func (h *stalledDiagnosticHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *stalledDiagnosticHandler) WithGroup(string) slog.Handler      { return h }
+
+func TestSessionCodecFailuresDoNotBlockCallback(t *testing.T) {
+	st := openWADir(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h := &stalledDiagnosticHandler{entered: make(chan struct{}), release: make(chan struct{}), records: make(chan slog.Record, 8)}
+	cfg := newSessionTestConfig(st, ctx)
+	cfg.Log = slog.New(h)
+	s, err := OpenSession(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := proto.Clone(wastore.DeviceProps)
+	base := proto.Clone(wastore.BaseClientPayload)
+	noisePub, noisePriv := *s.dev.NoiseKey.Pub, *s.dev.NoiseKey.Priv
+	identityPub, identityPriv := *s.dev.IdentityKey.Pub, *s.dev.IdentityKey.Priv
+	prePub, prePriv, preSig := *s.dev.SignedPreKey.Pub, *s.dev.SignedPreKey.Priv, *s.dev.SignedPreKey.Signature
+	preID, registrationID := s.dev.SignedPreKey.KeyID, s.dev.RegistrationID
+	adv := append([]byte(nil), s.dev.AdvSecretKey...)
+	unchanged := func() bool {
+		return proto.Equal(before, wastore.DeviceProps) && proto.Equal(base, wastore.BaseClientPayload) && noisePub == *s.dev.NoiseKey.Pub && noisePriv == *s.dev.NoiseKey.Priv && identityPub == *s.dev.IdentityKey.Pub && identityPriv == *s.dev.IdentityKey.Priv && prePub == *s.dev.SignedPreKey.Pub && prePriv == *s.dev.SignedPreKey.Priv && preSig == *s.dev.SignedPreKey.Signature && preID == s.dev.SignedPreKey.KeyID && registrationID == s.dev.RegistrationID && bytes.Equal(adv, s.dev.AdvSecretKey) && s.dev.ID == nil && s.dev.Account == nil
+	}
+	s.decodeProps = func([]byte, proto.Message) error { return errors.New("secret synthetic decode error") }
+	if s.client.GetClientPayload() != nil {
+		t.Fatal("decode failure returned a payload")
+	}
+	if !unchanged() {
+		t.Fatal("decode failure changed credentials or globals")
+	}
+	select {
+	case <-h.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("diagnostic consumer did not start")
+	}
+	// The consumer is stalled in the logger; repeated failures and another category cannot block.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 3; i++ {
+			if s.client.GetClientPayload() != nil {
+				t.Error("decode failure returned a payload")
+			}
+		}
+		s.decodeProps = proto.Unmarshal
+		s.encodeProps = func(proto.Message) ([]byte, error) { return nil, errors.New("secret synthetic encode error") }
+		if s.client.GetClientPayload() != nil {
+			t.Error("encode failure returned a payload")
+		}
+		if !unchanged() {
+			t.Error("encode failure changed credentials or globals")
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		close(h.release)
+		t.Fatal("callback blocked on logger or wakeup")
+	}
+	retired := make(chan error, 1)
+	go func() { retired <- s.Retire(context.Background()) }()
+	select {
+	case <-s.diagnosticStop:
+	case <-time.After(5 * time.Second):
+		close(h.release)
+		<-retired
+		t.Fatal("retirement did not stop diagnostic consumer")
+	}
+	select {
+	case <-retired:
+		t.Fatal("retirement completed while logger stalled")
+	default:
+	}
+	if s.diagnosticBits.Load()&3 != 3 {
+		t.Fatal("later decode and encode failures not pending at diagnostic stop")
+	}
+	close(h.release)
+	if err := <-retired; err != nil {
+		t.Fatal(err)
+	}
+	close(h.records)
+	var decode, encode int
+	for record := range h.records {
+		if record.Level != slog.LevelWarn {
+			t.Error("unexpected diagnostic level")
+		}
+		allowed := map[string]string{"registration properties decode failed": "registration_decode_failed", "registration properties encode failed": "registration_encode_failed"}
+		want, ok := allowed[record.Message]
+		if !ok {
+			t.Error("unexpected diagnostic message")
+		}
+		count := 0
+		record.Attrs(func(a slog.Attr) bool {
+			count++
+			if a.Key != "event" || a.Value.Kind() != slog.KindString || a.Value.String() != want {
+				t.Error("unexpected structured diagnostic attribute")
+			}
+			return true
+		})
+		if count != 1 {
+			t.Error("unexpected diagnostic attribute count")
+		}
+		if want == "registration_decode_failed" {
+			decode++
+		}
+		if want == "registration_encode_failed" {
+			encode++
+		}
+	}
+	if decode < 2 || encode < 1 {
+		t.Fatal("pending diagnostic categories were not both delivered after the initial blocked record")
+	}
+	if !unchanged() {
+		t.Fatal("failure changed globals or synthetic credentials")
+	}
+}
+
+func TestSessionRetirementDrainsPayloadCallback(t *testing.T) {
+	st := openWADir(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, err := OpenSession(newSessionTestConfig(st, ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	s.decodeProps = func([]byte, proto.Message) error {
+		close(entered)
+		<-release
+		return errors.New("synthetic decode failure")
+	}
+	callbackDone := make(chan struct{})
+	go func() { defer close(callbackDone); s.client.GetClientPayload() }()
+	<-entered
+	retired := make(chan error, 1)
+	go func() { retired <- s.Retire(context.Background()) }()
+	// Admission closure is observable without relying on timing of the draining goroutine.
+	for s.callbackState.Load()&(1<<63) == 0 {
+		runtime.Gosched()
+	}
+	if s.client.GetClientPayload() != nil {
+		t.Fatal("retired callback returned a payload")
+	}
+	select {
+	case <-retired:
+		t.Fatal("retirement returned while callback was active")
+	default:
+	}
+	close(release)
+	<-callbackDone
+	if err := <-retired; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionRetireConcurrentWaiterHonorsCancellation(t *testing.T) {
+	st := openWADir(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, err := OpenSession(newSessionTestConfig(st, ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	s.decodeProps = func([]byte, proto.Message) error { close(entered); <-release; return errors.New("synthetic") }
+	go s.client.GetClientPayload()
+	<-entered
+	first := make(chan error, 1)
+	go func() { first <- s.Retire(context.Background()) }()
+	for s.callbackState.Load()&(1<<63) == 0 {
+		runtime.Gosched()
+	}
+	waitCtx, stop := context.WithCancel(context.Background())
+	stop()
+	second := make(chan error, 1)
+	go func() { second <- s.Retire(waitCtx) }()
+	select {
+	case err := <-second:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("second retirement = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Error("concurrent retirement ignored cancellation")
+	}
+	close(release)
+	if err := <-first; err != nil {
+		t.Error(err)
+	}
+}
+
+func TestSessionRetireTimeoutFinishesWithoutRetry(t *testing.T) {
+	st := openWADir(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, err := OpenSession(newSessionTestConfig(st, ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	s.decodeProps = func([]byte, proto.Message) error { close(entered); <-release; return errors.New("synthetic") }
+	go s.client.GetClientPayload()
+	<-entered
+	waitCtx, stop := context.WithCancel(context.Background())
+	retired := make(chan error, 1)
+	go func() { retired <- s.Retire(waitCtx) }()
+	for s.callbackState.Load()&(1<<63) == 0 {
+		runtime.Gosched()
+	}
+	stop()
+	if err := <-retired; !errors.Is(err, context.Canceled) {
+		t.Errorf("retirement = %v", err)
+	}
+	close(release)
+	select {
+	case <-s.diagnosticDone:
+	case <-time.After(time.Second):
+		t.Error("diagnostic consumer did not finish after callback drain without a retry")
+		_ = s.Retire(context.Background())
 	}
 }
 
@@ -404,6 +775,7 @@ func TestSessionPayloadCloneLeavesLibraryGlobalsUnchanged(t *testing.T) {
 		t.Fatalf("retire: %v", err)
 	}
 	st.Close(context.Background())
+	beforeRows := deviceRows(t, dir)
 	st2, err := store.Open(context.Background(), dir, nil)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
@@ -417,12 +789,25 @@ func TestSessionPayloadCloneLeavesLibraryGlobalsUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen session: %v", err)
 	}
+	defer s2.Retire(context.Background())
 	payload := s2.client.GetClientPayload()
 	if payload.DevicePairingData != nil {
 		t.Error("login payload carried registration data")
 	}
-	if payload.UserAgent.AppVersion.GetTertiary() != 4242 {
+	if payload.UserAgent.AppVersion.GetPrimary() != 2 || payload.UserAgent.AppVersion.GetSecondary() != 3000 || payload.UserAgent.AppVersion.GetTertiary() != 4242 {
 		t.Errorf("login app version = %v", payload.UserAgent.AppVersion)
+	}
+	if payload.UserAgent.GetOsVersion() != "2.3000.4242" || payload.UserAgent.GetOsBuildNumber() != "2.3000.4242" {
+		t.Error("saved-session OS version or build does not match the selected version")
+	}
+	if err := s2.Retire(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st2.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if after := deviceRows(t, dir); !reflect.DeepEqual(beforeRows, after) {
+		t.Error("saved device row changed during payload construction")
 	}
 }
 

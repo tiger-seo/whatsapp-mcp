@@ -30,7 +30,9 @@ func TestLowDiskRefusesWritesAndKeepsEveryFile(t *testing.T) {
 	free := uint64(diskReserve - 1)
 	now := time.Unix(5000, 0)
 	dir := newDataDir(t)
-	st, _ := openTestWith(t, dir, openOptions{hooks: testHooks{free: func(string) (uint64, error) { return free, nil }}})
+	st, _ := openTest(t, dir)
+	st.disk.free = func(string) (uint64, error) { return free, nil }
+	st.disk.measured = time.Time{}
 	st.disk.now = func() time.Time { return now }
 	names := strings.Join(fileNames(t, dir), ",")
 	ctx := context.Background()

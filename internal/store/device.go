@@ -234,6 +234,11 @@ func (sess *deviceSession) run(ctx context.Context, op string, write, bulk bool,
 			child, deadlineCancel = context.WithDeadline(child, deadline)
 			defer deadlineCancel()
 		}
+		if write {
+			if err := sess.validateRunMarker(child); err != nil {
+				return err
+			}
+		}
 		return fn(child)
 	}
 	if sess.st.gate.isClosed() {
@@ -265,6 +270,11 @@ func (sess *deviceSession) run(ctx context.Context, op string, write, bulk bool,
 	if validate != nil {
 		if err := validate(); err != nil {
 			return err
+		}
+	}
+	if write {
+		if err := sess.validateRunMarker(opCtx); err != nil {
+			return sess.st.report(op, err)
 		}
 	}
 	tok := &leaseToken{sess: sess, ctx: opCtx}
@@ -319,10 +329,34 @@ func (b *DeviceBarrier) pendingRemoval() bool {
 	return sess.deleted
 }
 
+// FinishRevocation runs only after retirement. A confirmed logout independently
+// authorizes local cleanup even if the upstream deferred delete lost the race
+// with retirement. A deferred delete alone does not establish revocation.
+func (b *DeviceBarrier) FinishRevocation(ctx context.Context, confirmed bool) error {
+	if !b.sess.drained() {
+		return ErrNotQuiescent
+	}
+	if !confirmed {
+		if b.pendingRemoval() {
+			return ErrDeleteDeferred
+		}
+		return nil
+	}
+	return b.removeConfirmedRevoked(ctx)
+}
+
 // removeRevoked performs the owner-controlled cleanup of one confirmed revoked device. It runs after the
 // generation has drained, removes only the recorded device row through the shared admission, and refuses
 // without a deferred request. The method is package-private until the owner-facing maintenance is finished.
 func (b *DeviceBarrier) removeRevoked(ctx context.Context) error {
+	return b.removeRevokedWithConfirmation(ctx, false)
+}
+
+func (b *DeviceBarrier) removeConfirmedRevoked(ctx context.Context) error {
+	return b.removeRevokedWithConfirmation(ctx, true)
+}
+
+func (b *DeviceBarrier) removeRevokedWithConfirmation(ctx context.Context, confirmed bool) error {
 	sess := b.sess
 	if !sess.drained() {
 		return ErrNotQuiescent
@@ -332,8 +366,11 @@ func (b *DeviceBarrier) removeRevoked(ctx context.Context) error {
 	if sess.removed {
 		return nil
 	}
-	if !sess.deleted {
+	if !sess.deleted && !confirmed {
 		return ErrNotFound
+	}
+	if !sess.bound || !sess.ready {
+		return ErrNotReady
 	}
 	op := newOpID()
 	release, opCtx, err := sess.st.gate.enter(ctx)
@@ -344,8 +381,27 @@ func (b *DeviceBarrier) removeRevoked(ctx context.Context) error {
 	if err := sess.st.disk.check(); err != nil {
 		return sess.st.report(op, err)
 	}
-	if err := sess.st.container.DeleteDevice(opCtx, sess.dev); err != nil {
+	conn, err := sess.st.writer.Conn(opCtx)
+	if err != nil {
 		return sess.st.report(op, err)
+	}
+	defer conn.Close()
+	if err := verifyDurableWriter(opCtx, conn); err != nil {
+		return err
+	}
+	tx, err := conn.BeginTx(opCtx, nil)
+	if err != nil {
+		return sess.st.report(op, err)
+	}
+	defer tx.Rollback()
+	if err := validateRunMarker(opCtx, tx); err != nil {
+		return err
+	}
+	if err := transferRepairAndDelete(opCtx, tx, sess.id.String()); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return ErrIndeterminate
 	}
 	sess.removed = true
 	return nil
@@ -414,6 +470,10 @@ func (d *deviceContainer) PutDevice(ctx context.Context, dev *wastore.Device) (r
 	}
 	defer sess.work.Done()
 
+	// Repair completion takes this fence before admission; keep the same order
+	// so a committed Save cannot publish recovery from already-cleared bits.
+	sess.repairFence.Lock()
+	defer sess.repairFence.Unlock()
 	op := newOpID()
 	release, opCtx, err := sess.st.gate.enter(ctx)
 	if err != nil {
@@ -433,8 +493,35 @@ func (d *deviceContainer) PutDevice(ctx context.Context, dev *wastore.Device) (r
 	snapshot.ID = &id
 	snapshot.LID = frozenLID
 	snapshot.Initialized = true
-	if err := sess.st.container.PutDevice(opCtx, &snapshot); err != nil {
+	var bits int
+	if err := sess.st.wrapped.DoTxn(opCtx, nil, func(tx context.Context) error {
+		if err := sess.validateRunMarker(tx); err != nil {
+			return err
+		}
+		if err := sess.st.wrapped.QueryRow(tx, "SELECT repair_bits FROM unsafe_run WHERE id=1").Scan(&bits); err != nil {
+			return err
+		}
+		if err := sess.st.container.PutDevice(tx, &snapshot); err != nil {
+			return err
+		}
+		for i, name := range repairCollections {
+			if _, err := sess.st.wrapped.Exec(tx, `INSERT INTO device_repair (device_jid, collection, revision, target_version, repair_ticket, updated_at_ms)
+				SELECT ?, ?, 1, NULL, NULL, ? FROM unsafe_run WHERE id=1 AND (repair_bits & ?) != 0
+				ON CONFLICT(device_jid, collection) DO NOTHING`, frozenID.String(), name, time.Now().UTC().UnixMilli(), 1<<i); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		return sess.st.report(op, err)
+	}
+	if sess.st.hooks.devicePutCommitted != nil {
+		sess.st.hooks.devicePutCommitted()
+	}
+	if bits != 0 {
+		sess.repairMu.Lock()
+		sess.recovery = true
+		sess.repairMu.Unlock()
 	}
 	sess.mu.Lock()
 	sess.ready = true

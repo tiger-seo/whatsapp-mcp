@@ -104,6 +104,7 @@ func (lc *lifecycle) requestStop(reason string) {
 
 func (lc *lifecycle) watch() {
 	stopping := false
+	signalSeen := false
 	begin := func(reason string) {
 		stopping = true
 		lc.log().Info("shutting down", "reason", reason)
@@ -112,12 +113,17 @@ func (lc *lifecycle) watch() {
 	for {
 		select {
 		case sig := <-lc.signals:
-			if stopping {
+			if signalSeen {
 				lc.log().Warn("forced exit")
 				lc.exit(exitError)
 				return
 			}
-			begin(sig.String())
+			signalSeen = true
+			if !stopping {
+				begin(sig.String())
+			} else {
+				lc.log().Info("first stop signal received; continuing orderly shutdown")
+			}
 		case reason := <-lc.requests:
 			if !stopping {
 				begin(reason)

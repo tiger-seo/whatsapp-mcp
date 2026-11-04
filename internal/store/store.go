@@ -28,7 +28,7 @@ import (
 // BEGIN IMMEDIATE. temp_store(MEMORY) keeps sorts out of the system temp directory, and the hard heap limit bounds
 // SQLite's own memory, which Go cannot see.
 const (
-	writeParams = "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)" +
+	writeParams = "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)" +
 		"&_pragma=temp_store(MEMORY)&_pragma=journal_size_limit(67108864)&_pragma=hard_heap_limit(268435456)&_txlock=immediate"
 	readParams = "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)" +
 		"&_pragma=hard_heap_limit(268435456)&_pragma=query_only(1)"
@@ -47,8 +47,12 @@ type Store struct {
 	wrapped   *dbutil.Database
 	hooks     *testHooks
 
-	deviceMu sync.Mutex
-	device   *deviceSession
+	deviceMu     sync.Mutex
+	device       *deviceSession
+	deviceFinal  bool // protected by deviceMu; no generations after clear or recovery
+	runMu        sync.Mutex
+	runArmed     bool
+	runArmFailed bool
 
 	closeMu sync.Mutex
 	closed  bool // pools closed after quiescence; never set while work is active
@@ -62,16 +66,18 @@ type openOptions struct {
 
 // testHooks inject failures and pauses at fixed points. The zero value does nothing.
 type testHooks struct {
-	afterCheck       func() // after the artifact checks and the preflight, before the writer opens
-	afterCreate      func() // after a new database file was created, before the writer opens
-	beforeCommit     func(ctx context.Context)
-	afterSenderMerge func() error                           // MergeLID, after the sender rewrite
-	afterChatInsert  func() error                           // StoreMessages, after the chat insert
-	free             func(dir string) (uint64, error)       // free-space measurement
-	queryHold        func(ctx context.Context, name string) // a query holds its reader here
-	wrapReader       func(q querier) querier                // a read operation runs its queries through the wrapper
-	onRead           func(conn *sql.Conn) (done func())     // a read operation starts on conn; done runs when it ends
-	devicePutHold    func(ctx context.Context) error        // a guarded device Save holds here, before the raw put
+	afterCheck         func() // after the artifact checks and the preflight, before the writer opens
+	afterCreate        func() // after a new database file was created, before the writer opens
+	beforeCommit       func(ctx context.Context)
+	afterSenderMerge   func() error                           // MergeLID, after the sender rewrite
+	afterChatInsert    func() error                           // StoreMessages, after the chat insert
+	free               func(dir string) (uint64, error)       // free-space measurement
+	queryHold          func(ctx context.Context, name string) // a query holds its reader here
+	wrapReader         func(q querier) querier                // a read operation runs its queries through the wrapper
+	onRead             func(conn *sql.Conn) (done func())     // a read operation starts on conn; done runs when it ends
+	devicePutHold      func(ctx context.Context) error        // a guarded device Save holds here, before the raw put
+	devicePutCommitted func()                                 // after Save commits, before publishing recovery state
+	protectedHold      func()                                 // after protected admission check, before readiness check
 }
 
 // Open checks, creates if missing, preflights, upgrades and opens <dataDir>/whatsapp.db. The caller holds the
@@ -124,6 +130,7 @@ func open(ctx context.Context, dataDir string, logger *slog.Logger, opts openOpt
 		return nil, err
 	}
 	var pf preflightResult
+	created := false
 	switch _, exists := known[dbPath]; {
 	case !exists:
 		id, err := createDB(dbPath)
@@ -131,6 +138,7 @@ func open(ctx context.Context, dataDir string, logger *slog.Logger, opts openOpt
 			return nil, err
 		}
 		known[dbPath] = id
+		created = true
 		pf.fresh = true
 		ev.preflight(op, true, 0, 0, 0)
 		if opts.hooks.afterCreate != nil {
@@ -195,6 +203,16 @@ func open(ctx context.Context, dataDir string, logger *slog.Logger, opts openOpt
 			me.Completed = fmt.Sprintf("device %d, messages %d", deviceVersion, reached)
 		}
 		return nil, err
+	}
+	if reached >= 3 && len(migrations) >= 3 && migrations[2].name == "unsafe_run" {
+		if created {
+			if err := st.changeRunGuard(ctx, "unsafe", "clean"); err != nil {
+				return nil, err
+			}
+		}
+		if _, _, err := readRunGuard(ctx, st.writer); err != nil {
+			return nil, err
+		}
 	}
 	if err := st.recheck(known); err != nil {
 		return nil, err
@@ -300,8 +318,16 @@ func (s *Store) LoadDevice(ctx context.Context) (*wastore.Device, *DeviceBarrier
 	if s.gate.isClosed() {
 		return nil, nil, ErrClosed
 	}
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	if s.runArmFailed {
+		return nil, nil, ErrUnsafeRun
+	}
 	s.deviceMu.Lock()
 	defer s.deviceMu.Unlock()
+	if s.deviceFinal {
+		return nil, nil, ErrClosed
+	}
 	if s.device != nil && !s.device.drained() {
 		return nil, nil, ErrSessionExists
 	}

@@ -123,6 +123,7 @@ type scriptedOwner struct {
 	requestN  atomic.Int64
 	request   func(n int64) (wa.PairingState, error)
 	startHook func()
+	stopErr   error
 }
 
 func newScriptedOwner() *scriptedOwner {
@@ -154,6 +155,7 @@ var closedDone = func() chan struct{} {
 }()
 
 func (s *scriptedOwner) Done() <-chan struct{} { return closedDone }
+func (s *scriptedOwner) StopError() error      { return s.stopErr }
 
 func (s *scriptedOwner) Snapshot() wa.Status {
 	s.mu.Lock()
