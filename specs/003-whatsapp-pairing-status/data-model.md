@@ -56,7 +56,7 @@ Return a copied coherent snapshot. Standalone status always connected=false/pair
 | result | active, succeeded, timed_out, cancelled or failed. Terminal outcomes invalidate code and late events. |
 | consumer | Exactly one fast channel consumer; callers share the snapshot/update signal rather than reading the upstream channel. |
 
-Code expiry is not final attempt timeout. Final timeout requires an explicit new request; terminal CLI uses Enter. EOF/cancellation exits unsuccessfully and does not start another attempt. Request wait-context expiry does not silently grant/cancel another caller's shared window; explicit owner cancellation controls the attempt.
+Code expiry is not final attempt timeout. An unresolved final timeout retains unsafe state and requires explicit offline recovery before a separately approved new pairing; Enter, EOF and cancellation do not authorize a new attempt or recovery. Request wait-context expiry does not silently grant/cancel another caller's shared window; explicit owner cancellation controls the attempt.
 
 A client generation is bound to its logical pairing window; retire/drain it before a different window so untagged old events cannot masquerade as the new attempt. Reload durable identity after drain before deciding to create fresh keys. Version recovery inside a still-approved window remains subject to the existing 405 budget, never authorization to reopen a terminal window.
 
