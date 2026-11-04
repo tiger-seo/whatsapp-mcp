@@ -35,6 +35,7 @@ func (ownerStub) BeginStop()                                           {}
 func (ownerStub) Done() <-chan struct{}                                { return nil }
 func (ownerStub) Snapshot() Status                                     { return Status{} }
 func (ownerStub) RequestPairing(context.Context) (PairingState, error) { return PairingState{}, nil }
+func (ownerStub) PairingSnapshot() (PairingState, bool)                { return PairingState{}, false }
 func (ownerStub) CancelPairing()                                       {}
 func (ownerStub) Subscribe(func(Event)) func()                         { return func() {} }
 func (ownerStub) Health() Health                                       { return Health{} }

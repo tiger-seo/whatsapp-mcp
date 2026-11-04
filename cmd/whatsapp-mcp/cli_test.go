@@ -15,6 +15,7 @@ import (
 
 	"github.com/tiger-seo/whatsapp-mcp/internal/lock"
 	"github.com/tiger-seo/whatsapp-mcp/internal/private"
+	"github.com/tiger-seo/whatsapp-mcp/internal/wa"
 )
 
 type result struct {
@@ -263,9 +264,16 @@ func TestLockHeld(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// pair opens the store and keeps the lock file empty after its unsuccessful exit. The owner
+	// factory is injected so the test never touches a real connection.
+	so := newScriptedOwner()
+	so.request = func(n int64) (wa.PairingState, error) {
+		return wa.PairingState{}, wa.ErrPairingActive
+	}
+	withScriptedOwner(t, so)
 	r = runIn(t, nil, "pair", "--data-dir", dir, "--log-level", "debug")
 	r.expect(t, exitError)
-	if !strings.Contains(r.stderr, "whatsapp-mcp: pair is not implemented yet") || !strings.Contains(r.stderr, "msg=\"lock acquired\"") {
+	if !strings.Contains(r.stderr, "whatsapp-mcp: pair:") || !strings.Contains(r.stderr, "msg=\"lock acquired\"") {
 		t.Errorf("stderr = %q", r.stderr)
 	}
 	if data, err := os.ReadFile(filepath.Join(dir, lock.FileName)); err != nil || len(data) != 0 {
@@ -276,7 +284,7 @@ func TestLockHeld(t *testing.T) {
 func TestStdioStdinClosed(t *testing.T) {
 	r := runIn(t, nil, "stdio", "--data-dir", privateDir(t))
 	r.expect(t, exitOK)
-	for _, want := range []string{"stdio: MCP server not implemented yet", `msg="shutting down" reason="stdin closed"`, "msg=stopped"} {
+	for _, want := range []string{"stdio: connection owner running", `msg="shutting down" reason="stdin closed"`, "msg=stopped"} {
 		if !strings.Contains(r.stderr, want) {
 			t.Errorf("stderr does not contain %q:\n%s", want, r.stderr)
 		}

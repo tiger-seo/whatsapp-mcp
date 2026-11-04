@@ -235,6 +235,11 @@ func (f *Fake) RequestPairing(ctx context.Context) (PairingState, error) {
 	defer f.mu.Unlock()
 	return f.fixtures.Pairing, f.failures["pair"]
 }
+func (f *Fake) PairingSnapshot() (PairingState, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.fixtures.Pairing, true
+}
 func (f *Fake) CancelPairing() {
 	f.mu.Lock()
 	f.fixtures.Pairing.Result = PairingCancelled

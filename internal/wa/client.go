@@ -3,6 +3,8 @@ package wa
 
 import (
 	"context"
+	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/tiger-seo/whatsapp-mcp/internal/store"
@@ -86,7 +88,70 @@ type Owner interface {
 	Done() <-chan struct{}
 	Snapshot() Status
 	RequestPairing(context.Context) (PairingState, error)
+	// PairingSnapshot returns the current pairing window's copied state; ok is false when no window is
+	// active. Callers follow updates through Subscribe rather than reading any upstream channel.
+	PairingSnapshot() (PairingState, bool)
 	CancelPairing()
 	Subscribe(func(Event)) func()
 	Health() Health
 }
+
+// SessionEvent is one admitted upstream event the adapter forwards to the owner.
+type SessionEvent int
+
+const (
+	SessionConnected SessionEvent = iota
+	SessionDisconnected
+	SessionPairSuccess
+	SessionPairError
+	SessionLoggedOut
+	SessionClientOutdated
+	SessionManualLoginReconnect
+)
+
+// SessionHandle is the owner's narrow view of one client generation. It is created through a
+// SessionFactory, so tests can substitute the pinned adapter without a network.
+type SessionHandle interface {
+	// Epoch returns the owner epoch this generation is bound to.
+	Epoch() uint64
+	// Connect performs one connection attempt under the caller's watchdog context.
+	Connect(context.Context) error
+	// Disconnect stops the socket after an attempt was cancelled.
+	Disconnect()
+	// HasIdentity reports whether the generation carries a locally saved identity.
+	HasIdentity() bool
+	// Retire rejects new guarded access and waits for the generation to drain.
+	Retire(context.Context) error
+	// RecoveryPending reports pending durable repair markers observed at open.
+	RecoveryPending() bool
+	// StorageFaulted closes when a guarded device write requires an owner restart.
+	StorageFaulted() <-chan struct{}
+}
+
+// QRChannelSource is implemented by sessions that can open an upstream pairing window. The channel
+// must be acquired before Connect.
+type QRChannelSource interface {
+	GetQRChannel(context.Context) (<-chan whatsmeow.QRChannelItem, error)
+}
+
+// SessionConfig is the construction input of one adapter generation.
+type SessionConfig struct {
+	// Store is the shared store; only LoadDevice is used.
+	Store *store.Store
+	// Log is the process logger; the shared bridge carries upstream output.
+	Log *slog.Logger
+	// Versions is the selected-version source for the immutable handshake callback.
+	Versions *VersionProvider
+	// Epoch is the owner epoch this generation belongs to.
+	Epoch uint64
+	// Lifetime is the generation's cancellable context; it is also BackgroundEventCtx.
+	Lifetime context.Context
+	// Dispatch receives this generation's admitted upstream events.
+	Dispatch func(epoch uint64, event SessionEvent)
+	// Test-only transport injections; nil uses the approved defaults.
+	PreLoginHTTP  *http.Client
+	WebsocketHTTP *http.Client
+}
+
+// SessionFactory creates one adapter generation; the owner uses exactly one at a time.
+type SessionFactory func(SessionConfig) (SessionHandle, error)

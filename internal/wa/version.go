@@ -53,6 +53,12 @@ func NewVersionProvider(owner context.Context) *VersionProvider {
 	return newVersionProvider(owner, newBoundedHTTPClient(15*time.Second, 1<<20, nil), discoveryOrigin)
 }
 
+// NewVersionProviderWithTransport builds the provider on the given base transport, for tests that
+// substitute discovery. The bounded profile is unchanged.
+func NewVersionProviderWithTransport(owner context.Context, base http.RoundTripper) *VersionProvider {
+	return newVersionProvider(owner, newBoundedHTTPClient(15*time.Second, 1<<20, base), discoveryOrigin)
+}
+
 func newVersionProvider(owner context.Context, client *http.Client, origin string) *VersionProvider {
 	p := &VersionProvider{owner: owner, client: client, origin: origin}
 	bundled := BundledVersion()
