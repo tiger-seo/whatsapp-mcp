@@ -81,6 +81,10 @@ asks for confirmation instead; put the verdict in the pull request. The hook nee
 
 ## Conventions
 
+- Ubuntu WSL2 is available for Linux tests from this Windows workspace. From PowerShell, run for example
+  `wsl -d Ubuntu --cd /mnt/d/projects-mou/whatsapp-mcp-next --exec env CGO_ENABLED=0 go test ./... -count=1 -timeout 10m`.
+  Use a Linux Go toolchain compatible with `go.mod` and Linux temporary storage with enough free space for the
+  store tests. Record WSL2 results as such; they do not establish native Linux hardware or CI results.
 - One Go module at the root; the binary is `whatsapp-mcp` (`cmd/whatsapp-mcp`); code goes in `internal/...`
   (§8.3 A4).
 - Always `CGO_ENABLED=0`. Never add a dependency that needs CGO.
