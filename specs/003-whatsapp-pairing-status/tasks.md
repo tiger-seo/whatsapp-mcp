@@ -72,7 +72,7 @@
 - [X] T028 [US1] Inject the owner/provider factory through `cmd/whatsapp-mcp/commands.go` and its test streams, replace pair/stdio/serve stubs, and register safe owner cleanup after store cleanup registration. Pair exits successfully only with durable identity plus Connected, with honest pending-repair warning when applicable; saved identity gets no QR and pair retains its failure exit. Both shells use T025's bounded saved-session startup recovery and remain alive disconnected with an actionable diagnostic after exhaustion; unpaired shells do not automatically Connect/QR, expose no listener/tools, and stdio EOF stops cleanly. Tests always supply the fake factory (FR-002/003/013/015).
 - [X] T029 [US1] Update `cmd/whatsapp-mcp/store_test.go` and `cmd/whatsapp-mcp/e2e_test.go` for real owner-shell behaviour using isolated synthetic paths: lock-holder refusal, first Save/restart, no post-close device write, stdin/signals, zero stdio human stdout and zero unsolicited QR/tools/listener. Exercise saved-session startup failure and timeout for both shells, including three delayed retries, exhaustion, success, cancellation and 405 handoff. Record actual US1 synthetic counts in `specs/003-whatsapp-pairing-status/verification.md`, not live acceptance claims (SC-001/005/006/008/010).
 
-**Checkpoint**: The prior US1 linking/restart journey has synthetic evidence, but the Linux/Chrome compatibility T065-T067 and unsafe-run and shutdown follow-ups T068-T074 remain incomplete. The full US1 checkpoint is reopened until these pass. This is not permission for a real account, public release or skipping US4's long-running compatibility and final security/evidence gates.
+**Checkpoint**: The prior US1 journey is not proof of post-pairing completion. T068-T073 and T075-T077 remain open; T065-T067 and T074 retain their historical checked status. The US1 checkpoint requires the applicable safety, native and post-pairing proof/review gates. If 515 completion cannot be proved safe, leave it disabled and US1 linking completion unverified, not falsely usable. This grants no account or release permission and does not skip later gates.
 
 ## Phase 4: User Story 2 - Recover Pairing Without Restarting (Priority: P1)
 
@@ -170,6 +170,10 @@ These new tasks retain the existing task IDs and reopen the US1 checkpoint. Afte
 - [ ] T073 [US1] Verify writer-connection synchronization in `internal/store/run_guard_test.go`, including replacement connections, failed/unsupported sync and Darwin SQLite VFS `fullfsync` behavior; implement only the conditional policy in `plan.md` using existing limits. Record native Windows/Linux/macOS settings and actual error paths in `specs/003-whatsapp-pairing-status/verification.md`, distinguishing ordinary sync, confirmed full hardware flush, process kill and unperformed power-loss tests. Do not claim FULL alone proves Darwin fullfsync or infer hardware durability from configuration.
 - [X] T074 [US1] Add deterministic tests in `cmd/whatsapp-mcp/lifecycle_test.go` for pairing completion and stdin EOF initiating shutdown before the first stop signal, plus signal-then-signal and forced termination. Update `cmd/whatsapp-mcp/lifecycle.go` to count stop signals independently of non-signal stop requests: the first signal starts or continues orderly drain and a subsequent signal forces an unclean exit. Verify no store close, marker clear or lock release occurs before true drain and that the existing timeout remains a failure, not permission to release active storage.
 
+- [ ] T075 [US1] Write tests first in `internal/wa/run_guard_test.go`, `internal/wa/session_test.go` and `cmd/whatsapp-mcp/run_guard_test.go` for default denial at the actual adapter/transport boundary: library ordinary, initial and login auto-reconnect and owner startup, 405 and 515 paths cannot start an unproven extra Connect, including concurrent events, timeout, stop and retirement. Assert a secret-free actionable limitation diagnostic and no QR reopening. Test a per-invocation production-attempt latch set immediately before invoking the upstream Connect boundary, after successful durable arm and before the call can fail, block or be cancelled; attempted success, failure and cancellation all retain unsafe, while a rejected pre-boundary attempt does not set the latch. Use synthetic identities and denying transports; a fake callback is not upstream-path coverage.
+- [ ] T076 [US1] Against T075, revise `internal/wa/session.go`, `internal/wa/owner.go` and `cmd/whatsapp-mcp/commands.go` to disable library automatic reconnect and every unproven owner retry before account-capable work, including login auto-reconnect separately; install the attempt latch at the specified boundary. Do not rely on the post-error hook or marker alone. Preserve existing arm, drain, native, exception and separate account-permission gates. No path is enabled merely by completing this task.
+- [ ] T077 [US1] In `internal/wa/session_test.go`, `internal/wa/run_guard_test.go` and `specs/003-whatsapp-pairing-status/verification.md`, investigate post-pair 515 completion before the US1 checkpoint: document exact pinned source and the supported candidate mechanism; construct a synthetic valid pairing fixture exercising the actual pinned pair-success handler through guarded device Save and owner callback, then the actual 515 handler and proposed same-generation completion through Connected. Use isolated SQLite and denying/controlled transports, with deterministic barriers holding earlier actual pinned node handler and asynchronous logout/delete work across disconnect, candidate retry, second reconnect, cancellation, retirement and stop, as specified in `contracts/connection-owner.md`. Check attempt counts at the actual boundary, durable identity, marker, status, chat/repair sentinels, and storage/lock drain. Separately exercise default denial and diagnostic. Record commands, results, source coverage and limits; no real account. Positive synthetic evidence and an applicable current owner review are prerequisites, not authorization to enable 515 before all other gates. If a valid fixture, supported safe mechanism or proof cannot be established, record the blocker, leave 515 disabled and US1 completion unverified; never fabricate Connected or claim the pairing usable.
+
 T069 must also implement the latched logout/delete vs clear ordering, non-exempt disk hysteresis and fail-closed exact-device/terminal checks specified in the contracts, against T071-T072's tests. T072 must cover warning and separately authorized manual removal of all potentially matching phone entries, refusal and unverified absence, with no real account action. T073's synchronization implementation and native evidence are part of the same safety gate, not permission to weaken it. T074 precedes the US1 shutdown checkpoint and US2 integration.
 
 For T068-T071, replace positive clean-stop-after-Connect and same-process re-pair expectations with the temporary policy above; test attempted successful, failed and cancelled Connect and delayed logout, while retaining clean-clear tests for no-attempt and authorized offline-recovery paths. T069 must not clear after any production attempt, even after drain and cleanup. T070 records actual evidence only. T071 still proves recognized revocation cleanup or retained unsafe, disk hysteresis and recovery safety; it cannot use a post-attempt clean marker as a success condition. None of T068-T073 is thereby complete.
@@ -182,7 +186,7 @@ For T068-T071, replace positive clean-stop-after-Connect and same-process re-pai
 Completed plan + valid E003-RX-01 + current committed design review
   -> Setup T001-T003
   -> Shared foundation T004-T021
-  -> US1 T022-T029 + T065-T074 -> US2 T030-T041
+  -> US1 T022-T029 + T065-T077 -> US2 T030-T041
   -> US3 T042-T048 (test wave independent; T045/T046 after T069)
   -> US4 T049-T056 (independent test wave; shared production integration after US2)
 All story branches -> Cross-cutting T057-T064 -> current code review before any PR
@@ -198,7 +202,7 @@ No story implementation begins before foundation is green. Tests written first m
 
 ### Story Ordering and File Conflicts
 
-- US1: T022/T023/T024 formed the original test wave. T065-T067 retain their existing checked status. After fresh design PASS, reconcile affected tests to the revised policy; complete applicable T068-T073 barrier tests, implementation, evidence and native obligations before the US1 checkpoint and US2 integration. Unavailable native checks remain unverified and block applicable gates.
+- US1: T022/T023/T024 formed the original test wave. T065-T067 and T074 retain their checked status. After fresh design PASS, T075 tests precede T076 implementation; T069 supplies durable arm and T075/T076 establish the latch before account-capable work. T077 investigates 515 after default denial and the guarded-store/arm prerequisites; positive evidence and applicable owner review precede enablement. Complete T068-T073, T075-T077 and applicable native obligations before the US1 checkpoint and US2 integration. Unavailable native checks remain unverified and block applicable gates.
 - US2: depends on US1's owner/session/CLI. T030/T031/T032 form a parallel test wave. Then T033 -> T034 -> T035; T036 must be written before T037/T038; T039 depends on the timeout/retirement implementation; T040/T041 exercise the integrated negative/end-to-end paths.
 - US3: needs foundation and the shared command-factory shape, not successful pairing/recovery. T042/T043/T044 can run concurrently in distinct store/cmd/lock files, but schema-3 fixture assertions must match T069. T045 depends on T042 and T069; T046 depends on T043/T044/T045 and T069, then T047 and T048. Serialize T069's `commands.go` changes before T046. If executing the test wave before US1's command factory, introduce a typed fake seam without enabling a production account path, then serialize actual shared commands.go integration after T028 and T069.
 - US4: T049/T050/T051 form a separate test wave after foundation and typed session contracts; T052 then T053 then T054/T055/T056. T053/T054 share recovery.go/session.go/owner.go with US2 and must wait for T037/T038 or be integrated serially; T055 shares commands.go with US1/US2/US3. Never claim all stories can be implemented concurrently.
@@ -222,7 +226,7 @@ Mappings are planned work, not passed implementation evidence. The fake/public-p
 | Requirement | Build/integration tasks | Test/evidence tasks |
 | --- | --- | --- |
 | FR-001 | T007-T008, T026, T028 | T006, T022, T024, T029 |
-| FR-002 | T027-T028, T033, T039 | T022, T024, T030-T031, T041 |
+| FR-002 | T027-T028, T033, T039, T076 | T022, T024, T030-T031, T041, T075, T077 |
 | FR-003 | T025-T026, T034-T035 | T022-T024, T032, T040 |
 | FR-004 | T005, T025, T034-T035 | T004, T023, T032, T040 |
 | FR-005 | T025, T027, T033 | T023-T024, T030 |
@@ -238,8 +242,8 @@ Mappings are planned work, not passed implementation evidence. The fake/public-p
 | FR-015 | T018, T028, T055, T057 | T018, T024, T029, T056-T058 |
 | FR-016 | T008, T010, T015, T017, T037-T038 | T006, T009, T014, T016, T036, T040-T041, T058 |
 | FR-017 | T066 | T051, T062, T065, T067 |
-| FR-018 | T046, T069, T073 | T042, T059-T062, T068, T070-T073 |
-| SC-001 | T025-T028, T066, T069 | T022-T024, T029, T062, T065, T067-T068, T070 |
+| FR-018 | T046, T069, T073, T076 | T042, T059-T062, T068, T070-T073, T075, T077 |
+| SC-001 | T025-T028, T066, T069, T076 | T022-T024, T029, T062, T065, T067-T068, T070, T075, T077 |
 | SC-002 | T033-T035, T039, T069 | T030-T032, T040-T041, T062, T068, T070 |
 | SC-003 | T025, T045-T046, T069 | T023, T042-T043, T047, T056, T068, T070 |
 | SC-004 | T021, T026, T052-T055 | T021, T049-T051, T056 |
@@ -282,11 +286,11 @@ Stop for expired/triggered exception, a stale/failing design review, a new indep
 | --- | --- |
 | Setup T001-T003 | 3 |
 | Foundation T004-T021 | 18 |
-| US1 T022-T029, T065-T074 | 18 |
+| US1 T022-T029, T065-T077 | 21 |
 | US2 T030-T041 | 12 |
 | US3 T042-T048 | 7 |
 | US4 T049-T056 | 8 |
 | Polish T057-T064 | 8 |
-| Total | 74 |
+| Total | 77 |
 
-Thirteen `[P]` tasks: T022-T024, T030-T032, T042-T044, T049-T051 and T059. T001-T029, T065-T067 and T074 are checked (33); T030-T064 and T068-T073 are unchecked (41). These historical checkboxes do not establish the revised policy's verification. All 36 FR/SC/SEC identifiers have build/test mappings. The earlier design review does not cover this change; exception acceptance is not a substitute for a current reviewer verdict.
+Thirteen `[P]` tasks: T022-T024, T030-T032, T042-T044, T049-T051 and T059. T001-T029, T065-T067 and T074 are checked (33); T030-T064, T068-T073 and T075-T077 are unchecked (44). These historical checkboxes do not establish the revised policy's verification. All 36 FR/SC/SEC identifiers have build/test mappings. The earlier design review does not cover this change; exception acceptance is not a substitute for a current reviewer verdict.
