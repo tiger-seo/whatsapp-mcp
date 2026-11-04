@@ -3,11 +3,13 @@ package store
 import (
 	"strings"
 	"testing"
+
+	"github.com/tiger-seo/whatsapp-mcp/internal/walog"
 )
 
 func TestWALogDropsArguments(t *testing.T) {
 	logger, recs := newTestLogger()
-	l := newWALog(logger)
+	l := walog.New(logger)
 	l.Infof("pairing %s with key %x", "SECRET-JID-7f3a", []byte("SECRET-KEY"))
 	l.Sub("Database").Sub("Upgrade").Errorf("failed: %v", "SECRET-ERR")
 	l.Debugf("debug")

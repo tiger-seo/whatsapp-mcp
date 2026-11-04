@@ -112,7 +112,7 @@ func TestStdioRefusesATooNewSchemaAndReleasesTheLock(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		r := runIn(t, nil, "stdio", "--data-dir", dir)
 		r.expect(t, exitError)
-		for _, want := range []string{"message schema version 99", "newer than this binary supports (1)"} {
+		for _, want := range []string{"message schema version 99", "newer than this binary supports (2)"} {
 			if !strings.Contains(r.stderr, want) {
 				t.Errorf("run %d: stderr lacks %q:\n%s", i, want, r.stderr)
 			}

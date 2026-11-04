@@ -181,7 +181,9 @@ func TestGateClose(t *testing.T) {
 	eventually(t, "a waiting caller", func() bool { return g.waitingCount() == 1 })
 
 	start := time.Now()
-	g.close(context.Background())
+	if err := g.quiesce(context.Background()); err != nil {
+		t.Errorf("close: %v", err)
+	}
 	if d := time.Since(start); d > 2*time.Second {
 		t.Errorf("close took %v", d)
 	}
@@ -203,7 +205,9 @@ func TestGateNoGoroutineLeak(t *testing.T) {
 			t.Fatal(err)
 		}
 		rel()
-		g.close(context.Background())
+		if err := g.quiesce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	time.Sleep(50 * time.Millisecond)
 	if after := runtime.NumGoroutine(); after > before+2 {

@@ -144,11 +144,12 @@ const (
 	testOwnLID   = "100000000001"
 )
 
-// seedDevice saves a synthetic device with random keys and a made-up JID, and returns it loaded back.
+// seedDevice saves a synthetic device with random keys and a made-up JID through the raw container, so that a
+// guarded LoadDevice afterwards has a durable identity to load.
 func seedDevice(t testing.TB, st *Store) *wastore.Device {
 	t.Helper()
 	ctx := context.Background()
-	dev := st.Device().NewDevice()
+	dev := st.container.NewDevice()
 	own := types.NewJID(testOwnPhone, types.DefaultUserServer)
 	dev.ID = &own
 	dev.LID = types.NewJID(testOwnLID, types.HiddenUserServer)
@@ -157,7 +158,7 @@ func seedDevice(t testing.TB, st *Store) *wastore.Device {
 	if err := dev.Save(ctx); err != nil {
 		t.Fatalf("Save device: %v", err)
 	}
-	loaded, err := st.Device().GetFirstDevice(ctx)
+	loaded, err := st.container.GetFirstDevice(ctx)
 	if err != nil {
 		t.Fatalf("GetFirstDevice: %v", err)
 	}

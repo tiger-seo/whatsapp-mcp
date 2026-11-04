@@ -104,7 +104,7 @@ func runUntilStopped(cmd *command, args []string, s *streams, body func(context.
 		lc.shutdown()
 		return code
 	}
-	lc.addStop("store", st.Close)
+	lc.addStoreStop(st.Close, st.Quiesced())
 	if lc.ctx.Err() != nil {
 		return lc.shutdown()
 	}

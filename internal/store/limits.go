@@ -32,6 +32,10 @@ const (
 	maxResultBytes  = 32 * mib
 	maxAmbiguousIDs = 100
 
+	// The pinned client uploads at most 812 prekeys in its initial batch and 50 in later batches, so the
+	// generation count is bounded just above the pin's own maximum.
+	maxPreKeyGen = 1000
+
 	writeConns    = 1
 	readConns     = 4
 	maxActive     = 16

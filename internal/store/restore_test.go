@@ -78,8 +78,8 @@ func TestRestoredBackupIsValidatedOffline(t *testing.T) {
 	db.QueryRow("SELECT version FROM mcp_version").Scan(&mv)
 	db.QueryRow("SELECT version, compat FROM whatsmeow_version").Scan(&dv, &dc)
 	db.QueryRow("SELECT count(*) FROM messages").Scan(&n)
-	if mv != 1 || dv != 16 || n != 5000 {
-		t.Errorf("versions %d / %d, %d messages; want 1 / 16 and 5000", mv, dv, n)
+	if mv != 2 || dv != 16 || n != 5000 {
+		t.Errorf("versions %d / %d, %d messages; want 2 / 16 and 5000", mv, dv, n)
 	}
 	db.Close()
 

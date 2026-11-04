@@ -87,7 +87,7 @@ func TestDeviceUpgradeFailureStopsStartup(t *testing.T) {
 	if err := check.QueryRow("SELECT version FROM whatsmeow_version").Scan(&dv); err != nil || dv != 15 {
 		t.Errorf("whatsmeow_version = %d, %v; want 15", dv, err)
 	}
-	if err := check.QueryRow("SELECT version FROM mcp_version").Scan(&mv); err != nil || mv != 1 {
+	if err := check.QueryRow("SELECT version FROM mcp_version").Scan(&mv); err != nil || mv != 2 {
 		t.Errorf("mcp_version = %d, %v; the message migrations must not have run", mv, err)
 	}
 }

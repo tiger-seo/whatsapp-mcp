@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strconv"
@@ -194,7 +195,8 @@ func mapDriverError(err error) error {
 		return nil
 	}
 	for _, s := range []error{ErrInvalid, ErrNotFound, ErrNotMedia, ErrResourceLimit, ErrBusy, ErrClosed, ErrDiskLow,
-		ErrIndeterminate, ErrSchemaTooNew, ErrSchemaInvalid, ErrUnsafeStorage, ErrNotDatabase, ErrIO} {
+		ErrIndeterminate, ErrSchemaTooNew, ErrSchemaInvalid, ErrUnsafeStorage, ErrNotDatabase, ErrIO,
+		ErrRecoveryPending, ErrRepairInvalid, ErrRepairFault} {
 		if errors.Is(err, s) {
 			return err
 		}
@@ -205,6 +207,9 @@ func mapDriverError(err error) error {
 	)
 	if errors.As(err, &ae) || errors.As(err, &me) || isContextErr(err) {
 		return err
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
 	}
 	switch sqliteCode(err) {
 	case sqliteNoMem:
