@@ -19,6 +19,10 @@ Connection-owning commands acquire the directory lock before writable Open/migra
 
 Only this command's stdout may contain human QR/status text. No QR/control material may reach stdio stdout via shared code. Real execution needs separate user permission for each account-affecting attempt in validation.
 
+For offline recovery, verify that the actual input and prompt output handles are interactive terminals using supported OS handle checks; failed, unavailable or ambiguous checks, redirected handles, pipes and files fail with exit 1 and no identity removal or marker clear. Do not infer interactivity from environment variables, shell name or a test stream. On Windows, Git Bash/mintty handles may not pass native console checks: report this limitation and direct the operator to a supported native console; do not silently accept a pipe or invent a bypass. Test real native console/PTY behavior where supported, redirected and mixed handles, failed detection, EOF and injected detection seams on Windows, Linux and macOS; untested environments remain unverified.
+
+Recovery requires the operator to identify the exact account and exact linked-device entry, or establish the exact device is absent, by evidence available to the operator. A shared Linux/Chrome label, appearance time, guess, or missing local identity alone does not distinguish an entry; the application guarantees no identifying phone label. If exact identification or absence cannot be established, exit 1 with the marker unsafe and no local removal. Do not unlink an uncertain entry or offer bulk unlink as a workaround. If space admission prevents clearing, report the existing 512 MiB resume threshold when latched, instruct the operator to restore space and perform offline recovery; never bypass the guard.
+
 ## status
 
 No Connect, discovery, pairing, IPC, store creation, migration, repair or credential validation with WhatsApp.

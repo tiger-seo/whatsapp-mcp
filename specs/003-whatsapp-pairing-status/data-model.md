@@ -15,7 +15,7 @@ Use the existing whatsmeow device row, keys and session-specific/global interfac
 | phase | idle, connecting, pairing, connected, disconnected, logged_out, retiring, storage_failed, stopping or stopped. |
 | storage health | Separate from physical connection; startup repair pending, guarded-write fault and ready are internal, not extra login-tool fields. |
 
-Only confirmed logout permits revocation cleanup/replacement of a saved identity. A new unpaired client may be created after the prior window drains and a reload confirms no saved identity exists. Ordinary disconnect preserves credentials and logged-in state. Save/storage failure cannot count as successful durable linking. Forced termination/disk failure is not described as clean recovery.
+Confirmed logout permits revocation cleanup; separately authorized offline recovery also permits local identity removal under FR-018. A new unpaired client may be created only when the recovery barrier permits it, after the prior window drains and a reload confirms no saved identity exists. Ordinary disconnect preserves credentials and logged-in state. Save/storage failure cannot count as successful durable linking. Forced termination/disk failure is not described as clean recovery.
 
 Guard interface fields are installed before client creation and stay stable throughout the generation. Initialized denotes interface wiring, not durable identity; ordinary pre-ready calls fail fast before gate admission/SQL until first Save succeeds, rather than exhausting slots waiting for Save. Private raw delegates may bind on that Save's validated JID without being published in device fields. Client delete requests retire the generation and return deferred cleanup rather than allowing the library to reset live fields; confirmed-revocation SQL cleanup happens after drain. Failed pairing preserves any saved identity for explicit verification rather than silently deleting it.
 
@@ -58,7 +58,7 @@ Return a copied coherent snapshot. Standalone status always connected=false/pair
 
 Code expiry is not final attempt timeout. An unresolved final timeout retains unsafe state and requires explicit offline recovery before a separately approved new pairing; Enter, EOF and cancellation do not authorize a new attempt or recovery. Request wait-context expiry does not silently grant/cancel another caller's shared window; explicit owner cancellation controls the attempt.
 
-A client generation is bound to its logical pairing window; retire/drain it before a different window so untagged old events cannot masquerade as the new attempt. Reload durable identity after drain before deciding to create fresh keys. Version recovery inside a still-approved window remains subject to the existing 405 budget, never authorization to reopen a terminal window.
+A client generation is bound to its logical pairing window; retire/drain it before a different window so untagged old events cannot masquerade as the new attempt. Reload durable identity after drain to avoid overwriting it, not to authorize reuse: an unresolved attempt remains blocked by FR-018 even if a late identity is found. Version recovery inside a still-approved window remains subject to the existing 405 budget, never authorization to reopen a terminal window.
 
 ## Version Selection and Recovery Budget
 

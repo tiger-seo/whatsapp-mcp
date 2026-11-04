@@ -1,5 +1,15 @@
 # Research: WhatsApp Connection, Pairing and Status
 
+## Pinned Pairing Evidence - 2026-11-04
+
+Read-only local module-cache inspection, exact whatsmeow `v0.0.0-20261027104441-1eec1136a50b` (commit `1eec1136a50b2ef148b05f1819e77a9d989e0457`):
+
+- `handshake.go:95-105` calls the optional `GetClientPayload`, rejects a nil result, then marshals the client-finish payload. This is source evidence for rejection before client-finish encoding, not an executed Noise handshake or proof that no earlier handshake traffic occurs.
+- `client.go:177-180` exposes the callback and per-client `QRClientType`; `pair.go:67-78,93-129` uses the override if nonempty, otherwise global device properties/base payload, and appends that type to the QR. `pair-code.go:30-36` defines Chrome as `"1"`. T065 must drive the pinned construction using synthetic data and a denying transport, not merely inspect source.
+- `store/clientpayload.go:102-121,124-166,168-185,190-210` shows default companion OS `whatsmeow`, platform UNKNOWN, global `SetOSInfo` mutation, serialization of companion properties into registration, and separate saved-device login payload. T065-T067 require cloned-property/unknown-field, coherent version, saved-session and codec-failure runtime tests. WhatsApp's displayed phone label is not established by these sources.
+
+No network or account operation and no runtime handshake test was performed in this inspection. Re-audit on a pin change.
+
 **Date**: 2026-11-02
 **Scope**: Source and public-upstream research for roadmap feature 003. Follow-up hardening investigation was explicitly authorized on 2026-11-02. No pairing, live device connection, message send or WhatsApp version request was performed. Public GitHub/module metadata requests are not account operations.
 
