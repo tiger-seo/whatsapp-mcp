@@ -1,6 +1,6 @@
 # Quickstart Validation: WhatsApp Connection, Pairing and Status
 
-**Stage**: Planned validation guide. Feature 003 is partially implemented; the unsafe-run barrier and Linux/Chrome follow-up are not implemented. The commands below describe checks to run after implementation. No real-account action is authorized by this file. Contracts: [owner](contracts/connection-owner.md), [CLI](contracts/cli.md), [data model](data-model.md).
+**Stage**: Planned validation guide. Feature 003 has uncommitted partial implementation; T065-T067 are checked and T068-T073 remain incomplete. This policy revision has no fresh design PASS or new code verification. No real-account action is authorized by this file. Contracts: [owner](contracts/connection-owner.md), [CLI](contracts/cli.md), [data model](data-model.md).
 
 ## Prerequisites
 
@@ -28,11 +28,11 @@ The new tests must use injected fake clients/providers, synthetic keys and contr
 
 | Scenario | Required observation |
 | --- | --- |
-| Link/restart | One synthetic save, Connected confirmation, zero QR on next saved-session run; failed save cannot succeed. |
-| Startup/reconnect bounds | Both shells: initial failure/timeout, up to three five-second retries, no fourth, success and stop cancellation, 405 handoff and exhausted disconnected diagnostic. Stall initial, startup, 405 and 515 owner connects and verify the 30-second watchdog and no overlap before drain. |
+| Link/restart | Synthetic save and Connected; after any production adapter Connect attempt, including failure/cancellation, orderly drain retains unsafe and restart starts neither Connect nor QR. Clean-state saved identity is tested separately; failed save cannot succeed. |
+| Startup/reconnect bounds | Both shells: initial failure/timeout; test the desired three delayed retries, 405, 515 and ordinary reconnect only where same-active-generation safety is demonstrated. Otherwise assert no retry and an unavailable diagnostic; never Connect after retiring an unproven generation. Verify watchdog and no overlap before drain. |
 | QR/window | First/replacement expiry, automatic code rotation within one window, final timeout requiring offline recovery rather than Enter-to-retry, EOF failure, concurrent sharing and stale-epoch rejection. |
 | Offline status | Four fields/caveats, zero client/version/network calls, no missing artifacts created, held lock PID, committed WAL and unchanged DB/sidecars. |
-| Version/retries | Real consumed-byte counting, redirects/TLS/oversize/stall rejection, no valid truncated prefix, immutable payload/hash snapshots, six-hour fake time and exactly three five-second 405 retries. |
+| Version/retries | Real consumed-byte counting, redirects/TLS/oversize/stall rejection, no valid truncated prefix, immutable payload/hash snapshots, six-hour fake time and conditional 405 budget or safe unavailability. |
 | Device admission | Shared gate limits, field/aggregate overflow before copying, no raw caches, nested transaction rollback, stable first-Save publication/readiness and deferred client-delete cleanup after retirement. |
 | Repair | Fresh and 1 -> 2 migration; mark-before-write and sibling failures; startup admission defers ordinary SDK sync but permits key delivery; real mutex-contention cancellation vs separate fake-time caller deadline; actual-call slot retained until return, no late clear; bounded full recovery and coalesced incremental replay without extra full-resync attempts. |
 | Unsafe run | Fresh and legacy -> 3 marker migration, full writer synchronization, failed/ambiguous arm, process-crash boundaries before/after first Save and logout cleanup, explicit offline recovery and read-only schema-3/legacy status. A possible orphaned phone-side link is considered even without a saved row. Process-kill tests do not prove OS/power-loss durability. |
@@ -61,12 +61,11 @@ Update the existing CI cross-identity privacy fixture to create synthetic privat
 
 These are separate human steps, not a runnable batch. Before each connect/pair action obtain the user's explicit permission, name the exact acceptance directory/account/device and record the change/cleanup plan. Do not infer permission from this guide or exception approval.
 
-1. With permission for a fresh link, run `whatsapp-mcp pair --data-dir <approved-private-dir>`, scan only the displayed current QR, confirm linking, observe successful safe exit. Do not capture the QR in evidence.
-2. While no owner runs, execute offline status for that same directory. Expect connected=false, saved logged_in=true, pairing_required=false, bundled/unrefreshed version and the online-verification warning. This is not a live health check.
-3. Obtain permission to reconnect the saved device; start the selected connection-owning shell or interactive helper. Confirm no QR. A second status/pair command must fail on the holder lock.
-4. With the user's permission and action on the trusted phone, unlink that exact linked device while the helper remains running. Observe false login/connection and no unsolicited pairing. No automatic phone-side unlink is performed by software.
-5. After confirmed logout and durable local cleanup, obtain new explicit pairing permission in that SAME helper process. Request a fresh window, scan, confirm Connected and a new saved identity without losing chats/messages. If an attempt reaches an unresolved final timeout, do not start a new window on Enter: stop and use the separately authorized offline verification/recovery process before a separately approved fresh pairing.
-6. Stop normally and inspect safe offline status. Record any pending recovery marker honestly; login success does not mean complete contact sync. Arrange cleanup only for the explicitly approved acceptance device/directory; never delete unrelated account data.
+1. Only after all readiness and safety gates and separate permission for a fresh link, use the named isolated directory and scan its current QR; record no QR material. Observe resource drain and unsafe marker retention, not automatic reuse.
+2. Inspect offline status: saved identity is locally reported as unverified, with unsafe-recovery warning and unsuccessful status. Restart must not Connect or show a QR.
+3. Separately authorize and perform offline account/device verification, any needed phone unlink, and local identity removal if present. Preserve chats and repair needs. Recovery itself stays offline; ambiguous or insufficient verification blocks it.
+4. A later fresh pair requires separate explicit permission. In a separately approved live logout scenario, verify that no same-process re-pair is offered after production Connect, even after durable cleanup. Stop and drain before recovery. No automatic unlink is performed.
+5. Record redacted outcomes and explicitly approved cleanup; login success does not mean completed contact sync. No-scan restart and same-process re-pair remain follow-up goals, not current acceptance tests.
 
 Real recovery/disk-full injection is not part of this journey. Exercise failure/cancellation using synthetic fixtures. No send/download/history-message acceptance is added to 003.
 
