@@ -68,7 +68,7 @@
 - [X] T028 [US1] Inject the owner/provider factory through `cmd/whatsapp-mcp/commands.go` and its test streams, replace pair/stdio/serve stubs, and register safe owner cleanup after store cleanup registration. Pair exits successfully only with durable identity plus Connected, with honest pending-repair warning when applicable; saved identity gets no QR and pair retains its failure exit. Both shells use T025's bounded saved-session startup recovery and remain alive disconnected with an actionable diagnostic after exhaustion; unpaired shells do not automatically Connect/QR, expose no listener/tools, and stdio EOF stops cleanly. Tests always supply the fake factory (FR-002/003/013/015).
 - [X] T029 [US1] Update `cmd/whatsapp-mcp/store_test.go` and `cmd/whatsapp-mcp/e2e_test.go` for real owner-shell behaviour using isolated synthetic paths: lock-holder refusal, first Save/restart, no post-close device write, stdin/signals, zero stdio human stdout and zero unsolicited QR/tools/listener. Exercise saved-session startup failure and timeout for both shells, including three delayed retries, exhaustion, success, cancellation and 405 handoff. Record actual US1 synthetic counts in `specs/003-whatsapp-pairing-status/verification.md`, not live acceptance claims (SC-001/005/006/008/010).
 
-**Checkpoint**: The prior US1 linking/restart journey has synthetic evidence, but the Linux/Chrome compatibility T065-T067 and unsafe-run barrier T068-T070 remain incomplete. The full US1 checkpoint is reopened until both pass. This is not permission for a real account, public release or skipping US4's long-running compatibility and final security/evidence gates.
+**Checkpoint**: The prior US1 linking/restart journey has synthetic evidence, but the Linux/Chrome compatibility T065-T067 and unsafe-run and shutdown follow-ups T068-T074 remain incomplete. The full US1 checkpoint is reopened until these pass. This is not permission for a real account, public release or skipping US4's long-running compatibility and final security/evidence gates.
 
 ## Phase 4: User Story 2 - Recover Pairing Without Restarting (Priority: P1)
 
@@ -162,10 +162,11 @@ These new tasks retain the existing task IDs and reopen the US1 checkpoint. Afte
 - [ ] T070 [US1] Run and record T068 runtime cases and relevant owner/store/command restart tests in `specs/003-whatsapp-pairing-status/verification.md`, including counts, synchronization settings, observable committed states and rejected side effects. Record process-kill evidence separately from unperformed OS/power-loss/native-platform tests; keep real-account verification and per-action permission to T062. Require passing barrier evidence before the US1 checkpoint or US2 integration (FR-018, SC-001/002/003/005, SEC-003/007).
 
 - [ ] T071 [US1] Extend `internal/wa/run_guard_test.go`, `internal/store/run_guard_test.go` and `cmd/whatsapp-mcp/run_guard_test.go` with deterministic runtime barriers for a recognized logout and deferred delete racing callback retirement, deletion, stop and marker clear. Exercise the actual owner callback, guarded store and SQLite reopen: either durable deletion precedes clean or unsafe persists; failed/ambiguous deletion never permits clean. Test low-disk latch below 256 MiB, recovery between 256 and 512 MiB, refusal to clear without bypass, actionable remediation and successful separately authorized offline recovery only after the existing gate admits it. Preserve chats and pending repair bits.
-- [ ] T072 [US1] Extend `cmd/whatsapp-mcp/run_guard_test.go` and native platform test fixtures to cover interactive input and output detection for offline recovery, mixed/redirected handles, detection failure, EOF, exact-device ambiguity and missing local identity with possible orphan. Assert zero account work, removal and marker clear when verification is insufficient; require separate confirmations. Test native Windows console and Linux/macOS terminal or PTY where supported; record Git Bash/mintty limitations without accepting pipes or assuming a label.
+- [ ] T072 [US1] Extend `cmd/whatsapp-mcp/run_guard_test.go` and native platform test fixtures to cover interactive input and output detection for offline recovery, mixed/redirected handles, detection failure, EOF, exact-device ambiguity and missing local identity with possible orphan. Assert zero account work, removal and marker clear when verification is insufficient; require separate confirmations, and cover warning and separately authorized manual removal of all potentially matching entries without real account action. Test native Windows console and Linux/macOS terminal or PTY where supported; record Git Bash/mintty limitations without accepting pipes or assuming a label.
 - [ ] T073 [US1] Verify writer-connection synchronization in `internal/store/run_guard_test.go`, including replacement connections, failed/unsupported sync and Darwin SQLite VFS `fullfsync` behavior; implement only the conditional policy in `plan.md` using existing limits. Record native Windows/Linux/macOS settings and actual error paths in `specs/003-whatsapp-pairing-status/verification.md`, distinguishing ordinary sync, confirmed full hardware flush, process kill and unperformed power-loss tests. Do not claim FULL alone proves Darwin fullfsync or infer hardware durability from configuration.
+- [ ] T074 [US1] Add deterministic tests in `cmd/whatsapp-mcp/lifecycle_test.go` for pairing completion and stdin EOF initiating shutdown before the first stop signal, plus signal-then-signal and forced termination. Update `cmd/whatsapp-mcp/lifecycle.go` to count stop signals independently of non-signal stop requests: the first signal starts or continues orderly drain and a subsequent signal forces an unclean exit. Verify no store close, marker clear or lock release occurs before true drain and that the existing timeout remains a failure, not permission to release active storage.
 
-T069 must also implement the latched logout/delete vs clear ordering, non-exempt disk hysteresis and fail-closed exact-device/terminal checks specified in the contracts, against T071-T072's tests. T073's synchronization implementation and native evidence are part of the same safety gate, not permission to weaken it.
+T069 must also implement the latched logout/delete vs clear ordering, non-exempt disk hysteresis and fail-closed exact-device/terminal checks specified in the contracts, against T071-T072's tests. T072 must cover warning and separately authorized manual removal of all potentially matching phone entries, refusal and unverified absence, with no real account action. T073's synchronization implementation and native evidence are part of the same safety gate, not permission to weaken it. T074 precedes the US1 shutdown checkpoint and US2 integration.
 
 ## Dependencies and Execution Order
 
@@ -175,7 +176,7 @@ T069 must also implement the latched logout/delete vs clear ordering, non-exempt
 Completed plan + valid E003-RX-01 + current committed design review
   -> Setup T001-T003
   -> Shared foundation T004-T021
-  -> US1 T022-T029 + T065-T073 -> US2 T030-T041
+  -> US1 T022-T029 + T065-T074 -> US2 T030-T041
   -> US3 T042-T048 (test wave independent; T045/T046 after T069)
   -> US4 T049-T056 (independent test wave; shared production integration after US2)
 All story branches -> Cross-cutting T057-T064 -> current code review before any PR
@@ -275,11 +276,11 @@ Stop for expired/triggered exception, a stale/failing design review, a new indep
 | --- | --- |
 | Setup T001-T003 | 3 |
 | Foundation T004-T021 | 18 |
-| US1 T022-T029, T065-T073 | 17 |
+| US1 T022-T029, T065-T074 | 18 |
 | US2 T030-T041 | 12 |
 | US3 T042-T048 | 7 |
 | US4 T049-T056 | 8 |
 | Polish T057-T064 | 8 |
-| Total | 73 |
+| Total | 74 |
 
-Thirteen `[P]` tasks: T022-T024, T030-T032, T042-T044, T049-T051 and T059. T001-T029 retain their earlier completed status; T030-T073 are unchecked. All 36 FR/SC/SEC identifiers have build/test mappings. Validate this table/IDs/paths/constraints after any task edit. The earlier design review does not cover this change; its exception acceptance is not a substitute for a current reviewer verdict.
+Thirteen `[P]` tasks: T022-T024, T030-T032, T042-T044, T049-T051 and T059. T001-T029 retain their earlier completed status; T030-T074 are unchecked. All 36 FR/SC/SEC identifiers have build/test mappings. Validate this table/IDs/paths/constraints after any task edit. The earlier design review does not cover this change; its exception acceptance is not a substitute for a current reviewer verdict.
