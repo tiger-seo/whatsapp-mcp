@@ -2,7 +2,9 @@
 
 **Date**: 2026-11-03
 **Feature**: `003-whatsapp-pairing-status`
-**Implementation status**: Phase 3's earlier synthetic journey was verified on Windows, but the newly specified Linux/Chrome device-identification compatibility follow-up is unimplemented and reopens its checkpoint; later phases are also incomplete. The earlier design PASS at 71f9004 does not cover this revised design. A fresh committed design review is required before implementation. No full-feature acceptance or code-review PASS is claimed. Baseline probes are separate evidence.
+**Implementation status**: Phase 3's earlier synthetic journey was verified on Windows, but the Linux/Chrome compatibility and conservative unsafe-run barrier follow-ups are unimplemented and reopen its checkpoint; later phases are also incomplete. The earlier design PASS at 71f9004 does not cover this revised design. A fresh committed design review is required before implementation. No full-feature acceptance or code-review PASS is claimed. Baseline probes are separate evidence.
+
+**2026-11-04 design decisions, not execution evidence**: The user selected a conservative pre-armed unsafe-run marker and offline verification and re-pair rather than reconnecting uncertain credentials. An unclean stop may therefore require separate phone-side verification/unlink, local identity removal and fresh-pair authorizations. The user also selected offline recovery before a new attempt after an unresolved final pairing timeout, superseding the earlier immediate Enter-to-retry decision; QR replacements within an active attempt remain automatic. These decisions do not authorize any of those account actions. The earlier operator-warning-only logout recovery decision is superseded; no barrier, schema migration, recovery flow or power-loss guarantee is implemented or verified by this entry.
 
 ## Security Exceptions
 

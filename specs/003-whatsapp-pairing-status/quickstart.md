@@ -1,6 +1,6 @@
 # Quickstart Validation: WhatsApp Connection, Pairing and Status
 
-**Stage**: Planned validation guide. Feature 003 is not implemented; the commands below describe checks to run after implementation. No real-account action is authorized by this file. Contracts: [owner](contracts/connection-owner.md), [CLI](contracts/cli.md), [data model](data-model.md).
+**Stage**: Planned validation guide. Feature 003 is partially implemented; the unsafe-run barrier and Linux/Chrome follow-up are not implemented. The commands below describe checks to run after implementation. No real-account action is authorized by this file. Contracts: [owner](contracts/connection-owner.md), [CLI](contracts/cli.md), [data model](data-model.md).
 
 ## Prerequisites
 
@@ -30,11 +30,12 @@ The new tests must use injected fake clients/providers, synthetic keys and contr
 | --- | --- |
 | Link/restart | One synthetic save, Connected confirmation, zero QR on next saved-session run; failed save cannot succeed. |
 | Startup/reconnect bounds | Both shells: initial failure/timeout, up to three five-second retries, no fourth, success and stop cancellation, 405 handoff and exhausted disconnected diagnostic. Stall initial, startup, 405 and 515 owner connects and verify the 30-second watchdog and no overlap before drain. |
-| QR/window | First/replacement expiry, automatic code rotation within one window, Enter after final timeout, EOF failure, concurrent sharing and stale-epoch rejection. |
+| QR/window | First/replacement expiry, automatic code rotation within one window, final timeout requiring offline recovery rather than Enter-to-retry, EOF failure, concurrent sharing and stale-epoch rejection. |
 | Offline status | Four fields/caveats, zero client/version/network calls, no missing artifacts created, held lock PID, committed WAL and unchanged DB/sidecars. |
 | Version/retries | Real consumed-byte counting, redirects/TLS/oversize/stall rejection, no valid truncated prefix, immutable payload/hash snapshots, six-hour fake time and exactly three five-second 405 retries. |
 | Device admission | Shared gate limits, field/aggregate overflow before copying, no raw caches, nested transaction rollback, stable first-Save publication/readiness and deferred client-delete cleanup after retirement. |
 | Repair | Fresh and 1 -> 2 migration; mark-before-write and sibling failures; startup admission defers ordinary SDK sync but permits key delivery; real mutex-contention cancellation vs separate fake-time caller deadline; actual-call slot retained until return, no late clear; bounded full recovery and coalesced incremental replay without extra full-resync attempts. |
+| Unsafe run | Fresh and legacy -> 3 marker migration, full writer synchronization, failed/ambiguous arm, process-crash boundaries before/after first Save and logout cleanup, explicit offline recovery and read-only schema-3/legacy status. A possible orphaned phone-side link is considered even without a saved row. Process-kill tests do not prove OS/power-loss durability. |
 | Stop | Hold a direct device call; ten-second warning cannot close pools/release lock; true quiescence eventually permits close; cancellation/retry/QR work cannot restart after stop. |
 | Secrecy/surface | All-level captures contain no QR/key/body/ticket/account identifier, no input terminal controls, no stdio human stdout, no tools/listener/implicit pairing. |
 
