@@ -119,7 +119,7 @@ account**, and no check below ran against one.
 | Command | What it does |
 | --- | --- |
 | `status` | Reports the local snapshot offline. It never connects, never contacts WhatsApp and creates no files. It prints four fields (`connected`, `logged_in`, `pairing_required`, `wa_version`); `connected` is always `false` offline, and `logged_in` means a saved identity exists locally, not that WhatsApp still accepts it. It fails with the holder's PID while another command owns the data directory, and with exit 1 and a warning when the store is marked unsafe or comes from an older schema. |
-| `pair` | Opens one pairing window, draws the current QR code in the terminal and waits. It exits 0 only when the identity was saved and the connection was confirmed. |
+| `pair` | Opens one pairing window, draws the current QR code in the terminal and waits. It exits 0 only when the identity was saved and the connection was confirmed. Because that connection leaves the store unsafe, a successful `pair` prints "linked" with a notice that offline recovery is required before the next run. |
 | `stdio`, `serve` | Open the store and the owner. With a clean store and a saved identity they connect once at startup; with an unsafe store they exit 1 and tell you recovery is needed. |
 
 ### Pairing
@@ -129,6 +129,7 @@ account**, and no check below ran against one.
 - The window ends on success, on the final timeout, on `Ctrl+C` or a stop signal, on closed input (EOF), on a
   failure, or on an unsupported flow (a passkey or phone-code request). **Pressing Enter does nothing**: it never
   retries and never starts recovery.
+- If the scan succeeds but the server then asks for a restart (stream error 515), the follow-up connection is not allowed in this version: `pair` prints "linking could not be completed safely" and exits 1, and the device may already be linked on the phone. Remove it there by hand before pairing again.
 - After a final timeout, a failure or a cancel, `pair` exits 1. A device may already be linked on the phone, so
   the store stays unsafe (below). Do not just run `pair` again.
 - The QR code appears only on the terminal that ran `pair`. It is never logged, never stored and never in an
@@ -142,7 +143,7 @@ Any attempt to connect to WhatsApp (a startup connect, a pairing window, a faile
 the store marked **unsafe** when the process stops, even after a clean drain. The reason is that the library may
 leave work running that cannot be proven finished. While the marker is unsafe the binary starts no connection and
 no QR window. Automatic reconnects are all denied in this version: there are no startup retries, no 405 retry
-budget and no post-pair reconnect, so a lost connection stays lost until you restart.
+budget and no post-pair reconnect, so a lost connection stays lost: a restart refuses to connect while the marker is unsafe, and you must run offline recovery (below) and pair again.
 
 A store from before this feature (schema 1 or 2) is treated as unsafe, not as clean, because its history is
 unknown. A store whose marker is missing or malformed is refused.

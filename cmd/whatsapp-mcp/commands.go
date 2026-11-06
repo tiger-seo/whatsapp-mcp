@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -234,8 +235,21 @@ func runPair(cmd *command, args []string, s *streams) int {
 		}
 		return exitError
 	}
-	lc.addStop("owner", oh.stopStep())
+	// A confirmed link ends with the run marker unsafe by design: any production Connect needs a
+	// separately authorized offline recovery. That one outcome is reported as success with a
+	// recovery notice; a storage fault or any other stop failure still fails the command.
+	var linked, recoveryRequired atomic.Bool
+	ownerStop := oh.stopStep()
+	lc.addStop("owner", func(ctx context.Context) error {
+		err := ownerStop(ctx)
+		if err != nil && errors.Is(err, store.ErrUnsafeRun) && linked.Load() && !oh.owner.Health().StorageFault {
+			recoveryRequired.Store(true)
+			return nil
+		}
+		return err
+	})
 	success := pairingFlow(lc, oh, logger, s)
+	linked.Store(success)
 	lc.requestStop("pair finished")
 	<-lc.ctx.Done()
 	if code := lc.shutdown(); code != exitOK {
@@ -243,6 +257,9 @@ func runPair(cmd *command, args []string, s *streams) int {
 	}
 	if !success {
 		return exitError
+	}
+	if recoveryRequired.Load() {
+		fmt.Fprintln(s.stderr, "whatsapp-mcp: pair: linked. Offline recovery is required before the next run: the connection used for pairing leaves the data directory marked unsafe")
 	}
 	return exitOK
 }

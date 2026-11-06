@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -504,9 +505,33 @@ func TestPairMissingMarkerRefusesRecovery(t *testing.T) {
 	}
 }
 
-func TestPairSuccessStillFailsOnOwnerStopError(t *testing.T) {
+func TestPairLinkedWithRecoveryRequiredExitsZeroWithNotice(t *testing.T) {
 	so := newScriptedOwner()
 	so.stopErr = store.ErrUnsafeRun
+	so.startHook = func() { so.setPhase(wa.PhaseConnected, wa.Status{Connected: true, LoggedIn: true}) }
+	pr := startPair(t, so, nil, nil, "--data-dir", privateDir(t))
+	if code := pr.waitExit(t, 10*time.Second); code != exitOK {
+		t.Fatalf("exit %d\nstderr:\n%s", code, pr.diagnostics())
+	}
+	if !strings.Contains(pr.diagnostics(), "Offline recovery is required before the next run") {
+		t.Errorf("missing recovery notice: %s", pr.diagnostics())
+	}
+}
+
+func TestPairLinkedWithStorageFaultStillFails(t *testing.T) {
+	so := newScriptedOwner()
+	so.stopErr = store.ErrUnsafeRun
+	so.health = wa.Health{StorageFault: true}
+	so.startHook = func() { so.setPhase(wa.PhaseConnected, wa.Status{Connected: true, LoggedIn: true}) }
+	pr := startPair(t, so, nil, nil, "--data-dir", privateDir(t))
+	if code := pr.waitExit(t, 10*time.Second); code != exitError {
+		t.Fatalf("exit %d", code)
+	}
+}
+
+func TestPairLinkedWithOtherStopErrorStillFails(t *testing.T) {
+	so := newScriptedOwner()
+	so.stopErr = errors.New("synthetic stop failure")
 	so.startHook = func() { so.setPhase(wa.PhaseConnected, wa.Status{Connected: true, LoggedIn: true}) }
 	pr := startPair(t, so, nil, nil, "--data-dir", privateDir(t))
 	if code := pr.waitExit(t, 10*time.Second); code != exitError {
