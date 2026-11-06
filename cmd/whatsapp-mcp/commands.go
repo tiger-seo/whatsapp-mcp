@@ -322,7 +322,7 @@ func waitSavedConnection(owner wa.Owner, events <-chan wa.Event, s *streams, ctx
 			switch ev.Phase {
 			case wa.PhaseDisconnected:
 				if afterPairing {
-					fmt.Fprintln(s.stderr, "whatsapp-mcp: pair: linking could not be completed safely because the follow-up connection is not available; the device may be linked on the phone. Offline recovery is required before another attempt")
+					fmt.Fprintln(s.stderr, "whatsapp-mcp: pair: linking could not be completed safely because the follow-up connection is not available; the phone may show a failure or, in some cases, a linked device; check Linked devices on the phone. Offline recovery is required before another attempt")
 					return false
 				}
 				fmt.Fprintln(s.stderr, "whatsapp-mcp: pair: the saved session did not connect; the identity was kept, no new pairing was started")

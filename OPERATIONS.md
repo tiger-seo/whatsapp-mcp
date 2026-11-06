@@ -129,9 +129,9 @@ account**, and no check below ran against one.
 - The window ends on success, on the final timeout, on `Ctrl+C` or a stop signal, on closed input (EOF), on a
   failure, or on an unsupported flow (a passkey or phone-code request). **Pressing Enter does nothing**: it never
   retries and never starts recovery.
-- If the scan succeeds but the server then asks for a restart (stream error 515), the follow-up connection is not allowed in this version: `pair` prints "linking could not be completed safely" and exits 1, and the device may already be linked on the phone. Remove it there by hand before pairing again.
-- After a final timeout, a failure or a cancel, `pair` exits 1. A device may already be linked on the phone, so
-  the store stays unsafe (below). Do not just run `pair` again.
+- If the scan succeeds but the server then asks for a restart (stream error 515), the follow-up connection is not allowed in this version: `pair` prints "linking could not be completed safely" and exits 1. The phone may show a failure message and list no device (observed once on a real account, see `verification.md`), or it may list a linked device; open Linked devices on the phone and remove any entry by hand before pairing again.
+- After a final timeout, a failure or a cancel, `pair` exits 1. A device may be linked on the phone (check Linked
+  devices), so the store stays unsafe (below). Do not just run `pair` again.
 - The QR code appears only on the terminal that ran `pair`. It is never logged, never stored and never in an
   error message.
 - Pairing success is not a complete sync. If repair is still pending (below), `pair` warns that some history may

@@ -503,6 +503,38 @@ Windows 10, `CGO_ENABLED=0`. `go test ./internal/wa ./cmd/whatsapp-mcp -count=1`
 
 **Limits.** The no-same-process-re-pair rule is shown by the single window request per invocation, not by a second attempted production Connect. The synthetic Connect in the repair journey bypasses the adapter's production-attempt latch, so the run marker is not asserted there. Process-kill durability of markers is covered by the store tests and CI, not re-run here. Messages are sentinel-checked in one journey; session keys are not separately seeded beyond the saved identity. Nothing ran against a real WhatsApp account.
 
+## Real-Account Observation: Shipped `pair` (not T062) - 2026-11-06
+
+One run of the shipped binary (`a24f15d` plus uncommitted test files, `pair --log-level debug`, stderr to `D:\tmp\wa-t062-pair.log`) against one real account, with an empty data directory `D:\tmp\wa-t062`, after the user's explicit permission for this single step. The user scanned the QR code. The account and phone are not recorded. This is an observation, not T062: the manual helper (T060), T061 and the full journey were not done, and no recovery, second pair or unlink was run.
+
+**Order of events (UTC, from the log).** 19:14:36 QR emitted. 19:15:08.660 `PairSuccess` ("Successfully paired"; pairing window `succeeded`). 19:15:09.260 stream error 515, about 0.6 s later; whatsmeow logged "Got 515 code, but login autoreconnect is disabled" and the owner logged `reconnect_denied` (`path=login_515`). `pair` printed "linking could not be completed safely" and stopped, logging `upstream_drain_unproven` and `run_guard_recovery_required`. The exit code was not reported by the user.
+
+**Findings.**
+- The real server sent 515 **after** `PairSuccess`, once in this run. Whether every pairing gets a 515 is not established.
+- With the follow-up connection denied, linking did not complete. The user reports the phone showed a failure message, stayed on "Logging in..." until then, and **lists no linked device**. So no entry needed removing in this run. The likely cause is the missing post-515 connection; the log cannot prove it.
+- `status` on the data directory afterwards: `logged_in: true` (a saved local identity that WhatsApp no longer lists, unverified), `connected: false`, the run state unsafe, and offline recovery required.
+- `version discovery failed; keeping the last usable version`: the bundled version `2.3000.1050728964` was used and the connection worked. The cause is not in the log (network or proxy not checked). Version refresh is untested against the real server.
+- The phone label text during pairing was not recorded.
+
+**Consequence.** With `PostPairReconnect=false`, `pair` cannot complete a real pairing. T077 stays open and the decision to enable the candidate or close 003 without working pairing is the owner's. Nothing here approves enabling it.
+
+**Wording fixed.** The earlier claim that the device "may be linked on the phone" was too strong for this case; the `pair` message and `OPERATIONS.md` now say the phone may show a failure or a linked device and to check Linked devices.
+
+## T036 Detached Key Request (part) - 2026-11-06
+
+Windows 10, `CGO_ENABLED=0`. New file `internal/wa/repair_keyreq_test.go` (3 tests) and a small test-only hook in `internal/wasim/conn.go` (`Conn.SetIQHandler`, so a test can answer one client IQ instead of the automatic empty result).
+
+**Setup.** A reopened real `Session` with a saved identity and a durable repair marker connects to the simulator (`SendSuccess`), then `RunRepairs` makes the real pinned `FetchAppState`. The simulator answers the app-state IQ with a patch whose key is unknown, so the pinned client takes the path `applyAppStatePatches` -> `ErrKeyNotFound` -> `go requestMissingAppStateKeys(context.WithoutCancel(ctx), ...)`. The repair error is "failed to get key DEADBEEF01 to verify patch v1 MACs: didn't find app state key". A spy wraps the guarded `AppStateKeys` store and recognises the detached call because its context has no `Done` channel.
+
+**Shown (3 tests, passing; `go test ./internal/wa ./internal/wasim -count=1` ok, 12.6 s, and `-run TestKeyRequest -count=5` ok):**
+- `TestKeyRequestIsDetachedFromRepairCaller`: the detached key lookup is in flight (held) when the repair caller has already returned with the error and its context is cancelled; after release it runs with an uncancelled context and succeeds, finds no key, and the controller made exactly one app-state request. The failed repair keeps its marker.
+- `TestKeyRequestAfterRetirementIsRefusedAndWritesNothing`: with the lookup held, the generation is retired; the released lookup is refused by the guarded store; the repair-marker row count and the device rows are unchanged when read directly from the database.
+- `TestKeyRequestsStayBoundedAcrossRepeatedPasses`: the pinned client's own "Sending key request" log line appears once after the first pass and still once after a second pass (the client's per-key limit); each pass makes one app-state request and one detached lookup, never an extra full resync.
+
+**Failing first.** Each assertion was inverted once and failed as expected, then restored: detached context (`the detached lookup saw a cancelled context: <nil>`), retirement refusal (`the guarded store served a detached lookup after retirement`), and the bound (`key requests after the second pass = 1, want ...`). An earlier version that measured IQ traffic failed because the extra IQs belong to connection setup, not the key request; it was replaced by the log-line count.
+
+**Not covered, so T036 stays unticked.** (1) The key request itself is not delivered: the client logs it and its peer message fails offline (no peer session), so required key crypto and the key's delivery back (an app-state key share that lets a retry succeed) are untested. (2) The test is not "ApplyAppStatePatches hooks" in the strict sense; it reaches the same path through a real patch response. (3) Marker reload with sibling failures, discarded errors and 16-MiB consumption (the other T036 clauses) are not shown by this change. Nothing here ran against a real account.
+
 ## Polish Checks (T059, T061 part) - 2026-11-06
 
 **T059 ticked** (commit 4d42726): `OPERATIONS.md` gains a "WhatsApp connection, pairing and status" section (commands, QR/Enter/EOF behaviour, the unsafe marker, offline recovery steps, pending repair, limits, stopping, implemented vs verified, E003-RX-01 with owner, expiry and triggers, monitoring); `AGENTS.md` "Current state" lists the feature 003 code and what is unverified; `quickstart.md` drops the stale stub and retry-budget text. The local-monitoring text says plainly that the one-minute samples are not implemented (T057). The phone label is documented as not guaranteed.

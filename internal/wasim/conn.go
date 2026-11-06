@@ -36,7 +36,15 @@ type Conn struct {
 	done    chan struct{}
 	once    sync.Once
 	autoAck atomic.Bool
+	handler atomic.Pointer[IQHandler]
 }
+
+// IQHandler may answer a client IQ. Returning a node sends it instead of the automatic empty result;
+// returning nil leaves the IQ to the automatic answer.
+type IQHandler func(*waBinary.Node) *waBinary.Node
+
+// SetIQHandler installs a handler that sees every client IQ before the automatic answer.
+func (c *Conn) SetIQHandler(h IQHandler) { c.handler.Store(&h) }
 
 // SetAutoAck controls whether client IQs of type get or set are answered with an empty result.
 // It is on by default; the client waits for such answers during connection setup.
@@ -127,7 +135,14 @@ func (c *Conn) readLoop(ctx context.Context) {
 			c.server.fail(fmt.Errorf("decode client node: %w", err))
 			return
 		}
-		if c.autoAck.Load() && node.Tag == "iq" {
+		answered := false
+		if h := c.handler.Load(); h != nil && node.Tag == "iq" {
+			if reply := (*h)(node); reply != nil {
+				answered = true
+				_ = c.Send(ctx, *reply)
+			}
+		}
+		if !answered && c.autoAck.Load() && node.Tag == "iq" {
 			if kind, _ := node.Attrs["type"].(string); kind == "get" || kind == "set" {
 				if id, ok := node.Attrs["id"].(string); ok {
 					_ = c.Send(ctx, waBinary.Node{Tag: "iq", Attrs: waBinary.Attrs{
