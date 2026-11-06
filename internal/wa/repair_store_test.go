@@ -3,9 +3,13 @@ package wa
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/tiger-seo/whatsapp-mcp/internal/store"
+	wastore "go.mau.fi/whatsmeow/store"
 )
 
 // These run the repair controller against the real guarded store: an interrupted ordinary write
@@ -171,5 +175,108 @@ func TestRepairRealFetchOnUnconnectedClientKeepsMarker(t *testing.T) {
 	}
 	if !s.RecoveryPending() {
 		t.Error("the marker was cleared without a successful fetch")
+	}
+}
+
+// holdingAppState stands in for a held GetVersion: the pinned FetchAppState has taken its own
+// appStateSyncLock and then blocks inside the store, ignoring its context, like a call stuck
+// behind the SDK's plain mutex.
+type holdingAppState struct {
+	wastore.AppStateStore
+	entered chan struct{}
+	release chan struct{}
+	deletes atomic.Int64
+	once    sync.Once
+}
+
+func (h *holdingAppState) DeleteAppStateVersion(ctx context.Context, name string) error {
+	h.deletes.Add(1)
+	h.once.Do(func() { close(h.entered) })
+	<-h.release
+	return h.AppStateStore.DeleteAppStateVersion(ctx, name)
+}
+
+func newHolding(s *Session) *holdingAppState {
+	h := &holdingAppState{AppStateStore: s.dev.AppState, entered: make(chan struct{}), release: make(chan struct{})}
+	s.dev.AppState = h
+	return h
+}
+
+func waitSlotFree(t *testing.T, slot chan struct{}) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); len(slot) != 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the slot was never released after the invocation returned")
+		}
+	}
+}
+
+// With the pinned client's real sync lock held, the caller completes at its deadline before the SDK
+// call returns, the slot stays taken, no replacement call is made, and the late return neither
+// clears the marker nor leaves the ticket usable.
+func TestRepairRealSDKLockHeldCallerCompletesBeforeSDKReturns(t *testing.T) {
+	dir := waDataDir(t)
+	seedInterruptedProgress(t, dir)
+	s, closeAll := reopenSession(t, dir)
+	defer closeAll()
+	h := newHolding(s)
+	s.repair.deadline = 50 * time.Millisecond
+	slot := s.repair.slot
+
+	if err := s.RunRepairs(context.Background()); !errors.Is(err, errRepairDeadline) {
+		t.Fatalf("repair = %v, want the deadline", err)
+	}
+	<-h.entered
+	if len(slot) != 1 {
+		t.Fatal("the slot was released while the SDK call was still outstanding")
+	}
+	// A replacement attempt in the same generation, with the budget reset, is refused by the slot.
+	s.repair.mu.Lock()
+	s.repair.attempted = map[string]bool{}
+	s.repair.mu.Unlock()
+	if err := s.RunRepairs(context.Background()); !errors.Is(err, errRepairBusy) {
+		t.Fatalf("replacement run = %v, want busy", err)
+	}
+	if n := h.deletes.Load(); n != 1 {
+		t.Fatalf("%d SDK invocations; a replacement call reached the SDK", n)
+	}
+	close(h.release)
+	waitSlotFree(t, slot)
+	if !s.RecoveryPending() {
+		t.Error("the late SDK return cleared recovery")
+	}
+	pending, err := s.barrier.PendingRepairs(context.Background())
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending = %v, %v; the marker must remain", pending, err)
+	}
+}
+
+// Cancelling the caller while the SDK lock is held returns at once and still releases nothing early.
+func TestRepairRealSDKLockHeldCancellationReturnsPromptly(t *testing.T) {
+	dir := waDataDir(t)
+	seedInterruptedProgress(t, dir)
+	s, closeAll := reopenSession(t, dir)
+	defer closeAll()
+	h := newHolding(s)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.RunRepairs(ctx) }()
+	<-h.entered
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("repair = %v, want cancellation", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the caller stayed blocked behind the SDK lock")
+	}
+	if len(s.repair.slot) != 1 {
+		t.Error("the slot was released before the invocation returned")
+	}
+	close(h.release)
+	waitSlotFree(t, s.repair.slot)
+	if !s.RecoveryPending() {
+		t.Error("cancellation cleared recovery")
 	}
 }

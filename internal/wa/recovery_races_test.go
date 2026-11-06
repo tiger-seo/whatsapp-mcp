@@ -144,3 +144,134 @@ func TestRacePairErrorThenPairSuccessKeepsFailure(t *testing.T) {
 		stopInBubble(t, ot)
 	})
 }
+
+// An ordinary write that arrives during a repair is deferred, not lost and not allowed to clear or
+// supersede the repair: the repair completes and the demand is replayed once.
+func TestRaceOrdinaryWriteDuringRepairIsDeferredAndReplayed(t *testing.T) {
+	dir := waDataDir(t)
+	seedInterruptedProgress(t, dir)
+	s, closeAll := reopenSession(t, dir)
+	defer closeAll()
+	var fulls, replays int
+	s.repair.fetch = func(ctx context.Context, name string, full bool) error {
+		if !full {
+			replays++
+			return nil
+		}
+		fulls++
+		err := s.dev.AppState.PutAppStateVersion(context.Background(), name, 11, [128]byte{11})
+		if !errors.Is(err, store.ErrRecoveryPending) {
+			t.Errorf("ordinary write during repair = %v, want recovery pending", err)
+		}
+		return s.dev.AppState.PutAppStateVersion(ctx, name, 4, [128]byte{4})
+	}
+	if err := s.RunRepairs(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fulls != 1 || replays != 1 {
+		t.Fatalf("full resyncs = %d, replays = %d; want 1 and 1", fulls, replays)
+	}
+	if pending, _ := s.barrier.PendingRepairs(context.Background()); len(pending) != 0 {
+		t.Fatalf("pending after repair = %v", pending)
+	}
+}
+
+// A repair abandoned by one generation cannot affect the next: the new generation (a newer epoch)
+// repairs and clears, and the old generation's late writes, including ones detached from their
+// context, are rejected and recreate nothing.
+func TestRaceNewEpochRepairVersusAbandonedGeneration(t *testing.T) {
+	dir := waDataDir(t)
+	seedInterruptedProgress(t, dir)
+	st := openWADirAt(t, dir)
+
+	life1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	s1, err := OpenSession(newSessionTestConfig(st, life1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	late := make(chan [2]error, 1)
+	s1.repair.deadline = 50 * time.Millisecond
+	s1.repair.fetch = func(ctx context.Context, name string, full bool) error {
+		close(entered)
+		<-release
+		// The old generation's tagged write, and one detached from the cancelled repair context.
+		a := s1.dev.AppState.PutAppStateVersion(ctx, name, 4, [128]byte{4})
+		b := s1.dev.AppState.PutAppStateVersion(context.WithoutCancel(ctx), name, 5, [128]byte{5})
+		late <- [2]error{a, b}
+		return a
+	}
+	if err := s1.RunRepairs(context.Background()); !errors.Is(err, errRepairDeadline) {
+		t.Fatalf("generation 1 repair = %v", err)
+	}
+	<-entered
+	cancel1()
+	if err := s1.Retire(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	life2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	cfg2 := newSessionTestConfig(st, life2)
+	cfg2.Epoch = 2
+	s2, err := OpenSession(cfg2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Retire(context.Background())
+	s2.repair.fetch = func(ctx context.Context, name string, full bool) error {
+		if !full {
+			return nil
+		}
+		return s2.dev.AppState.PutAppStateVersion(ctx, name, 6, [128]byte{6})
+	}
+	if err := s2.RunRepairs(context.Background()); err != nil {
+		t.Fatalf("generation 2 repair: %v", err)
+	}
+	if pending, _ := s2.barrier.PendingRepairs(context.Background()); len(pending) != 0 {
+		t.Fatalf("pending after generation 2 repair = %v", pending)
+	}
+
+	close(release)
+	errs := <-late
+	for i, err := range errs {
+		if err == nil {
+			t.Errorf("late write %d from the retired generation succeeded", i)
+		}
+	}
+	if pending, _ := s2.barrier.PendingRepairs(context.Background()); len(pending) != 0 {
+		t.Fatalf("a retired generation recreated or restored a marker: %v", pending)
+	}
+}
+
+// A guarded write failure latched during a repair requires a restart: nothing clears, and a new
+// generation with a healthy store can recover.
+func TestRaceWriteFaultDuringRepairNeverClearsAndRestartRecovers(t *testing.T) {
+	dir := waDataDir(t)
+	seedInterruptedProgress(t, dir)
+	s, closeAll := reopenSession(t, dir)
+	s.repair.fetch = func(ctx context.Context, name string, full bool) error {
+		// An invalid collection name is a guarded error that upstream would discard.
+		_ = s.dev.AppState.PutAppStateVersion(ctx, "not_a_collection", 1, [128]byte{})
+		return nil
+	}
+	if err := s.RunRepairs(context.Background()); err == nil {
+		t.Fatal("a repair with a discarded guarded error reported success")
+	}
+	if !s.RecoveryPending() {
+		t.Error("a repair with a discarded guarded error cleared recovery")
+	}
+	closeAll()
+
+	s2, closeAll2 := reopenSession(t, dir)
+	defer closeAll2()
+	s2.repair.fetch = func(context.Context, string, bool) error { return nil }
+	if err := s2.RunRepairs(context.Background()); err != nil {
+		t.Fatalf("restart repair: %v", err)
+	}
+	if s2.RecoveryPending() {
+		t.Error("the restarted generation did not recover")
+	}
+}
