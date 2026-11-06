@@ -581,6 +581,48 @@ Windows 10, `CGO_ENABLED=0`. No real account and no outside network (fake transp
 
 **Not verified.** That the shipped binary now selects `2.3000.1053473644` against the real server, and that the handshake accepts the refreshed version. The next real run shows it in the log (no `version_refresh_failed`) and `status` should then report a refreshed version. The refreshed value is also what the live handshake sends, so a rejected version would surface as a 405.
 
+## T058 Negative and Abuse Cases - 2026-11-07
+
+Windows 10, `CGO_ENABLED=0`, synthetic data only; no real account and no outside network.
+
+**Existing coverage (cited, not repeated).**
+
+| Case | Existing tests |
+| --- | --- |
+| Invalid consumed input | `TestQRBoundedAndInvalidInputs`, `TestPairInvalidOrUnsupportedQRWritesNoCode`, `TestPairingRejectsUnencodableAndLateCodes`, `TestPairingRejectsUnsupportedAndInvalidFlows`, `TestDeviceInputLimits`, `TestDeviceSaveRejectsForeignAndOversizedInputs`, `TestAbuseCases`, `TestOfflineRecoveryConfirmations` ("oversized") |
+| Permission and identity swap | `TestSwapBetweenCheckAndOpenIsRefused`, `TestCreatedFileSwappedIsRefused`, `TestCheckFileIdentity`, `TestSymlinkRefused`, `TestWindowsJunctionArtifactsAreRefused`, `TestArtifactsThatAreNotPlainFilesAreRefused`, `TestJIDBindingRejectsSwitchesAndMutation`, `TestRepairClearRejectsChangedMarkerFields` |
+| Queue floods | `TestPairTerminalEventSurvivesNotificationFlood`, `TestKeyRequestsStayBoundedAcrossRepeatedPasses`, `TestPairingConcurrentRequestsShareOneWindow` |
+| Raw device, bulk, nested work | `assertGuards` (no raw container escapes), `TestUnsupportedDeviceExportsFailExplicitly`, `TestDeviceContactBulkRollsBackOnSQLFailure`, `TestDeviceLIDBulkRollsBackOnSQLFailure`, `TestNestedDeviceTransactionReusesLease`, `TestNestedDeviceTransactionCannotDiscardCancellation`, `TestRepairMarkerRejectsNestedMutation`, `TestRepairNestedRejectionDoesNotWaitForMarkerFence` |
+| Held writes | `TestHeldDeviceWriteDrainsBeforePoolClose`, `TestHeldDeviceTransactionDrainsBeforePoolClose`, `TestShutdownWaitsForHeldDeviceTransaction`, `TestSimulatorStopWhileSaveHeldDrainsWithoutIdentity`, `TestOwnerPostPairReconnectWaitsForHeldSave` |
+| Partial markers | `TestRunGuardMalformedMarkerTransition`, `TestRunGuardMissingMarkerRefused`, `TestInspectMarkerProblemsAreUnsafeStorage`, `TestRepairMarkerOverflowPreventsMutation`, `TestRepairMarkerFailurePreventsMutation`, `TestPairMissingMarkerRefusesRecovery` |
+| Epoch races | `TestOwnerDeniesStaleEpoch`, `TestRaceNewEpochRepairVersusAbandonedGeneration`, `TestRaceLatePairSuccessVersusTimeoutAndRetire`, `TestRaceStopVersusFinalTimeout`, `TestRaceFinalTimeoutVersusDelayed405` |
+| Bounded HTTP | `TestBoundedHTTPConsumption`, `TestBoundedHTTPDeadlineCoversBody`, `TestBoundedHTTPRejectsTLSRedirectAndCredentials`, `TestAppStateHTTPEnforcesConsumedBudget`, `TestVersionBodyBoundary`, `TestVersionRefreshRejectsUntrustedTLS` |
+
+**Gaps found and added.**
+- `TestRecoveryRejectsMalformedAnswers` (`cmd/whatsapp-mcp/recovery_test.go`, 10 cases): upper case, padding, tab, NUL, terminal escape, prefix, suffix, a Cyrillic lookalike and bare carriage returns are not accepted as the confirmation. Each leaves the marker unsafe, the synthetic chat and message intact and starts no owner.
+- `TestRecoveryOversizedLineTailCannotAnswerLaterPrompts` (3 cases): an oversized line at the first, second and third prompt is rejected whole; its tail never answers a later prompt.
+- `TestRecoveryEndlessInputIsConsumedOnlyUpToTheBound`: an endless line without a newline was rejected after 1,026 bytes were consumed.
+- `TestQRCodeFloodKeepsOnlyTheCurrentCode` (`internal/wa/security_test.go`): 5,000 valid codes in a row leave only the last one in the snapshot, add no goroutine and put no code in a log line.
+
+**Failing-first observations (guard temporarily broken, then restored; `git diff` of the production files empty afterwards).**
+- Confirmation read with `TrimSpace`: `leading_space`, `trailing_space` and `trailing_tab` failed.
+- Input buffer raised from 1,026 bytes to 4 MiB: the endless-input test failed (`consumed 4194304 bytes`).
+- A second read after an empty (rejected) answer: the oversized-tail test failed at the first and third prompt. The test first used a 1,100-byte line, which did not expose this mutation; it now uses exactly the reader buffer size.
+- A goroutine started per accepted QR code: the flood test failed (`goroutines grew from 8 to 5008`).
+- No guard was broken for the existing tests cited above; they were run, not re-mutated.
+
+**Rejection-point side effects, separated.**
+- *Prescribed bookkeeping (allowed):* the recovery tests open the store, read the marker and close it, so the lock file and the database sidecars are touched; the unsafe marker stays as armed by the test.
+- *Previously committed sibling work:* the seeded synthetic chat and message from the test setup.
+- *Forbidden, asserted absent:* any change to `chats` or `messages` rows (counted before and after), any owner start or pairing request (`started` and `requestN` stay zero), any QR text in logs. The sentinel file outside the data directory check remains in `TestAbuseCases`.
+- The receive-resource exception E003-RX-01 covers upstream receive work only; none of these results rely on it for device safety.
+
+**Native control result (read-only).** `icacls` on the data directory left by the real pair run and on its database showed access for the system account, Administrators and the owner account only; no entry for Users or Everyone. This inspected a directory the program created; it does not test a permission change or swap, which stays with the cited handle-identity tests on Windows and CI.
+
+**Commands.** `gofmt -l` clean; `go vet ./...` exit 0; `go test ./internal/wa ./internal/wasim ./cmd/... ./internal/private ./internal/lock -count=1` exit 0 (wa 14.3 s, wasim 1.9 s, cmd 125.7 s, private 2.2 s, lock 2.3 s); `go test ./internal/store -count=1` exit 0 (210.5 s). The line-ending check shows no `w/crlf`.
+
+**Not covered.** Permission or ACL changes made while a process runs on Windows (only the cited handle-identity and swap tests apply); Linux and macOS runs of the new tests (CI only); native console or PTY recovery with real keyboard input (the tests use an injected terminal check and readers); real-account behaviour.
+
 ## T036 Detached Key Request (part) - 2026-11-06
 
 Windows 10, `CGO_ENABLED=0`. New file `internal/wa/repair_keyreq_test.go` (3 tests) and a small test-only hook in `internal/wasim/conn.go` (`Conn.SetIQHandler`, so a test can answer one client IQ instead of the automatic empty result).

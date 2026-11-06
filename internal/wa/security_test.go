@@ -3,6 +3,8 @@ package wa
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -152,5 +154,38 @@ func TestMonitoringSamplesOncePerMinuteAndStopsWithTheOwner(t *testing.T) {
 				t.Errorf("sample carries other fields: %s", l)
 			}
 		}
+	})
+}
+
+// A hostile or buggy QR source can emit codes as fast as it likes. Only the current code is
+// retained, no goroutine is added per code, and no code reaches a log line.
+func TestQRCodeFloodKeepsOnlyTheCurrentCode(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ot, qs := openWindowWithCode(t, "flood-start")
+		before := runtime.NumGoroutine()
+		const n = 5000
+		for i := 0; i < n; i++ {
+			qs.code(fmt.Sprintf("flood-%05d", i), 20*time.Second)
+		}
+		synctest.Wait()
+		snap, ok := ot.o.PairingSnapshot()
+		if !ok || snap.Code != fmt.Sprintf("flood-%05d", n-1) {
+			t.Fatalf("snapshot = %q, %v; want only the latest code", snap.Code, ok)
+		}
+		if after := runtime.NumGoroutine(); after > before {
+			t.Errorf("goroutines grew from %d to %d during the flood", before, after)
+		}
+		ot.log.mu.Lock()
+		for _, line := range ot.log.lines {
+			if strings.Contains(line, "flood-") {
+				t.Errorf("log line carries a code: %s", line)
+			}
+		}
+		lines := len(ot.log.lines)
+		ot.log.mu.Unlock()
+		if lines > 50 {
+			t.Errorf("%d log lines for %d codes; logging must not scale with the flood", lines, n)
+		}
+		stopInBubble(t, ot)
 	})
 }

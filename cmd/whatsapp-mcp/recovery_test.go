@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -318,5 +320,113 @@ func TestJourneyRepairMarkerSurvivesFailedPassAndRestart(t *testing.T) {
 		}
 		// The run marker is not asserted here: the synthetic Connect bypasses the adapter's
 		// production-attempt latch, which the default-deny tests cover.
+	}
+}
+
+// runRecoveryInput runs the real pair command against an unsafe data directory with the given
+// recovery input and an interactive terminal, and returns the exit code. The synthetic chat and
+// message must survive, no owner may start and the marker must be the expected one.
+func runRecoveryInput(t *testing.T, input io.Reader) (dir string, code int) {
+	t.Helper()
+	dir = privateDir(t)
+	seedUnsafeWithSentinel(t, dir)
+	so := newScriptedOwner()
+	withScriptedOwner(t, so)
+	old := recoveryInteractive
+	recoveryInteractive = func(*streams) bool { return true }
+	t.Cleanup(func() { recoveryInteractive = old })
+	var out, diag bytes.Buffer
+	code = run([]string{"pair", "--data-dir", dir}, input, &out, &diag, nil)
+	if so.started.Load() || so.requestN.Load() != 0 {
+		t.Fatal("account work during recovery")
+	}
+	return dir, code
+}
+
+// Only the exact words authorize a step. Case, padding, control bytes, escape sequences and a
+// prefix or suffix of the right word are all rejected at the first prompt and change nothing.
+func TestRecoveryRejectsMalformedAnswers(t *testing.T) {
+	for _, tc := range []struct{ name, input string }{
+		{"upper case", "RECOVER\nabsent\nverified\n"},
+		{"leading space", " recover\nabsent\nverified\n"},
+		{"trailing space", "recover \nabsent\nverified\n"},
+		{"trailing tab", "recover\t\nabsent\nverified\n"},
+		{"embedded NUL", "recover\x00\nabsent\nverified\n"},
+		{"terminal escape", "\x1b[2Jrecover\nabsent\nverified\n"},
+		{"suffix", "recoverx\nabsent\nverified\n"},
+		{"prefix", "xrecover\nabsent\nverified\n"},
+		{"unicode lookalike", "recоver\nabsent\nverified\n"},
+		{"carriage return only", "recover\rabsent\rverified\r"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, code := runRecoveryInput(t, strings.NewReader(tc.input))
+			if code == exitOK {
+				t.Fatal("malformed confirmation accepted")
+			}
+			if got := markerState(t, dir); got != "unsafe" {
+				t.Fatalf("marker = %q, want unsafe", got)
+			}
+			if countRows(t, dir, "messages") != 1 || countRows(t, dir, "chats") != 1 {
+				t.Error("synthetic data changed")
+			}
+		})
+	}
+}
+
+// A line longer than the bound is rejected whole. Its tail is never read as the answer to a later
+// prompt, even when the tail spells every remaining confirmation.
+func TestRecoveryOversizedLineTailCannotAnswerLaterPrompts(t *testing.T) {
+	// Exactly the reader buffer, so the tail begins right at the next word.
+	long := strings.Repeat("a", 1026)
+	for name, input := range map[string]string{
+		"first prompt":  long + "recover\nabsent\nverified\n",
+		"second prompt": "recover\n" + long + "absent\nverified\n",
+		"third prompt":  "recover\nabsent\n" + long + "verified\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir, code := runRecoveryInput(t, strings.NewReader(input))
+			if code == exitOK {
+				t.Fatal("an oversized line was accepted")
+			}
+			if got := markerState(t, dir); got != "unsafe" {
+				t.Fatalf("marker = %q, want unsafe", got)
+			}
+		})
+	}
+}
+
+// countingFlood is an endless input without a newline. It records how much was consumed.
+type countingFlood struct{ n atomic.Int64 }
+
+func (f *countingFlood) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 'a'
+	}
+	f.n.Add(int64(len(p)))
+	return len(p), nil
+}
+
+// An endless line is rejected after a bounded read: the command neither buffers nor drains it.
+func TestRecoveryEndlessInputIsConsumedOnlyUpToTheBound(t *testing.T) {
+	flood := &countingFlood{}
+	done := make(chan struct{})
+	var dir string
+	var code int
+	go func() { dir, code = runRecoveryInput(t, flood); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the command kept reading an endless line")
+	}
+	if code == exitOK {
+		t.Fatal("endless input accepted")
+	}
+	if n := flood.n.Load(); n > 8192 {
+		t.Fatalf("consumed %d bytes of an endless line; want a small bounded read", n)
+	} else {
+		t.Logf("consumed %d bytes before rejecting the endless line", n)
+	}
+	if got := markerState(t, dir); got != "unsafe" {
+		t.Fatalf("marker = %q, want unsafe", got)
 	}
 }
