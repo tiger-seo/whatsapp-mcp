@@ -339,3 +339,19 @@ Windows amd64, Go 1.27.3, `CGO_ENABLED=0`. Real pinned client, real owner and gu
 - Not yet run: a held `stream:error` 401 `device_removed` delete across Disconnect, cancellation and retirement; the full cancel/retire/stop matrix with the real client.
 - Any production Connect still latches the unsafe marker, so `pair` exits unsuccessfully after a completed link until offline recovery is separately authorized.
 - Windows only; no Linux or macOS run, and the simulator was not run under a `synctest` bubble.
+
+## T077 Device-Removed (401) Matrix Against the Simulator - 2026-11-06
+
+Same environment and limits as the previous section (simulator, synthetic keys, Windows amd64, Go 1.27.3). The pinned handler for `stream:error` 401 `device_removed` deletes the device store synchronously and dispatches `LoggedOut` from its own goroutine; the guarded store defers the delete and the owner completes the revocation after the generation drains. `internal/wa/wasim_logout_test.go`, all PASS, 10 of 10 repeated runs.
+
+| Interleaving | Observed |
+| --- | --- |
+| 401 after Connected (`TestSimulatorDeviceRemovedAfterConnected`) | Status logged out and not connected at once, no unsolicited pairing request; after stop 0 identity rows, chat sentinel kept, marker unsafe, dial count unchanged |
+| 401 during the in-flight post-pair Connect (`...DuringPostPairConnect`) | Never reports connected; exactly 2 dials (pair + the one reconnect); 0 identity rows after stop; chat kept; unsafe |
+| 515 pending on a held Save, then 401 (`...WhilePostPairRequestPending`) | The request is dropped, 1 dial in total; after the lock is released the late Save is drained by retirement and its identity row is removed (0 rows); chat kept; unsafe |
+| 401 with a failing revocation delete (`...CleanupFailureKeepsIdentityAndBlocksWork`) | Status logged out at once; stop returns an error; the identity row is kept (1 row); chat kept; unsafe; no new dial |
+| 401 racing stop (`...RacingStop`) | Marker unsafe whichever side wins, at most 1 identity row, chat kept, no new dial |
+
+**Mutation check.** Making the owner treat the logout as unconfirmed fails the first two tests (1 identity row remains, want 0). The pending-request test still passed under that mutation: the pinned handler's own deferred delete also removes the identity, so two independent paths cover it.
+
+**Still open for T077:** the cancellation and retirement matrix with a held pinned handler (not only a held Save), the unjoined `sendUnifiedSession` and queue-overflow goroutines, Linux/macOS, and the owner review. Nothing here enables the 515 path; `PostPairReconnect` stays false in production.
