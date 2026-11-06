@@ -420,3 +420,30 @@ Windows 10 amd64 native and WSL2 Ubuntu (not native Linux), Go 1.27.3, `CGO_ENAB
 | Replaced stub expectations (T047) | five `cli`, `store` and `e2e` tests asserted "not implemented" or exit 1 and now assert the real contract |
 
 **Limits.** The swapped-handle case from T042 (a file replaced between the lstat and the view) has no test: the existing identity comparison is reused, not exercised. `status` takes the owner lock, so a running pair, stdio or serve makes it exit 1 by design. Legacy detection treats any message schema below 3 as unknown. Windows and WSL2 only; no macOS. `OPERATIONS.md`, `AGENTS.md` and the quickstart still describe the old stub (T059).
+
+## Handoff - 2026-11-06
+
+For a fresh session. Branch `003-whatsapp-pairing-status`; the last feature commit is `51ffbd4` (`feat(status): report the local snapshot offline`); `tasks.md` "Current State (handoff)" lists what is open and in which order. The working tree has two unrelated entries that are not part of this work and must not be committed or reverted by an agent: a modified `.gitignore` and an untracked `.kilo/`.
+
+**Where the evidence is (sections above):** default-deny reconnect (T075/T076); 515 source findings and probe; candidate post-pair reconnect against the simulator; 401 matrix; stop and cancel while the Save is held; T068-T073 unsafe-run evidence and its gaps; US3 offline status. Owner reviews table: design PASS at 19b0406, and one **scoped** code row `CONCERNS` at 42ff6f2 for the T077 candidate only. There is no full-branch code review yet, so `gh pr create` must not be used.
+
+**State of the code worth knowing**
+- `OwnerConfig.PostPairReconnect` is false in production; tests set it true. Production starts a Connect only at startup (once) and in a pairing window (once). Log event `reconnect_denied` marks every refusal; the production Connect latch is `Session.UpstreamDrainUnproven`.
+- `status` takes the owner lock (`AcquireExisting`, or `Acquire` when a database exists without a lock file), so it fails with the holder's PID while a pair, stdio or serve process runs.
+- `go.mod` was tidied (commit 9940272); do not run Go commands with `GOFLAGS=-mod=mod`, which rewrote it once.
+
+**Environment notes (Windows 10, Git Bash)**
+- Use `CGO_ENABLED=0` for every Go command. Temp space is `D:\tmp`; `internal/store` tests take about 4-5 minutes and `cmd/whatsapp-mcp` about 2 minutes.
+- Long heredocs with quotes can fail in the Bash tool. Write scripts and large Go files with the Write tool, then run them.
+- Python rewrites line endings: read with `newline=''` and write with `newline='\n'`; check `git ls-files --eol -m | grep crlf` before committing.
+- Linux runs: `MSYS_NO_PATHCONV=1 wsl -d Ubuntu --cd /mnt/d/projects-mou/whatsapp-mcp-next --exec env CGO_ENABLED=0 go test ...` (Go 1.27.3 is installed there). Record such results as WSL2, not native Linux.
+- Fake-time tests use `testing/synctest`; the simulator and SQLite fixtures must stay outside synctest bubbles, and only one `wasim.Server` can run at a time (it swaps the library's certificate root).
+- A tool-call note: a long-running test command may be moved to the background; read its output file instead of starting a second copy.
+
+**Known gaps, none resolved**
+- Native Windows console, native Linux, native macOS, PTY, Darwin `F_FULLFSYNC`, power-loss and OS-crash evidence (T068-T073); `govulncheck`; the heavy opt-in tests (`WA_HEAVY_TESTS=1`).
+- T077 proof gate: no held pinned node handler or `LoggedOut` dispatch across Disconnect and retry, unjoined `sendUnifiedSession` and queue-overflow goroutines, a swapped-handle case for `Inspect`, and several simulator negatives that use fixed delays instead of barriers.
+- Real-account behaviour is unverified everywhere: whether the real server sends 515 before or after `PairSuccess`, whether every pairing gets a 515, and the phone-side label. No real-account step is authorized (T062 needs per-step permission).
+- Stale text to fix in T059: `OPERATIONS.md`, `AGENTS.md` "Current state" (also still says feature 003 work is absent), `quickstart.md`.
+
+**Suggested next step for a fresh session:** write the US2 test wave (T030-T032) or ask the user which gate to attack first; do not enable `PostPairReconnect`, do not open a PR, and do not take any real-account action.

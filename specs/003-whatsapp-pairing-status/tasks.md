@@ -12,6 +12,26 @@
 
 **Organization**: Setup, shared safety foundation, four story phases in spec priority order, then cross-cutting evidence. Later features still own application message ingest, MCP/HTTP, sends, media and webhooks. No protocol fork or new settings are part of these tasks.
 
+## Current State (handoff, 2026-11-06)
+
+Branch `003-whatsapp-pairing-status`. This block is the resume point for a fresh session; `verification.md` ("Handoff") holds commands, environment notes and the evidence trail. Checkbox counts: 42 checked, 35 unchecked of 77.
+
+**Done (checked):** T001-T029, T042-T048, T065-T067, T074, T075, T076. US3 (offline `status`, `store.Inspect`, `lock.AcquireExisting`, CI privacy step) is complete; T075/T076 deny every automatic Connect path by default.
+
+**Still open, in the order to take them**
+
+| Order | Tasks | State and what blocks it |
+| --- | --- | --- |
+| 1 | T068-T073 (US1 unsafe-run gate) | Code and most runtime tests exist and pass on Windows and WSL2 (see "T068-T073 Unsafe-Run Evidence Recorded"). Not ticked because native Windows console, Linux and macOS terminal/PTY runs, Darwin `fullfsync`, power-loss, kills between pairing and first Save, and the tests-first failing observation for T068 are missing or impossible from the agent's session. Needs the user's machines or CI; do not claim them. |
+| 2 | T077 (post-pair 515) | Candidate implemented and kept **off**: `OwnerConfig.PostPairReconnect` is false in production, so `pair` ends "linking could not be completed safely" with exit 1. Evidence is in `verification.md` (simulator `internal/wasim`, 515 pending on a held Save, 401 matrix, stop/cancel while held). Owner-judge code review of the candidate returned CONCERNS (scoped row, 42ff6f2); enabling needs the contract's proof gate, which is unmet (no held pinned node handler or `LoggedOut` dispatch, unjoined `sendUnifiedSession` and queue-overflow goroutines, no Linux/macOS, T068-T073 open). Do not set the field to true without the user's decision. |
+| 3 | T030-T041 (US2) | Tests T030-T032 may be written now; integration (T033-T041) waits for the US1 checkpoint (T068-T073, T077 recorded or consciously parked by the user). Not started. |
+| 4 | T049-T056 (US4) | Not started. T053/T054 share `recovery.go`, `session.go`, `owner.go` with US2. Startup retries were removed (constants deleted in e65febc); US4's budget work must restore them only behind the same proof gate. |
+| 5 | T057-T064 (polish) | Not started. T059 must also fix stale text: `OPERATIONS.md`, `AGENTS.md` "Current state" and `quickstart.md` still describe the old `status` stub and the removed three-retry budget. T061 must run govulncheck (never run so far) and the heavy opt-in tests. T062 needs the user's per-step permission for any real account. |
+
+**Decisions already made (do not reopen without the user):** startup retries, ordinary reconnect, 405 and 515 are denied by default; any production Connect leaves the marker unsafe until separately authorized offline recovery; `PostPairReconnect` stays false; the scoped CONCERNS row at 42ff6f2 is not the feature code review and no PR may be opened on it; no commit carries attribution lines.
+
+**Reusable test infrastructure added this session:** `internal/wasim` (simulated WhatsApp server and phone: Noise handshake, synthetic certificate chain, QR scan, pair-success, 515, 401, success; counts dials and handshakes; test-only, kept out of the binary by a test) and, in `internal/wa`, the rigs `simRig` (`wasim_pairing_test.go`) and `ownerRig` (`wasim_owner_test.go`, `wasim_logout_test.go`, `wasim_held_test.go`, with `holdPairingSave`).
+
 ## Format: `[ID] [P?] [Story] Description`
 
 - Every task has a checkbox, sequential ID and exact repository-relative file paths.
@@ -293,4 +313,4 @@ Stop for expired/triggered exception, a stale/failing design review, a new indep
 | Polish T057-T064 | 8 |
 | Total | 77 |
 
-Thirteen `[P]` tasks: T022-T024, T030-T032, T042-T044, T049-T051 and T059. T001-T029, T065-T067 and T074 are checked (33); T030-T064, T068-T073 and T075-T077 are unchecked (44). These historical checkboxes do not establish the revised policy's verification. All 36 FR/SC/SEC identifiers have build/test mappings. The earlier design review does not cover this change; exception acceptance is not a substitute for a current reviewer verdict.
+Thirteen `[P]` tasks: T022-T024, T030-T032, T042-T044, T049-T051 and T059. Checked (42): T001-T029, T042-T048, T065-T067, T074-T076. Unchecked (35): T030-T041, T049-T064, T068-T073 and T077. These historical checkboxes do not establish the revised policy's verification. All 36 FR/SC/SEC identifiers have build/test mappings. The earlier design review does not cover this change; exception acceptance is not a substitute for a current reviewer verdict. See "Current State (handoff, 2026-11-06)" above for what is open and why.
