@@ -196,13 +196,13 @@ func pairingFlow(lc *lifecycle, oh *ownerHandle, logger *slog.Logger, s *streams
 		return false
 	}
 	if owner.Snapshot().LoggedIn {
-		return waitSavedConnection(owner, events, s, lc.ctx)
+		return waitSavedConnection(owner, events, s, lc.ctx, false)
 	}
 	return pairingWindowFlow(owner, events, s, lc.ctx)
 }
 
 // waitSavedConnection follows the saved-session attempt until it confirms or ends.
-func waitSavedConnection(owner wa.Owner, events <-chan wa.Event, s *streams, ctx context.Context) bool {
+func waitSavedConnection(owner wa.Owner, events <-chan wa.Event, s *streams, ctx context.Context, afterPairing bool) bool {
 	for {
 		if ctx.Err() != nil {
 			return false
@@ -225,6 +225,10 @@ func waitSavedConnection(owner wa.Owner, events <-chan wa.Event, s *streams, ctx
 			}
 			switch ev.Phase {
 			case wa.PhaseDisconnected:
+				if afterPairing {
+					fmt.Fprintln(s.stderr, "whatsapp-mcp: pair: linking could not be completed safely because the follow-up connection is not available; the device may be linked on the phone. Offline recovery is required before another attempt")
+					return false
+				}
 				fmt.Fprintln(s.stderr, "whatsapp-mcp: pair: the saved session did not connect; the identity was kept, no new pairing was started")
 				return false
 			case wa.PhaseLoggedOut, wa.PhaseStorageFailed:
@@ -270,7 +274,7 @@ func pairingWindowFlow(owner wa.Owner, events <-chan wa.Event, s *streams, ctx c
 				rendered = snap.Code
 			}
 		case wa.PairingSucceeded:
-			return waitSavedConnection(owner, events, s, ctx)
+			return waitSavedConnection(owner, events, s, ctx, true)
 		case wa.PairingTimedOut:
 			fmt.Fprintln(s.stderr, "whatsapp-mcp: pair: the pairing attempt timed out; an orphaned phone link may exist. Offline recovery is required before another attempt")
 			return false

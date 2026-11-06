@@ -113,9 +113,10 @@ func OpenSession(cfg SessionConfig) (*Session, error) {
 	}
 	client := whatsmeow.NewClient(dev, walog.New(cfg.Log))
 	client.QRClientType = whatsmeow.PairClientChrome
-	// The three reviewed reconnect flags: ordinary drops reconnect with the library's own backoff,
-	// the initial attempt and 515 reconnects stay with the owner.
-	client.EnableAutoReconnect = true
+	// Every automatic reconnect is denied: work detached by an earlier connection cannot be
+	// excluded, so the library may not start a Connect of its own. The login-time flag only
+	// routes the post-pair 515 to the owner, which denies it as well.
+	client.EnableAutoReconnect = false
 	client.InitialAutoReconnect = false
 	client.DisableLoginAutoReconnect = true
 	client.BackgroundEventCtx = cfg.Lifetime

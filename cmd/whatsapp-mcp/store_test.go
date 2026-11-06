@@ -339,20 +339,27 @@ func TestShellSavedSessionStartupExhaustion(t *testing.T) {
 			stdin := blockingReader{closed: make(chan struct{})}
 			pr := startShellStdin(t, kind, signals, stdin, nil, "--data-dir", dir)
 			deadline := time.Now().Add(60 * time.Second)
-			for !strings.Contains(pr.diagnostics(), "startup_exhausted") && time.Now().Before(deadline) {
+			for !strings.Contains(pr.diagnostics(), "reconnect_denied") && time.Now().Before(deadline) {
 				time.Sleep(50 * time.Millisecond)
 			}
-			if !strings.Contains(pr.diagnostics(), "startup_exhausted") {
-				t.Fatalf("no exhaustion diagnostic within 60s:\n%s", pr.diagnostics())
+			if !strings.Contains(pr.diagnostics(), "reconnect_denied") {
+				t.Fatalf("no reconnect-denied diagnostic within 60s:\n%s", pr.diagnostics())
 			}
-			// One attempt plus three retries: exactly four dials, never a fourth retry.
-			if got := dials.Load(); got != 4 {
-				t.Errorf("connect dials = %d, want 4", got)
+			// Startup retries are denied: the first attempt is the only dial, and the former
+			// five-second retry wait elapses without a second one.
+			time.Sleep(6 * time.Second)
+			if got := dials.Load(); got != 1 {
+				t.Errorf("connect dials = %d, want 1", got)
 			}
 			// The shell stays alive, disconnected, without pairing.
 			signals <- os.Interrupt
-			if code := pr.waitExit(t, 20*time.Second); code != exitOK {
-				t.Fatalf("exit code = %d\nstderr:\n%s", code, pr.diagnostics())
+			// A production Connect was attempted, so the run stays unsafe: a graceful stop exits
+			// unsuccessfully and demands offline recovery.
+			if code := pr.waitExit(t, 20*time.Second); code != exitError {
+				t.Fatalf("exit code = %d, want %d after an attempted Connect\nstderr:\n%s", code, exitError, pr.diagnostics())
+			}
+			if !strings.Contains(pr.diagnostics(), "run_guard_recovery_required") {
+				t.Errorf("no offline-recovery diagnostic after an attempted Connect:\n%s", pr.diagnostics())
 			}
 			// Reopen and verify that the saved identity row remains present.
 			db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(dbPath(dir))+"?mode=ro")
@@ -400,8 +407,11 @@ func TestShellSavedSessionAttemptTimeoutAndCancellation(t *testing.T) {
 			}
 			// Stop while the five-second retry wait is pending; no second attempt may start.
 			signals <- os.Interrupt
-			if code := pr.waitExit(t, 20*time.Second); code != exitOK {
-				t.Fatalf("exit code = %d\nstderr:\n%s", code, pr.diagnostics())
+			if code := pr.waitExit(t, 20*time.Second); code != exitError {
+				t.Fatalf("exit code = %d, want %d after an attempted Connect\nstderr:\n%s", code, exitError, pr.diagnostics())
+			}
+			if !strings.Contains(pr.diagnostics(), "run_guard_recovery_required") {
+				t.Errorf("no offline-recovery diagnostic after an attempted Connect:\n%s", pr.diagnostics())
 			}
 			if got := dials.Load(); got != 1 {
 				t.Errorf("connect dials after cancellation = %d, want 1", got)
@@ -482,9 +492,9 @@ func (r blockingReader) Read([]byte) (int, error) {
 	return 0, io.EOF
 }
 
-// TestShellSavedSessionSuccessOnRetry drives the real owner through two failed attempts to a
-// confirmed connection, for both shells.
-func TestShellSavedSessionSuccessOnRetry(t *testing.T) {
+// TestShellSavedSessionFailureIsNotRetried drives the real owner through a failed first attempt for
+// both shells: the retry is denied with a diagnostic, never started, and the shell stays alive.
+func TestShellSavedSessionFailureIsNotRetried(t *testing.T) {
 	for _, kind := range []string{"serve", "stdio"} {
 		t.Run(kind, func(t *testing.T) {
 			dir := privateDir(t)
@@ -495,33 +505,22 @@ func TestShellSavedSessionSuccessOnRetry(t *testing.T) {
 			})
 			signals := make(chan os.Signal, 2)
 			stdin := blockingReader{closed: make(chan struct{})}
-			pr := startShellStdin(t, kind, signals, stdin, []string{"WHATSAPP_MCP_LOG_LEVEL=debug"}, "--data-dir", dir)
-			connects := func() int {
-				if fs == nil {
-					return 0
-				}
-				return fs.connects()
-			}
+			pr := startShellStdin(t, kind, signals, stdin, nil, "--data-dir", dir)
 			deadline := time.Now().Add(30 * time.Second)
-			for connects() < 3 && time.Now().Before(deadline) {
+			for !strings.Contains(pr.diagnostics(), "reconnect_denied") && time.Now().Before(deadline) {
 				time.Sleep(50 * time.Millisecond)
 			}
-			if got := connects(); got != 3 {
-				t.Fatalf("connects = %d, want 3", got)
+			if !strings.Contains(pr.diagnostics(), "reconnect_denied") {
+				t.Fatalf("no reconnect-denied diagnostic:\n%s", pr.diagnostics())
 			}
-			fs.send(wa.SessionConnected)
-			deadline = time.Now().Add(10 * time.Second)
-			for !strings.Contains(pr.diagnostics(), "connection_confirmed") && time.Now().Before(deadline) {
-				time.Sleep(20 * time.Millisecond)
-			}
-			if !strings.Contains(pr.diagnostics(), "connection_confirmed") {
-				t.Fatalf("no connection confirmation:\n%s", pr.diagnostics())
-			}
-			time.Sleep(300 * time.Millisecond)
-			if got := connects(); got != 3 {
-				t.Errorf("connects after success = %d, want 3; a confirmed connection must end the sequence", got)
+			// Outlast the former five-second retry wait.
+			time.Sleep(6 * time.Second)
+			if got := fs.connects(); got != 1 {
+				t.Errorf("connects = %d, want 1; startup retries are denied", got)
 			}
 			signals <- os.Interrupt
+			// The scripted session has no production Connect latch, so only the retry denial is
+			// under test here; the real adapter's unsafe exit is covered by the exhaustion test.
 			if code := pr.waitExit(t, 15*time.Second); code != exitOK {
 				t.Fatalf("exit code = %d\nstderr:\n%s", code, pr.diagnostics())
 			}

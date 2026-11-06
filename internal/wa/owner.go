@@ -10,13 +10,11 @@ import (
 	"github.com/tiger-seo/whatsapp-mcp/internal/store"
 )
 
-// Owner timing: every owner-initiated attempt gets its own watchdog; the saved-session shell
-// startup budget adds three cancellable five-second retry waits. Neither value is a lifetime
-// deadline for a healthy connection.
+// Owner timing: every owner-initiated attempt gets its own watchdog, which is not a lifetime
+// deadline for a healthy connection. The desired startup budget of three five-second retries is
+// disabled until its safety proof exists; see the connection-owner contract.
 const (
-	connectWatchdog  = 30 * time.Second
-	startupRetryWait = 5 * time.Second
-	startupRetries   = 3
+	connectWatchdog = 30 * time.Second
 )
 
 // Owner errors distinguish the outcomes callers must tell apart.
@@ -74,12 +72,11 @@ type connectionOwner struct {
 	// connected records a confirmed connection of the current generation.
 	connected bool
 	// outdated records a 405 handoff for the current generation; the 405 recovery owns reconnection.
-	outdated      bool
-	manualPending bool
-	guardArmed    bool
-	unresolved    bool
-	unsafeStop    bool
-	stopErr       error
+	outdated   bool
+	guardArmed bool
+	unresolved bool
+	unsafeStop bool
+	stopErr    error
 
 	phase  Phase
 	health Health
@@ -285,7 +282,7 @@ func (o *connectionOwner) dispatch(epoch uint64, ev SessionEvent) {
 		o.log.Debug("connection confirmed", "event", "connection_confirmed")
 	case SessionDisconnected:
 		o.connected = false
-		if o.phase != PhasePairing && !o.manualPending {
+		if o.phase != PhasePairing {
 			o.phase = PhaseDisconnected
 		}
 	case SessionPairSuccess:
@@ -556,17 +553,16 @@ const (
 	outcomeLoggedOut
 	outcomeFault
 	outcomeOutdated
-	outcomeManual
 )
 
 func (k attemptOutcome) terminal() bool {
 	return k == outcomeConnected || k == outcomeStopped || k == outcomeLoggedOut ||
-		k == outcomeFault || k == outcomeOutdated || k == outcomeManual
+		k == outcomeFault || k == outcomeOutdated
 }
 
 // runStartupSequence refreshes the version, then connects with the watchdog. With the shell budget
-// it retries at most three times, five seconds apart; the pair command keeps its single attempt.
-// Exhaustion retains the identity and stays disconnected without pairing.
+// a failed or timed-out attempt is final, because retries are denied by default. The identity is
+// retained and the owner stays disconnected without pairing.
 func (o *connectionOwner) runStartupSequence(gen *genState) {
 	if err := o.cfg.Versions.Refresh(gen.lifetime); err != nil {
 		o.log.Warn("version discovery failed; keeping the last usable version", "event", "version_refresh_failed")
@@ -577,7 +573,7 @@ func (o *connectionOwner) runStartupSequence(gen *genState) {
 		o.publishLocked()
 	}
 	o.mu.Unlock()
-	for attempt := 0; ; attempt++ {
+	for {
 		select {
 		case <-gen.handle.StorageFaulted():
 			o.storageFault(gen)
@@ -596,39 +592,20 @@ func (o *connectionOwner) runStartupSequence(gen *genState) {
 			}
 			return
 		}
-		if !o.cfg.ShellStartupBudget {
-			o.setPhaseIf(PhaseDisconnected, PhaseConnecting)
-			return
+		// A failed or timed-out first attempt is final: a retry would be another production
+		// Connect while detached upstream work of the earlier one cannot be excluded.
+		if o.cfg.ShellStartupBudget && !o.stoppedOrTerminal() {
+			o.denyReconnect("startup_retry")
 		}
-		if attempt >= startupRetries {
-			if !o.stoppedOrTerminal() {
-				o.log.Warn("saved session could not connect; staying disconnected without pairing",
-					"event", "startup_exhausted", "attempts", startupRetries+1)
-			}
-			o.setPhaseIf(PhaseDisconnected, PhaseConnecting)
-			return
-		}
-		timer := time.NewTimer(startupRetryWait)
-		waiting := true
-		for waiting {
-			o.mu.Lock()
-			terminal := o.connected || o.stopping || o.phase == PhaseLoggedOut || o.health.StorageFault || o.outdated
-			updated := o.updateCh
-			o.mu.Unlock()
-			if terminal {
-				timer.Stop()
-				return
-			}
-			select {
-			case <-timer.C:
-				waiting = false
-			case <-updated:
-			case <-o.ctx.Done():
-				timer.Stop()
-				return
-			}
-		}
+		o.setPhaseIf(PhaseDisconnected, PhaseConnecting)
+		return
 	}
+}
+
+// denyReconnect reports that an automatic Connect was refused. The diagnostic is fixed text.
+func (o *connectionOwner) denyReconnect(path string) {
+	o.log.Warn("automatic reconnect is not available; the saved identity was kept and offline recovery is required before the next attempt",
+		"event", "reconnect_denied", "path", path)
 }
 
 func (o *connectionOwner) setPhaseIf(want, from Phase) {
@@ -678,7 +655,6 @@ type attemptMode int
 
 const (
 	attemptStartup attemptMode = iota
-	attemptManual
 )
 
 func (o *connectionOwner) attempt(gen *genState, mode attemptMode) attemptOutcome {
@@ -730,8 +706,6 @@ func (o *connectionOwner) attempt(gen *genState, mode attemptMode) attemptOutcom
 			done, has = outcomeFault, true
 		case o.outdated:
 			done, has = outcomeOutdated, true
-		case mode == attemptStartup && o.manualPending:
-			done, has = outcomeManual, true
 		case mode == attemptStartup && o.phase == PhaseDisconnected && !o.connected:
 			done, has = outcomeFailed, true
 		}
@@ -754,52 +728,22 @@ func (o *connectionOwner) attempt(gen *genState, mode attemptMode) attemptOutcom
 	}
 }
 
-// tryManualReconnect coalesces 515 events and waits for the current attempt to release its slot.
+// tryManualReconnect denies the post-login 515 reconnect: it would be another production Connect
+// on a client whose earlier node handlers cannot be proven drained. The owner stays disconnected,
+// keeps the unsafe marker and reports that the link could not be completed safely.
 func (o *connectionOwner) tryManualReconnect(gen *genState) {
 	o.mu.Lock()
-	if o.manualPending || o.stopping || o.gen != gen {
+	if o.stopping || o.gen != gen || gen.retiring || o.phase == PhaseLoggedOut || o.health.StorageFault {
 		o.mu.Unlock()
 		return
 	}
-	o.manualPending = true
+	o.connected = false
+	if o.phase != PhaseStopping {
+		o.phase = PhaseDisconnected
+	}
 	o.publishLocked()
 	o.mu.Unlock()
-	go func() {
-		defer func() {
-			o.mu.Lock()
-			o.manualPending = false
-			o.mu.Unlock()
-		}()
-		select {
-		case o.slot <- struct{}{}:
-		case <-gen.lifetime.Done():
-			return
-		}
-		defer func() { <-o.slot }()
-		o.mu.Lock()
-		if o.stopping || o.gen != gen || o.phase == PhaseLoggedOut || o.health.StorageFault || o.outdated {
-			o.mu.Unlock()
-			return
-		}
-		o.connected = false
-		o.phase = PhaseConnecting
-		o.publishLocked()
-		o.mu.Unlock()
-		gen.handle.Disconnect()
-		o.mu.Lock()
-		if o.stopping || o.gen != gen || gen.retiring || o.phase == PhaseLoggedOut || o.health.StorageFault || o.outdated {
-			o.mu.Unlock()
-			return
-		}
-		o.phase = PhaseConnecting
-		o.publishLocked()
-		o.mu.Unlock()
-		if outcome := o.attempt(gen, attemptManual); outcome == outcomeConnected {
-			return
-		}
-		o.setPhaseIf(PhaseDisconnected, PhaseConnected)
-		o.setPhaseIf(PhaseDisconnected, PhaseConnecting)
-	}()
+	o.denyReconnect("login_515")
 }
 
 // CancelPairing cancels the active pairing window, if any.

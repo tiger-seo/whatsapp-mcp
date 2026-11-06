@@ -249,58 +249,6 @@ func TestOwnerConnectedRetainsConnectContext(t *testing.T) {
 	})
 }
 
-func TestOwnerManualReconnectDisconnectsFirst(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		var ot *ownerTest
-		ot = newOwnerTest(t, false, true, func(n int64, _ context.Context) error {
-			if n == 2 && ot.sess.disconnectN.Load() == 0 {
-				t.Error("reconnect began before old socket disconnected")
-			}
-			return nil
-		})
-		if err := ot.o.Start(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		synctest.Wait()
-		ot.sess.send(SessionConnected)
-		synctest.Wait()
-		ot.sess.send(SessionManualLoginReconnect)
-		synctest.Wait()
-		if ot.sess.connectN.Load() != 2 {
-			t.Error("manual reconnect did not start")
-		}
-		stopInBubble(t, ot)
-	})
-}
-
-func TestOwnerManualReconnectYieldsStartupSlot(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		entered, release := make(chan struct{}), make(chan struct{})
-		ot := newOwnerTest(t, true, true, func(n int64, _ context.Context) error {
-			if n == 1 {
-				close(entered)
-				<-release
-			}
-			return nil
-		})
-		if err := ot.o.Start(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		<-entered
-		ot.sess.send(SessionManualLoginReconnect)
-		synctest.Wait()
-		if ot.sess.connectN.Load() != 1 {
-			t.Error("reconnect started before Connect returned")
-		}
-		close(release)
-		synctest.Wait()
-		if ot.sess.connectN.Load() != 2 {
-			t.Error("startup did not yield to pending reconnect")
-		}
-		stopInBubble(t, ot)
-	})
-}
-
 func TestOwnerStorageFaultRetiresConnectedGeneration(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ot := newOwnerTest(t, false, true, func(int64, context.Context) error { return nil })
@@ -365,64 +313,6 @@ func TestOwnerWatchdogDrainsBeforeSlotRelease(t *testing.T) {
 }
 
 var errRefused = errors.New("synthetic refusal")
-
-func TestOwnerStartupBudgetExhaustsAfterThreeRetries(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		ot := newOwnerTest(t, true, true, errScript(map[int64]error{
-			1: errRefused, 2: errRefused, 3: errRefused, 4: errRefused, 5: errRefused,
-		}))
-		if err := ot.o.Start(context.Background()); err != nil {
-			t.Fatalf("start: %v", err)
-		}
-		// Four attempts separated by three five-second waits; the fifth must never happen.
-		synctest.Sleep(16 * time.Second)
-		synctest.Wait()
-		if got := ot.sess.connectN.Load(); got != 4 {
-			t.Errorf("connects = %d, want exactly 4 (initial + three retries)", got)
-		}
-		if ot.o.phaseForTest() != PhaseDisconnected {
-			t.Errorf("phase = %v, want disconnected", ot.o.phaseForTest())
-		}
-		if st := ot.o.Snapshot(); !st.LoggedIn || st.Connected {
-			t.Errorf("exhausted status = %+v; the identity must be retained", st)
-		}
-		if !ot.log.contains("startup_exhausted") {
-			t.Errorf("no exhaustion diagnostic:\n%v", ot.log.lines)
-		}
-		if ot.sess.retiredN.Load() != 0 {
-			t.Error("a failed startup retired the generation")
-		}
-		if ot.sess.maxSeen.Load() > 1 {
-			t.Errorf("attempts overlapped: %d", ot.sess.maxSeen.Load())
-		}
-		stopInBubble(t, ot)
-	})
-}
-
-func TestOwnerStartupSuccessOnRetry(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		ot := newOwnerTest(t, true, true, errScript(map[int64]error{1: errRefused, 2: errRefused}))
-		if err := ot.o.Start(context.Background()); err != nil {
-			t.Fatalf("start: %v", err)
-		}
-		for ot.sess.connectN.Load() < 3 {
-			// Retry waits are timers; only a blocking sleep advances the bubble clock.
-			synctest.Sleep(time.Second)
-		}
-		ot.sess.send(SessionConnected)
-		synctest.Wait()
-		if got := ot.sess.connectN.Load(); got != 3 {
-			t.Errorf("connects = %d, want 3", got)
-		}
-		if ot.o.phaseForTest() != PhaseConnected {
-			t.Errorf("phase = %v, want connected", ot.o.phaseForTest())
-		}
-		if st := ot.o.Snapshot(); !st.Connected || !st.LoggedIn {
-			t.Fatalf("status = %+v", st)
-		}
-		stopInBubble(t, ot)
-	})
-}
 
 func TestOwnerStartupCancellationDuringRetryWait(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -530,53 +420,6 @@ func TestOwnerClientOutdatedHandsOffStartupBudget(t *testing.T) {
 	})
 }
 
-func TestOwnerManualLoginReconnectIsSerialized(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		ot := newOwnerTest(t, false, true, func(n int64, ctx context.Context) error {
-			if n == 1 {
-				return nil
-			}
-			<-ctx.Done()
-			return ctx.Err()
-		})
-		if err := ot.o.Start(context.Background()); err != nil {
-			t.Fatalf("start: %v", err)
-		}
-		synctest.Wait()
-		ot.sess.send(SessionConnected)
-		// Let the startup attempt finish so its slot is released before the 515 event.
-		synctest.Wait()
-		// A 515 event while connected starts one manual reconnect attempt.
-		ot.sess.send(SessionManualLoginReconnect)
-		for ot.sess.connectN.Load() < 2 {
-			synctest.Sleep(time.Second)
-		}
-		// A second 515 while the attempt is in flight must not overlap it.
-		ot.sess.send(SessionManualLoginReconnect)
-		synctest.Sleep(5 * time.Second)
-		synctest.Wait()
-		if got := ot.sess.connectN.Load(); got != 2 {
-			t.Errorf("connects = %d, want 2; the in-flight attempt kept the slot", got)
-		}
-		// The watchdog bounds the stalled reconnect.
-		synctest.Sleep(30 * time.Second)
-		synctest.Wait()
-		if ot.sess.disconnectN.Load() < 1 {
-			t.Error("the stalled reconnect was not disconnected")
-		}
-		// After the drain a new 515 event may start the next single attempt.
-		ot.sess.send(SessionManualLoginReconnect)
-		for ot.sess.connectN.Load() < 3 {
-			synctest.Sleep(time.Second)
-		}
-		synctest.Wait()
-		if ot.sess.maxSeen.Load() > 1 {
-			t.Errorf("attempts overlapped: %d", ot.sess.maxSeen.Load())
-		}
-		stopInBubble(t, ot)
-	})
-}
-
 func TestOwnerStopWaitsForConnectReturnAndClearsStatus(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		cancelled, release := make(chan struct{}), make(chan struct{})
@@ -635,84 +478,6 @@ func TestOwnerStopWaitsForGenerationConstruction(t *testing.T) {
 		if got := ot.sess.retiredN.Load(); got != 1 {
 			t.Errorf("retirements = %d, want 1", got)
 		}
-	})
-}
-
-func TestOwnerManualReconnectWaitsForOccupiedSlot(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		ot := newOwnerTest(t, false, false, func(int64, context.Context) error { return nil })
-		if err := ot.o.Start(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		ot.o.slot <- struct{}{}
-		ot.sess.send(SessionManualLoginReconnect)
-		ot.sess.send(SessionManualLoginReconnect)
-		synctest.Wait()
-		if n := ot.sess.connectN.Load(); n != 0 {
-			t.Fatalf("connects while slot occupied = %d", n)
-		}
-		<-ot.o.slot
-		synctest.Wait()
-		if n := ot.sess.connectN.Load(); n != 1 {
-			t.Errorf("coalesced reconnects after slot release = %d, want 1", n)
-		}
-		stopInBubble(t, ot)
-	})
-}
-
-func TestOwnerStartupRetryBoundariesAndHeldDrain(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		cancelled, release := make(chan struct{}), make(chan struct{})
-		ot := newOwnerTest(t, true, true, func(n int64, ctx context.Context) error {
-			if n != 2 {
-				return errRefused
-			}
-			<-ctx.Done()
-			close(cancelled)
-			<-release
-			return ctx.Err()
-		})
-		if err := ot.o.Start(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		synctest.Wait()
-		if n := ot.sess.connectN.Load(); n != 1 {
-			t.Fatalf("initial attempts = %d", n)
-		}
-		synctest.Sleep(5*time.Second - time.Nanosecond)
-		synctest.Wait()
-		if n := ot.sess.connectN.Load(); n != 1 {
-			t.Fatalf("early retry = %d", n)
-		}
-		synctest.Sleep(time.Nanosecond)
-		synctest.Wait()
-		if n := ot.sess.connectN.Load(); n != 2 {
-			t.Fatalf("retry at boundary = %d", n)
-		}
-		synctest.Sleep(connectWatchdog)
-		<-cancelled
-		synctest.Wait()
-		if ot.o.trySlotForTest() {
-			t.Error("slot released before retry returned")
-		}
-		if n := ot.sess.connectN.Load(); n != 2 {
-			t.Errorf("attempts before drain = %d", n)
-		}
-		close(release)
-		synctest.Wait()
-		for want := int64(3); want <= 4; want++ {
-			synctest.Sleep(5*time.Second - time.Nanosecond)
-			synctest.Wait()
-			if n := ot.sess.connectN.Load(); n != want-1 {
-				t.Fatalf("early retry: %d", n)
-			}
-			synctest.Sleep(time.Nanosecond)
-			synctest.Wait()
-			if n := ot.sess.connectN.Load(); n != want {
-				t.Fatalf("retry at boundary: %d, want %d", n, want)
-			}
-		}
-		stopInBubble(t, ot)
 	})
 }
 

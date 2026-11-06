@@ -49,7 +49,7 @@ func TestPairConnectionEventsAreNotProofOfSuccess(t *testing.T) {
 			events <- wa.Event{Phase: wa.PhaseConnected}
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 			defer cancel()
-			if waitSavedConnection(so, events, &streams{stderr: io.Discard}, ctx) {
+			if waitSavedConnection(so, events, &streams{stderr: io.Discard}, ctx, false) {
 				t.Fatal("incomplete current status reported success")
 			}
 		})
@@ -61,7 +61,7 @@ func TestPairStaleQueuedEventsUseCurrentState(t *testing.T) {
 	so.status = wa.Status{LoggedIn: true, Connected: true}
 	events := make(chan wa.Event, 2)
 	events <- wa.Event{Phase: wa.PhaseLoggedOut}
-	if !waitSavedConnection(so, events, &streams{stderr: io.Discard}, context.Background()) {
+	if !waitSavedConnection(so, events, &streams{stderr: io.Discard}, context.Background(), false) {
 		t.Fatal("stale logout overrode current connected identity")
 	}
 
@@ -72,7 +72,7 @@ func TestPairStaleQueuedEventsUseCurrentState(t *testing.T) {
 	events <- wa.Event{Phase: wa.PhaseConnecting}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	if waitSavedConnection(so, events, &streams{stderr: io.Discard}, ctx) {
+	if waitSavedConnection(so, events, &streams{stderr: io.Discard}, ctx, false) {
 		t.Fatal("disconnected session reported success")
 	}
 }
@@ -538,5 +538,25 @@ func withTestLifecycleSignals(t *testing.T, signals chan os.Signal) {
 	t.Cleanup(func() { lifecycleFactory = prev })
 	lifecycleFactory = func(logger *slog.Logger) *lifecycle {
 		return newLifecycleWith(logger, signals, func(int) {}, 5*time.Second)
+	}
+}
+
+// A denied post-pair reconnect ends in an unsuccessful, actionable result that says linking was not
+// completed safely rather than claiming a usable saved session.
+func TestPairDeniedFollowUpConnectionReportsUnsafeLinking(t *testing.T) {
+	so := newScriptedOwner()
+	so.status = wa.Status{LoggedIn: true}
+	events := make(chan wa.Event, 1)
+	events <- wa.Event{Phase: wa.PhaseDisconnected}
+	var stderr strings.Builder
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if waitSavedConnection(so, events, &streams{stderr: &stderr}, ctx, true) {
+		t.Fatal("a denied follow-up connection reported success")
+	}
+	for _, want := range []string{"could not be completed safely", "Offline recovery is required"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr lacks %q: %s", want, stderr.String())
+		}
 	}
 }

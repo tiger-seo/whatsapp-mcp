@@ -236,8 +236,8 @@ func TestSessionOpensGuardedDeviceWithReviewedOptions(t *testing.T) {
 		t.Fatalf("open session: %v", err)
 	}
 	c := s.client
-	if !c.EnableAutoReconnect {
-		t.Error("EnableAutoReconnect = false")
+	if c.EnableAutoReconnect {
+		t.Error("EnableAutoReconnect = true")
 	}
 	if c.InitialAutoReconnect {
 		t.Error("InitialAutoReconnect = true")
