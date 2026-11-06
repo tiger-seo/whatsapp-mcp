@@ -358,3 +358,36 @@ Same environment and limits as the previous section (simulator, synthetic keys, 
 **Still open for T077:** the cancellation and retirement matrix with a held pinned handler (not only a held Save), the unjoined `sendUnifiedSession` and queue-overflow goroutines, Linux/macOS, and the owner review. Nothing here enables the 515 path; `PostPairReconnect` stays false in production.
 
 **Code review at 42ff6f2 (T077 candidate only)**: Owner-judge returned CONCERNS. It confirmed that production starts no Connect beyond the startup attempt and the pairing window (the post-pair Connect is reachable only through `OwnerConfig.PostPairReconnect`, which production never sets), that every library reconnect path is closed at the pin, that the simulator is not linked into the binary, and that `go vet`, five cross-builds and the full test suite pass. Findings: (medium) the pending-515 timer rewrote a stopped or storage-failed phase; (medium) a 515 refused before PairSuccess left the phase at connecting so `pair` waited instead of reporting the unfinished link; (low) stale retry-budget wording; (low) sleep-based negative checks in simulator tests. The two medium findings were reproduced with failing tests and fixed together with the wording and two of the sleeps in the next commit; the remaining fixed-delay negative checks stay as documented limits. The proof gate for enabling the path stays unmet, so `PostPairReconnect` remains false. A later full-branch code review supersedes this row.
+
+## T068-T073 Unsafe-Run Evidence Recorded - 2026-11-06
+
+Commit 8ba07ce plus the kill test added after it. Primary environment: Windows 10 amd64 native, Go 1.27.3, `CGO_ENABLED=0`. Synthetic data only; no real account or phone. This records what ran. It does not complete T068-T073: none of them is ticked.
+
+**Runs**
+
+| Command | Result |
+| --- | --- |
+| `go test -v -count=1 ./...` (Windows native) | exit 0; 9 packages `ok`; 488 top-level tests PASS, 0 FAIL, 18 SKIP (child-process helpers, Unix-only symlink/FIFO/permission cases, heavy tests that need `WA_HEAVY_TESTS=1`). Longest packages: `internal/store` 297 s, `cmd/whatsapp-mcp` 129 s |
+| `go test -v -count=1 -run 'RunGuard\|Recovery\|OfflineRecovery\|PairMissingMarker\|PairSuccessStill\|OwnerStopError\|LowDisk\|Sync' ./internal/store ./internal/wa ./cmd/...` | exit 0; 53 PASS, 0 FAIL, 0 SKIP |
+| Same family plus `KilledProcess`, `Lifecycle`, `Force`, `Signal` under **WSL2 Ubuntu 5.15.90.1-microsoft-WSL2, Go 1.27.3, ext4 `/tmp`** | exit 0; 59 PASS, 0 FAIL, 1 SKIP (the kill-test child). WSL2 result only; it is not native Linux hardware or CI |
+| `GOOS/GOARCH` builds of `./cmd/whatsapp-mcp` for windows/amd64, linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 | all exit 0 |
+| `go vet ./...`, `gofmt -l .` | clean |
+
+**T068 cases covered by runtime tests** (store, owner and command layers): fresh storage gets the marker schema; schema 1/2 migration reopens unsafe; interrupted creation reopens unsafe; failed or ambiguous arm blocks device admission; arm, clear and reopen; clear closes device admission; missing, malformed or text marker ids are refused; transition failures latch; revocation transfers the pending repair bits and they survive offline recovery; confirmed logout cleanup, cleanup failure keeps the identity and the marker unsafe, an unconfirmed deferred delete keeps the identity; a late pinned logout after retirement; storage fault during drain; unresolved pairing blocks retry and clear; no client construction while unsafe; offline recovery rolls back on a failed delete and checks the actual writer; recovery refuses redirected input and missing markers; consent boundaries preserve chat sentinels. Production-attempt latch and denial are recorded in the T075/T076 section.
+
+**Process kill, separate from everything else** (`TestRunGuardSurvivesKilledProcess`, new, 3 of 3 PASS on Windows; also run in the WSL2 pass): a child process is killed after it opened fresh storage (marker clean), after it armed (marker **unsafe**) and after it armed and cleared (marker clean). `PRAGMA integrity_check` returns `ok` each time. This is an abrupt process kill. It is not power loss, an OS crash or a hardware flush.
+
+**T073 synchronization.** `TestRunGuardWriterSynchronization` passed on Windows and under WSL2: the writer connection reports `journal_mode=wal` and `synchronous=2` (FULL) on the initial connection and on its replacement after the first is discarded (`driver.ErrBadConn`). The writer DSN sets `synchronous(FULL)` (`internal/store/store.go`), and arming verifies `wal`, FULL and foreign keys on the actual writer connection (`internal/store/run_guard.go`).
+
+**T071 disk gate.** `TestLowDiskRefusesWritesAndKeepsEveryFile`, `TestLoadDeviceRejectsLowDiskBeforeCreatingSession`, `TestRunGuardFreshLowDiskReopensUnsafe` and `TestRunGuardLowDiskRecoveryPreservesData` PASS: writes are refused with files unchanged, a fresh low-disk start reopens unsafe, and recovery under low disk preserves the data.
+
+**T072 interactive input.** `TestRecoveryTerminalRejectsPipesAndMixedStreams`, `TestRecoveryTerminalDetectionFailure`, `TestRecoveryCancellationStopsPromptingAfterBlockedRead` and `TestRecoveryConsentBoundariesPreserveSyntheticData` PASS on Windows and under WSL2 with injected handles. No run used a real Windows console, a Linux/macOS terminal or a PTY: the test runner here has no interactive terminal.
+
+**Not performed (remaining blockers)**
+- Real Windows console, native Linux, native macOS and PTY runs; the Git Bash/mintty limitation is not measured.
+- Darwin `F_FULLFSYNC` behaviour of the SQLite VFS is unexamined; the plan requires it to be verified or the weaker durability stated. FULL alone is not evidence of it.
+- Power-loss and OS-crash tests; filesystem or backup rollback limits.
+- Tests-first failing observations for T068 were not recorded when the tests were written; later additions (T075/T076, the 515 candidate and this kill test) have their own notes.
+- Process-kill coverage is only at open, armed and cleared. Kills between first pairing and the first Save, during revocation delete and during clear are covered by fault injection, not by a killed process.
+- The exact-device ambiguity and phone-label cases (T072) are covered only by the injected-stream tests above.
+- `govulncheck` was not run; `go mod tidy` would currently rewrite `go.mod` (five directly imported modules are marked `// indirect`); that is unresolved and belongs to T061.
