@@ -669,6 +669,26 @@ Windows 10, Go 1.27.3, `CGO_ENABLED=0`, `TMP`/`TEMP` on `D:\tmp`, HEAD `808205f`
 - Anything on a real account.
 - The unsafe-run platform summary step of CI (verbose summary of which tests ran or skipped per OS).
 
+## T062 Permissioned Real-Account Journey - 2026-11-07
+
+Windows 10, shipped binary and helper built from `a3b787f` (`D:\tmp\sc-bin\`). Each account-affecting step had the user's explicit permission, named the directory and the cleanup, and was run by the user in their own PowerShell window (the helper and the recovery prompts refuse the `!` shell: "needs an interactive terminal ... nothing was changed", which is itself a passing refusal). The account and phone are not recorded. Nothing was sent, read or downloaded beyond pairing.
+
+| Step | Directory | Result |
+| --- | --- | --- |
+| Fresh link, shipped `pair` (earlier, "Real-Account Observation: Pair With the Post-Pair Reconnect Enabled") | `D:\tmp\wa-t062b` | Linked and confirmed; marker unsafe afterwards; offline `status` reported `logged_in: true` with the unsafe-recovery warning; no QR and no connection from `status`. Its exit code was not read at that time; on the unsafe store `wa-t062c` after step D it was measured as 1, and on the clean `wa-t062b` after step B as 0 (both run without a pipe). |
+| A. Unsafe restart: `session-check -action connect` after the typed approval | `wa-t062b` | Refused: "the run marker is not clean; offline recovery is required before any connection ... No owner was started". No dial, no QR. `whatsapp.db` hash prefix `b743a2b2fac7a6b4`, size and mtime identical before and after; only the empty lock file's timestamp moved. Exit code not captured. |
+| B. Offline recovery (shipped `pair`, answers `recover`, `absent`, `verified`, `remove`) after the user had unlinked the phone entry | `wa-t062b` | Completed ("Offline recovery completed. A fresh pair requires a separate invocation and approval."). No network use in the log. `status` afterwards: `logged_in: false`, exit 0, no unsafe warning; db hash `b743a2b2fac7a6b4` to `ec5728843a27c58a`. The store held no chats or messages, so chat preservation is not shown by this run (it is covered by the sentinel journeys in the US2 section). |
+| C. Fresh link with `session-check -action pair -denial` (two typed approvals) | `D:\tmp\wa-t062c` | `PairSuccess` 01:40:01.6, 515 0.6 s later, one follow-up connection authenticated 01:40:03, helper reached `connected`. No `version discovery failed` warning in this run (consistent with the header fix; the selected version is not printed, so not confirmed). |
+| D. Live logout: the user unlinked the device on the phone while the helper was connected | `wa-t062c` | 01:42:33 `device_removed` stream error; owner logged `logged out by the server`; helper showed `phase: logged_out` and "no pairing is offered in this process". The pinned client logged "Failed to delete store after device_removed error" and the local identity was nonetheless gone (`status`: `logged_in: false`), consistent with the simulator 401 matrix. |
+| Denial after a production Connect | `wa-t062c` | After the second typed approval the second pairing request in the same process was refused ("unsafe run"); the helper printed "denial confirmed". |
+| Final state | `wa-t062c` | `status`: `logged_in: false`, unsafe run state, offline recovery required. Shutdown logged `upstream_drain_unproven` and `run_guard_recovery_required`, as designed. The phone entry was removed by the user's unlink (step D); nothing remained to clean up. |
+
+**Phone label.** The user reported the linked-device entry on the phone as **Google Chrome (Linux)**. Only that label was reported; other text on the entry, if any, was not recorded. This matches the Linux/Chrome label the program asks for; it does not establish that the label is stable, and the program still does not promise it.
+
+**Not captured or not covered.** Exit codes of the helper and the recovery run were not seen by the user. No second pairing on the same directory, no recovery of `wa-t062c`, no run on another account or phone model, and no native Linux or macOS run. The usability problems seen during step B (the phone check is asked twice and never says where to look) are recorded in `docs/backlog/003-offline-recovery-prompt-usability.md`.
+
+**Result.** The T062 journey ran as the task describes: fresh link, unsafe-marker retention, no automatic reuse, unsafe restart refused, separately authorized offline recovery, live logout, denial of same-process re-pair, phone label observed. T062 is ticked on that basis, with the gaps above.
+
 ## T036 Detached Key Request (part) - 2026-11-06
 
 Windows 10, `CGO_ENABLED=0`. New file `internal/wa/repair_keyreq_test.go` (3 tests) and a small test-only hook in `internal/wasim/conn.go` (`Conn.SetIQHandler`, so a test can answer one client IQ instead of the automatic empty result).
