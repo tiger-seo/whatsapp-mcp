@@ -315,3 +315,27 @@ Pin `go.mau.fi/whatsmeow v0.0.0-20261027104441-1eec1136a50b`, Windows amd64, Go 
 - No positive fixture reaches Connected: that needs a fake WhatsApp server speaking the Noise handshake to the real client, which I have not built. Without it the same-generation completion cannot be demonstrated, so per T077 the blocker is recorded and 515 stays disabled.
 - No barrier test yet holds a pinned `stream:error` 401 `device_removed` delete across Disconnect, a second Connect, cancellation, retirement and stop.
 - Whether every pairing receives 515 is unknown; this does not show the server requires the reconnect.
+
+## T077 Candidate Post-Pair Reconnect Against the Simulator - 2026-11-06
+
+Windows amd64, Go 1.27.3, `CGO_ENABLED=0`. Real pinned client, real owner and guarded SQLite store against `internal/wasim` (simulated server and phone, loopback, synthetic keys and certificate chain). No real account or network. The simulator is a model of the protocol written for this repository; passing here is not evidence about WhatsApp itself.
+
+**Implemented behind a code-level switch, off by default.** `OwnerConfig.PostPairReconnect` (not a user setting) is false in production, so 515 is still refused. When true, a 515 is a request: it waits up to the 30-second attempt watchdog for `PairSuccess`, is refused on `PairError`, logout, stop or expiry, and then makes exactly one owner-initiated Connect on the same generation under the existing attempt slot and watchdog. Duplicate 515 events share the request; a failed or stalled post-pair Connect is final. Enabling it in production needs the owner review the contract requires and is not done.
+
+| Check | Result |
+| --- | --- |
+| `internal/wasim` self-test `TestSimulatorPairsAndReconnectsToConnected` (real `Session`: Noise handshake, certificate check, QR scan, guarded Save, 515, saved-identity reconnect, Connected) | PASS, 15 of 15 runs; `Failures()` empty, 2 handshakes |
+| Owner unit tests with a scripted session, fake time (`TestPostPairReconnect*`, 8 cases incl. 2 subtests) | PASS: connect after PairSuccess with Disconnect first; one Connect for duplicate 515; 515 before PairSuccess waits; PairError and logout refuse; wait bounded at 30 s; stop while pending; failed connect is final; stalled connect releases the slot after the watchdog |
+| Owner against the simulator: `TestOwnerPostPairReconnectReachesConnectedAgainstSimulator` | PASS: Connected, exactly 2 handshakes, 1 device row, saved-identity payload (no re-registration) |
+| `TestOwnerDeniesPostPairReconnectByDefaultAgainstSimulator` | PASS: `reconnect_denied`, 1 dial, identity kept, not connected |
+| `TestOwnerPostPairReconnectWaitsForHeldSave` (guarded Save held by a SQLite write lock, 515 delivered meanwhile) | PASS: 1 dial and no device row while held; after release one reconnect, Connected, 2 handshakes |
+| All of `internal/wa`, `internal/wasim`, `cmd/whatsapp-mcp`, `go vet ./...`, `gofmt` | PASS; the new owner and simulator tests also PASS 8 of 8 repeated runs |
+
+**Mutation check.** Removing the wait for PairSuccess makes `TestPostPairReconnectWaitsForPairSuccess` fail (1 Connect before PairSuccess, want 0). The held-Save test still passed under that mutation because the pairing attempt's slot also blocks a second Connect until the Save completes; two independent guards hold, and this test is not evidence for the wait alone.
+
+**Not established**
+- The new owner tests were written after the field existed, so their first run was green, not a recorded failing case; the mutation check above stands in for it.
+- Unjoined work remains: `go sendUnifiedSession`, goroutines spawned when the handler queue overflows, and any node handler that outlives 10 x 30 s. A same-generation reconnect can still receive a late send from them. This is the residual risk for owner review.
+- Not yet run: a held `stream:error` 401 `device_removed` delete across Disconnect, cancellation and retirement; the full cancel/retire/stop matrix with the real client.
+- Any production Connect still latches the unsafe marker, so `pair` exits unsuccessfully after a completed link until offline recovery is separately authorized.
+- Windows only; no Linux or macOS run, and the simulator was not run under a `synctest` bubble.

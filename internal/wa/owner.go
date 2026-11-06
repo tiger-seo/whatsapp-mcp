@@ -38,6 +38,10 @@ type OwnerConfig struct {
 	// ShellStartupBudget enables the bounded saved-session startup retries for long-running shells.
 	// The pair command keeps its single-attempt behaviour.
 	ShellStartupBudget bool
+	// PostPairReconnect enables the one owner-initiated reconnect that completes a fresh pairing
+	// after the server's 515. It is off until the path has its safety proof and owner review; with
+	// it off the 515 is refused and linking ends unfinished. It is a code-level switch, not a setting.
+	PostPairReconnect bool
 }
 
 // Owner owns the one WhatsApp connection: state, epochs, attempts, watchdogs and pairing windows.
@@ -96,6 +100,10 @@ type genState struct {
 	retiring   bool // guarded by connectionOwner.mu
 	timingOut  bool // guarded by connectionOwner.mu
 	loggedOut  bool // guarded by connectionOwner.mu
+	// paired records PairSuccess for this generation; pending515 records a 515 waiting for it.
+	paired     bool // guarded by connectionOwner.mu
+	pending515 *time.Timer
+	reconnects int // post-pair reconnects started for this generation
 }
 
 // NewOwner creates the owner; call Start once to load the device and begin the lifecycle.
@@ -287,6 +295,7 @@ func (o *connectionOwner) dispatch(epoch uint64, ev SessionEvent) {
 		}
 	case SessionPairSuccess:
 		// PairSuccess proves the durable save happened in the guarded container.
+		gen.paired = true
 		o.identity = true
 		if o.connected {
 			o.unresolved = false
@@ -327,7 +336,12 @@ func (o *connectionOwner) dispatch(epoch uint64, ev SessionEvent) {
 	switch ev {
 	case SessionLoggedOut:
 		// Retirement runs outside event-handler locks; the shared store stays open.
+		o.cancelPending515(gen, true)
 		go o.retireGeneration(gen)
+	case SessionPairError:
+		o.cancelPending515(gen, true)
+	case SessionPairSuccess:
+		o.releasePending515(gen)
 	case SessionManualLoginReconnect:
 		o.tryManualReconnect(gen)
 	}
@@ -655,6 +669,9 @@ type attemptMode int
 
 const (
 	attemptStartup attemptMode = iota
+	// attemptPostPair starts from an intentionally dropped socket, so a disconnect event does not
+	// end it; only the connect result, the watchdog and the terminal states do.
+	attemptPostPair
 )
 
 func (o *connectionOwner) attempt(gen *genState, mode attemptMode) attemptOutcome {
@@ -728,22 +745,115 @@ func (o *connectionOwner) attempt(gen *genState, mode attemptMode) attemptOutcom
 	}
 }
 
-// tryManualReconnect denies the post-login 515 reconnect: it would be another production Connect
-// on a client whose earlier node handlers cannot be proven drained. The owner stays disconnected,
-// keeps the unsafe marker and reports that the link could not be completed safely.
+// tryManualReconnect handles the post-login 515. Unless the candidate path is enabled it refuses:
+// another production Connect while detached upstream work of the earlier one cannot be excluded.
+// The owner then stays disconnected, keeps the unsafe marker and reports that linking was not
+// completed safely.
+//
+// With the candidate enabled the 515 is only a request. It waits (bounded) for PairSuccess, which
+// proves the pinned pairing work reached its durable save and event dispatch, and any failure or
+// stop refuses it.
 func (o *connectionOwner) tryManualReconnect(gen *genState) {
 	o.mu.Lock()
 	if o.stopping || o.gen != gen || gen.retiring || o.phase == PhaseLoggedOut || o.health.StorageFault {
 		o.mu.Unlock()
 		return
 	}
-	o.connected = false
-	if o.phase != PhaseStopping {
-		o.phase = PhaseDisconnected
+	if !o.cfg.PostPairReconnect {
+		o.connected = false
+		if o.phase != PhaseStopping {
+			o.phase = PhaseDisconnected
+		}
+		o.publishLocked()
+		o.mu.Unlock()
+		o.denyReconnect("login_515")
+		return
 	}
+	if gen.reconnects > 0 || gen.pending515 != nil && !gen.paired {
+		o.mu.Unlock() // duplicates share the one request
+		return
+	}
+	if gen.paired {
+		gen.reconnects++
+		o.mu.Unlock()
+		go o.runPostPairReconnect(gen)
+		return
+	}
+	gen.pending515 = time.AfterFunc(connectWatchdog, func() { o.cancelPending515(gen, true) })
+	o.mu.Unlock()
+}
+
+// cancelPending515 drops a waiting 515 request; refuse reports the denial.
+func (o *connectionOwner) cancelPending515(gen *genState, refuse bool) {
+	o.mu.Lock()
+	timer := gen.pending515
+	gen.pending515 = nil
+	waiting := timer != nil && !gen.paired
+	if timer != nil {
+		timer.Stop()
+	}
+	if waiting {
+		gen.reconnects++ // a later PairSuccess must not revive the refused request
+		o.connected = false
+		if o.phase != PhaseStopping && o.phase != PhaseLoggedOut {
+			o.phase = PhaseDisconnected
+		}
+		o.publishLocked()
+	}
+	o.mu.Unlock()
+	if waiting && refuse && !o.stoppedOrTerminal() {
+		o.denyReconnect("login_515")
+	}
+}
+
+// releasePending515 starts the reconnect for a 515 that arrived before PairSuccess.
+func (o *connectionOwner) releasePending515(gen *genState) {
+	o.mu.Lock()
+	timer := gen.pending515
+	gen.pending515 = nil
+	if timer == nil || gen.reconnects > 0 || o.stopping || o.gen != gen || gen.retiring {
+		o.mu.Unlock()
+		return
+	}
+	timer.Stop()
+	gen.reconnects++
+	o.mu.Unlock()
+	go o.runPostPairReconnect(gen)
+}
+
+// runPostPairReconnect makes the single owner-initiated Connect that completes a pairing: it takes
+// the attempt slot, drops the paired socket and connects once under the attempt watchdog. A failure
+// is final.
+func (o *connectionOwner) runPostPairReconnect(gen *genState) {
+	select {
+	case o.slot <- struct{}{}:
+	case <-gen.lifetime.Done():
+		return
+	}
+	defer func() { <-o.slot }()
+	o.mu.Lock()
+	if o.stopping || o.gen != gen || gen.retiring || o.phase == PhaseLoggedOut || o.health.StorageFault || o.outdated {
+		o.mu.Unlock()
+		return
+	}
+	o.connected = false
+	o.phase = PhaseConnecting
 	o.publishLocked()
 	o.mu.Unlock()
-	o.denyReconnect("login_515")
+	gen.handle.Disconnect()
+	o.mu.Lock()
+	if o.stopping || o.gen != gen || gen.retiring || o.phase == PhaseLoggedOut || o.health.StorageFault || o.outdated {
+		o.mu.Unlock()
+		return
+	}
+	o.mu.Unlock()
+	if outcome := o.attempt(gen, attemptPostPair); outcome == outcomeConnected {
+		return
+	}
+	if !o.stoppedOrTerminal() {
+		o.denyReconnect("login_515")
+	}
+	o.setPhaseIf(PhaseDisconnected, PhaseConnecting)
 }
 
 // CancelPairing cancels the active pairing window, if any.
