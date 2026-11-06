@@ -641,6 +641,34 @@ Windows 10, `CGO_ENABLED=0`, synthetic data only; no real account and no outside
 
 **Not covered.** Permission or ACL changes made while a process runs on Windows (only the cited handle-identity and swap tests apply); Linux and macOS runs of the new tests (CI only); native console or PTY recovery with real keyboard input (the tests use an injected terminal check and readers); real-account behaviour.
 
+## T061 Verification Gates - 2026-11-07
+
+Windows 10, Go 1.27.3, `CGO_ENABLED=0`, `TMP`/`TEMP` on `D:\tmp`, HEAD `808205f` (clean apart from unrelated `.gitignore` and `.kilo/`). Logs: `D:\tmp\t061\*.log` (local). Nothing was pushed and CI was not triggered. No account, no outside network except the Go vulnerability database and module proxy for `govulncheck`.
+
+| Check | Command (as CI runs it) | Result |
+| --- | --- | --- |
+| Formatting | `gofmt -l .` | exit 0, no files listed |
+| Vet | `go vet ./...` | exit 0 |
+| Helper vet and build | `go vet ./internal/wa/testdata/cmd/session-check`, `go build` of it | exit 0, exit 0 (testdata is outside `./...`) |
+| Module integrity | `go mod verify` | exit 0 |
+| Driver and libc | the CI `awk` check on `go mod graph` against `go list -m` | exit 0 (driver and build use the same `modernc.org/libc` version) |
+| Five CGO-free builds | `GOOS/GOARCH` windows/amd64, linux/amd64, linux/arm64, darwin/amd64, darwin/arm64: `go vet ./... && go build ./cmd/whatsapp-mcp` | all five exit 0 (built to a scratch file instead of `/dev/null`) |
+| govulncheck | `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...` (the CI-pinned version) | exit 0, "No vulnerabilities found." |
+| Full tests | `go test -timeout 30m -count=1 ./...` | exit 0: cmd 136.4 s, buildinfo 2.1 s, config 10.7 s, lock 9.1 s, private 9.7 s, store 294.8 s, wa 20.4 s, walog 6.9 s, wasim 8.8 s |
+| WSL2 Ubuntu | `go test ./... -count=1 -timeout 30m` via `wsl -d Ubuntu` (Go 1.27.3) | exit 0: cmd 133.7 s, buildinfo 0.03 s, config 0.9 s, lock 0.06 s, private 0.05 s, store 215.2 s, wa 18.8 s, walog 0.04 s, wasim 4.0 s. **WSL2, not native Linux.** |
+| Heavy opt-in tests | `WA_HEAVY_TESTS=1 go test -v ./internal/store`, run for `TestHeavyContactListing` and `TestPerContactMemory` (CI's `-run` pattern), 38 GB free on `D:` before and after | run 1 **FAIL**, run 2 (the `phone` case alone) pass, run 3 (the full set) pass |
+
+**Heavy-test failure, recorded as found.** Run 1 failed in `TestPerContactMemory/phone`: `LastInteraction used 93592 B in 106.955ms, want below 1 MB and 50 ms`. Memory was within bounds; the wall-clock limit was missed. The two subtests run in parallel with each other. The same case then took 2.0 ms alone and 2.9 ms in the full set (the `even` case took 2.0 ms in both full runs), and the full set passed. So one of three runs of unchanged code failed on a 50 ms wall-clock limit. I treat that as a timing limit that is sensitive to load, not a proven memory or correctness fault, but it is not shown to be harmless: the cause (a disk stall, antivirus or the parallel subtest) was not identified, and the test was not changed.
+
+**`go mod tidy` finding.** `go mod tidy -diff` exits 1: it would remove two stale lines from `go.sum`, the `golang.org/x/crypto v0.58.0` hashes left behind when `208bc18` moved to the fixed revision. `go.mod` is unchanged. CI does not run `go mod tidy`, and `go mod verify` passes, so this is hygiene, not a CI failure. It was not fixed (no `go.mod`/`go.sum` change was made).
+
+**Not verified.**
+- Native Linux, native macOS and native Windows console or PTY recovery. CI runs the tests on all three; this task did not push, so no CI result for this HEAD is claimed. The most recent recorded CI runs are earlier commits.
+- The CI-only step "data directory denied to other users" (needs `sudo -u nobody` on Linux).
+- macOS `F_FULLFSYNC`, power loss and OS crash.
+- Anything on a real account.
+- The unsafe-run platform summary step of CI (verbose summary of which tests ran or skipped per OS).
+
 ## T036 Detached Key Request (part) - 2026-11-06
 
 Windows 10, `CGO_ENABLED=0`. New file `internal/wa/repair_keyreq_test.go` (3 tests) and a small test-only hook in `internal/wasim/conn.go` (`Conn.SetIQHandler`, so a test can answer one client IQ instead of the automatic empty result).
