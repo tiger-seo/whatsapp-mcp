@@ -446,7 +446,7 @@ Windows 10, `CGO_ENABLED=0`, native Windows only. `go test ./internal/wa -count=
 
 **Not written, because the code does not exist or the path is denied by default:** the six-hour fake-time scheduler and overlapping-fetch scheduling (T052); the 405 budget, five-second waits and refresh before each retry (T050/T053); selected-version use on explicit, ordinary and 515 reconnect, and the 30-second watchdog for those connects (T054, behind the proof gate). The barrier is a direct `selected.Store` between two `GetClientPayload` calls, not a refresh racing a handshake in progress.
 
-**Finding.** `boundedBody` (`internal/wa/http.go`) rejects an unknown-length body of exactly the limit with `ErrHTTPBodyLimit`: once the limit is consumed it returns the error without probing for end of stream, while a declared length of the same size is accepted. This is fail-closed (a valid discovery response is far smaller than 1 MiB), so I did not change production code and the case is not asserted. The user decides whether to align it.
+**Finding, withdrawn.** I first read the rejection of an unknown-length body of exactly the limit as an inconsistency. It is deliberate: `TestBoundedHTTPConsumption` ("unknown exact budget") and `TestAppStateHTTPEnforcesConsumedBudget` require that an unknown-length body is never read past the limit, so a body that fills the budget is rejected without probing for end of stream. A probing change was tried, broke those two tests and was reverted; production code is unchanged. The stricter behaviour is intended and `internal/wa/version_refresh_test.go` does not assert it.
 
 ## Handoff - 2026-11-06
 

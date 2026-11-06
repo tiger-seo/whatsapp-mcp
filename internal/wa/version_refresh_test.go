@@ -20,9 +20,8 @@ func refreshProvider(t *testing.T, transport http.RoundTripper, timeout time.Dur
 	return p
 }
 
-// An unknown-length body of exactly the limit is not covered: boundedBody rejects it with
-// ErrHTTPBodyLimit without probing for end-of-stream, which is stricter than a declared length of
-// the same size. That is a fail-closed difference and is recorded in verification.md.
+// An unknown-length body that fills the budget is rejected by design (see TestBoundedHTTPConsumption),
+// so only the declared-length boundary is asserted here.
 func TestVersionBodyBoundary(t *testing.T) {
 	const limit = 1 << 20
 	prefix := `"client_revision":123,`
