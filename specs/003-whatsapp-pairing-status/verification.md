@@ -448,9 +448,25 @@ Windows 10, `CGO_ENABLED=0`, native Windows only. `go test ./internal/wa -count=
 
 **Finding, withdrawn.** I first read the rejection of an unknown-length body of exactly the limit as an inconsistency. It is deliberate: `TestBoundedHTTPConsumption` ("unknown exact budget") and `TestAppStateHTTPEnforcesConsumedBudget` require that an unknown-length body is never read past the limit, so a body that fills the budget is rejected without probing for end of stream. A probing change was tried, broke those two tests and was reverted; production code is unchanged. The stricter behaviour is intended and `internal/wa/version_refresh_test.go` does not assert it.
 
+## CI Platform Evidence for T068-T073 - 2026-11-06
+
+GitHub Actions run 42254941077 on `d079a2f` (jobs: `check`, `test` on ubuntu-latest, windows-latest and macos-latest, all success; `heavy` skipped as designed). The plain `go test -timeout 30m ./...` step passed on all three, and the added step `go test -count=1 -v -run 'RunGuard|Recovery|Recover|Terminal' ./internal/store ./internal/wa ./cmd/whatsapp-mcp` printed this summary:
+
+| OS | Passed | Skipped | Failed |
+| --- | --- | --- | --- |
+| ubuntu-latest | 102 | 1 | 0 |
+| windows-latest | 102 | 1 | 0 |
+| macos-latest | 102 | 1 | 0 |
+
+The one skip is `TestRunGuardKillChild`, the helper that the kill test launches as a child process; it skips when run on its own.
+
+**What this is evidence for.** On native Linux, Windows and macOS runners: the writer-synchronization, migration, interrupted-creation, arm/clear/reopen, logout-cleanup ordering and recovery consent/cancellation tests ran and passed, and the abrupt process-kill test ran and passed. Earlier evidence was Windows and WSL2 only.
+
+**What this is not evidence for.** The recovery terminal tests check that pipes and mixed streams are rejected; no runner provides a native console or PTY, so interactive detection on a real console, Linux terminal or macOS terminal is still unrun. Passing the synchronization test on macOS does not show an `F_FULLFSYNC` hardware flush. Power loss, an OS crash and kills between pairing and the first Save are unperformed. Hosted runners are virtual machines, not native hardware. T068-T073 therefore stay unchecked.
+
 ## Handoff - 2026-11-06
 
-For a fresh session. Branch `003-whatsapp-pairing-status`; the last feature commit is `c4fa914` (`test(wa): cover pairing windows, retry gating and logout retirement`), after `51ffbd4` (`feat(status): report the local snapshot offline`) and `a39cf0c` (hook fix); `tasks.md` "Current State (handoff)" lists what is open and in which order. A modified `.gitignore` and an untracked `.kilo/` appeared in the working tree and are not part of this work; an agent must not commit or revert them (check `git status`).
+For a fresh session. Branch `003-whatsapp-pairing-status`; the last feature commit is `d079a2f` (`ci: print which unsafe-run platform tests ran or skipped`), after `c4fa914` (US2 tests), after `51ffbd4` (`feat(status): report the local snapshot offline`) and `a39cf0c` (hook fix); `tasks.md` "Current State (handoff)" lists what is open and in which order. A modified `.gitignore` and an untracked `.kilo/` appeared in the working tree and are not part of this work; an agent must not commit or revert them (check `git status`).
 
 **Where the evidence is (sections above):** default-deny reconnect (T075/T076); 515 source findings and probe; candidate post-pair reconnect against the simulator; 401 matrix; stop and cancel while the Save is held; T068-T073 unsafe-run evidence and its gaps; US3 offline status. Owner reviews table: design PASS at 19b0406, and one **scoped** code row `CONCERNS` at 42ff6f2 for the T077 candidate only. There is no full-branch code review yet, so `gh pr create` must not be used.
 
