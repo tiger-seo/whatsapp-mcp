@@ -464,6 +464,10 @@ The one skip is `TestRunGuardKillChild`, the helper that the kill test launches 
 
 **What this is not evidence for.** The recovery terminal tests check that pipes and mixed streams are rejected; no runner provides a native console or PTY, so interactive detection on a real console, Linux terminal or macOS terminal is still unrun. Passing the synchronization test on macOS does not show an `F_FULLFSYNC` hardware flush. Power loss, an OS crash and kills between pairing and the first Save are unperformed. Hosted runners are virtual machines, not native hardware. T068-T073 therefore stay unchecked.
 
+## Owner Decision on the US1 Unsafe-Run Gate - 2026-11-06
+
+The user chose to accept the three-OS CI runs and the process-kill evidence as sufficient for T068-T073 and to tick them. This accepts, and does not close, these limits: no native console, Linux terminal or macOS terminal/PTY run of interactive detection; no confirmed `F_FULLFSYNC` hardware flush on macOS; no power-loss or OS-crash test; no kill between pairing and the first Save; CI runners are virtual machines. T077 is not covered by this decision: `PostPairReconnect` stays false and enabling it is not approved. No real-account step is authorized.
+
 ## Handoff - 2026-11-06
 
 For a fresh session. Branch `003-whatsapp-pairing-status`; the last feature commit is `d079a2f` (`ci: print which unsafe-run platform tests ran or skipped`), after `c4fa914` (US2 tests), after `51ffbd4` (`feat(status): report the local snapshot offline`) and `a39cf0c` (hook fix); `tasks.md` "Current State (handoff)" lists what is open and in which order. A modified `.gitignore` and an untracked `.kilo/` appeared in the working tree and are not part of this work; an agent must not commit or revert them (check `git status`).
