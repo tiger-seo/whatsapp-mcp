@@ -59,6 +59,8 @@ type connectionOwner struct {
 
 	// slot is the sole connection attempt; capacity one, held until drain.
 	slot chan struct{}
+	// repairSlot is the one owner-wide slot for owner-invoked app-state calls, shared by all generations.
+	repairSlot chan struct{}
 
 	// windowMu serializes window opens; window fields are guarded by mu.
 	windowMu sync.Mutex
@@ -108,6 +110,8 @@ type genState struct {
 	refused515 bool // guarded by connectionOwner.mu
 	pending515 *time.Timer
 	reconnects int // post-pair reconnects started for this generation
+	// repairDone is non-nil once this generation's repair pass was started; it closes when the pass ends.
+	repairDone chan struct{} // guarded by connectionOwner.mu
 }
 
 // NewOwner creates the owner; call Start once to load the device and begin the lifecycle.
@@ -120,15 +124,16 @@ func NewOwner(cfg OwnerConfig) *connectionOwner {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	o := &connectionOwner{
-		cfg:       cfg,
-		log:       cfg.Log,
-		ctx:       ctx,
-		cancel:    cancel,
-		done:      make(chan struct{}),
-		startDone: make(chan struct{}),
-		slot:      make(chan struct{}, 1),
-		updateCh:  make(chan struct{}),
-		subs:      make(map[uint64]func(Event)),
+		cfg:        cfg,
+		log:        cfg.Log,
+		ctx:        ctx,
+		cancel:     cancel,
+		done:       make(chan struct{}),
+		startDone:  make(chan struct{}),
+		slot:       make(chan struct{}, 1),
+		repairSlot: make(chan struct{}, 1),
+		updateCh:   make(chan struct{}),
+		subs:       make(map[uint64]func(Event)),
 	}
 	return o
 }
@@ -211,12 +216,13 @@ func (o *connectionOwner) openGeneration() (*genState, error) {
 	epoch := o.epoch
 	lifetime, cancel := context.WithCancel(o.ctx)
 	cfg := SessionConfig{
-		Store:    o.cfg.Store,
-		Log:      o.cfg.Log,
-		Versions: o.cfg.Versions,
-		Epoch:    epoch,
-		Lifetime: lifetime,
-		Dispatch: o.dispatch,
+		Store:      o.cfg.Store,
+		Log:        o.cfg.Log,
+		Versions:   o.cfg.Versions,
+		Epoch:      epoch,
+		Lifetime:   lifetime,
+		Dispatch:   o.dispatch,
+		RepairSlot: o.repairSlot,
 	}
 	o.mu.Unlock()
 	factory := o.cfg.Sessions
@@ -341,6 +347,8 @@ func (o *connectionOwner) dispatch(epoch uint64, ev SessionEvent) {
 	o.mu.Unlock()
 
 	switch ev {
+	case SessionConnected:
+		o.startRepair(gen)
 	case SessionLoggedOut:
 		// Retirement runs outside event-handler locks; the shared store stays open.
 		o.cancelPending515(gen, true)
@@ -513,6 +521,12 @@ func (o *connectionOwner) retireGeneration(gen *genState) {
 		o.mu.Unlock()
 		gen.cancel()
 		gen.handle.Disconnect()
+		o.mu.Lock()
+		repairDone := gen.repairDone
+		o.mu.Unlock()
+		if repairDone != nil {
+			<-repairDone
+		}
 		if err := gen.handle.Retire(context.Background()); err != nil {
 			o.log.Warn("generation drain did not quiesce", "event", "owner_drain_failed")
 			o.mu.Lock()
@@ -877,4 +891,35 @@ func (o *connectionOwner) CancelPairing() {
 	if active {
 		w.finish(PairingCancelled, false)
 	}
+}
+
+// startRepair runs the generation's repair pass once, after a confirmed connection, when the
+// session has pending collections. The pass is bounded by the generation lifetime and joined by
+// retirement, so it never outlives its client.
+func (o *connectionOwner) startRepair(gen *genState) {
+	runner, ok := gen.handle.(RepairRunner)
+	if !ok || !gen.handle.RecoveryPending() {
+		return
+	}
+	o.mu.Lock()
+	if gen.repairDone != nil || gen.retiring || o.stopping || o.gen != gen {
+		o.mu.Unlock()
+		return
+	}
+	done := make(chan struct{})
+	gen.repairDone = done
+	o.mu.Unlock()
+	go func() {
+		defer close(done)
+		err := runner.RunRepairs(gen.lifetime)
+		o.mu.Lock()
+		if o.gen == gen {
+			o.health.RecoveryPending = gen.handle.RecoveryPending()
+			o.publishLocked()
+		}
+		o.mu.Unlock()
+		if err != nil && gen.lifetime.Err() == nil {
+			o.log.Warn("app-state repair is incomplete; the marker is kept", "event", "repair_incomplete")
+		}
+	}()
 }

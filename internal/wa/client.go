@@ -130,6 +130,12 @@ type SessionHandle interface {
 	StorageFaulted() <-chan struct{}
 }
 
+// RepairRunner is implemented by sessions that can recover pending app-state collections after a
+// confirmed connection. It returns when the single pass is over; it never retries.
+type RepairRunner interface {
+	RunRepairs(context.Context) error
+}
+
 // QRChannelSource is implemented by sessions that can open an upstream pairing window. The channel
 // must be acquired before Connect.
 type QRChannelSource interface {
@@ -153,6 +159,8 @@ type SessionConfig struct {
 	// Test-only transport injections; nil uses the approved defaults.
 	PreLoginHTTP  *http.Client
 	WebsocketHTTP *http.Client
+	// RepairSlot is the owner-wide slot for owner-invoked app-state calls; nil gives the session its own.
+	RepairSlot chan struct{}
 }
 
 // SessionFactory creates one adapter generation; the owner uses exactly one at a time.

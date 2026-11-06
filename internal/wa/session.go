@@ -11,6 +11,7 @@ import (
 	"github.com/tiger-seo/whatsapp-mcp/internal/store"
 	"github.com/tiger-seo/whatsapp-mcp/internal/walog"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/proto/waCompanionReg"
 	waWa6 "go.mau.fi/whatsmeow/proto/waWa6"
 	wastore "go.mau.fi/whatsmeow/store"
@@ -29,7 +30,8 @@ type Session struct {
 	mediaClient     *http.Client
 	epoch           uint64
 	hasID           bool
-	pendingRep      bool
+	pendingRep      atomic.Bool
+	repair          *repairController
 	handlerID       uint32
 	retired         bool
 	buildPayload    func() *waWa6.ClientPayload
@@ -101,7 +103,6 @@ func OpenSession(cfg SessionConfig) (*Session, error) {
 		barrier:         barrier,
 		epoch:           cfg.Epoch,
 		hasID:           dev.ID != nil,
-		pendingRep:      len(pending) > 0,
 		buildPayload:    dev.GetClientPayload,
 		decodeProps:     proto.Unmarshal,
 		encodeProps:     proto.Marshal,
@@ -111,6 +112,7 @@ func OpenSession(cfg SessionConfig) (*Session, error) {
 		retireDone:      make(chan struct{}),
 		callbackDrained: make(chan struct{}, 1),
 	}
+	s.pendingRep.Store(len(pending) > 0)
 	client := whatsmeow.NewClient(dev, walog.New(cfg.Log))
 	client.QRClientType = whatsmeow.PairClientChrome
 	// Every automatic reconnect is denied: work detached by an earlier connection cannot be
@@ -133,6 +135,7 @@ func OpenSession(cfg SessionConfig) (*Session, error) {
 	}
 	client.GetClientPayload = s.handshakePayload
 	s.client = client
+	s.repair = newRepairController(barrier, s.fetchAppState, cfg.RepairSlot, cfg.Log)
 	s.handlerID = client.AddEventHandler(s.handleEvent)
 	go s.consumeDiagnostics()
 	return s, nil
@@ -140,7 +143,7 @@ func OpenSession(cfg SessionConfig) (*Session, error) {
 
 func (s *Session) Epoch() uint64         { return s.epoch }
 func (s *Session) HasIdentity() bool     { return s.hasID }
-func (s *Session) RecoveryPending() bool { return s.pendingRep }
+func (s *Session) RecoveryPending() bool { return s.pendingRep.Load() }
 func (s *Session) StorageFaulted() <-chan struct{} {
 	if s.barrier == nil {
 		return nil
@@ -351,4 +354,19 @@ func (s *Session) handleEvent(raw any) {
 	case *events.StreamReplaced:
 		s.cfg.Dispatch(s.epoch, SessionDisconnected)
 	}
+}
+
+// fetchAppState is the one real app-state call the repair controller makes.
+func (s *Session) fetchAppState(ctx context.Context, name string, full bool) error {
+	return s.client.FetchAppState(ctx, appstate.WAPatchName(name), full, false)
+}
+
+// RunRepairs recovers the pending collections of this generation and refreshes the pending flag.
+// The owner calls it once after a confirmed connection.
+func (s *Session) RunRepairs(ctx context.Context) error {
+	err := s.repair.run(ctx)
+	if remaining, perr := s.barrier.PendingRepairs(ctx); perr == nil {
+		s.pendingRep.Store(len(remaining) > 0)
+	}
+	return err
 }
