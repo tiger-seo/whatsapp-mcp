@@ -1,6 +1,6 @@
 # Quickstart Validation: WhatsApp Connection, Pairing and Status
 
-**Stage**: Planned validation guide. Feature 003 has uncommitted partial implementation; T065-T067 are checked and T068-T073 remain incomplete. This policy revision has no fresh design PASS or new code verification. No real-account action is authorized by this file. Contracts: [owner](contracts/connection-owner.md), [CLI](contracts/cli.md), [data model](data-model.md).
+**Stage**: Validation guide, updated 2026-11-06. Feature 003 is partly implemented on its branch (see `tasks.md` "Current State" for what is open); the design review passed at 19b0406 and there is no full code review yet. No real-account action is authorized by this file. Contracts: [owner](contracts/connection-owner.md), [CLI](contracts/cli.md), [data model](data-model.md).
 
 ## Prerequisites
 
@@ -29,7 +29,7 @@ The new tests must use injected fake clients/providers, synthetic keys and contr
 | Scenario | Required observation |
 | --- | --- |
 | Link/restart | Synthetic save and Connected; after any production adapter Connect attempt, including failure/cancellation, orderly drain retains unsafe and restart starts neither Connect nor QR. Clean-state saved identity is tested separately; failed save cannot succeed. |
-| Startup/reconnect bounds | Both shells: initial failure/timeout; test the desired three delayed retries, 405, 515 and ordinary reconnect only where same-active-generation safety is demonstrated. Otherwise assert no retry and an unavailable diagnostic; never Connect after retiring an unproven generation. Verify watchdog and no overlap before drain. |
+| Startup/reconnect bounds | Both shells: initial failure/timeout. The startup retries, 405, 515 and ordinary reconnect are denied by default today, so assert no retry and an unavailable diagnostic; never Connect after retiring an unproven generation. They return only behind the proof gate (T077/T050/T053/T054). Verify watchdog and no overlap before drain. |
 | QR/window | First/replacement expiry, automatic code rotation within one window, final timeout requiring offline recovery rather than Enter-to-retry, EOF failure, concurrent sharing and stale-epoch rejection. |
 | Offline status | Four fields/caveats, zero client/version/network calls, no missing artifacts created, held lock PID, committed WAL and unchanged DB/sidecars. |
 | Version/retries | Real consumed-byte counting, redirects/TLS/oversize/stall rejection, no valid truncated prefix, immutable payload/hash snapshots, six-hour fake time and conditional 405 budget or safe unavailability. |
@@ -55,7 +55,7 @@ go build -o "$env:TEMP\wa-session-check.exe" ./internal/wa/testdata/cmd/session-
 
 The helper is planned, not currently present. It must use the production owner/store/lock, an explicitly selected private acceptance directory and interactive per-action approval. It exposes no listener or shipped account-management command. Review it separately; never invoke it from automated tests.
 
-Update the existing CI cross-identity privacy fixture to create synthetic private storage with the offline store seed helper, not with status (status no longer creates a directory/fails as a stub). Keep the privacy denial check rather than dropping it.
+The CI cross-identity privacy fixture creates synthetic private storage with the offline store seed helper, not with status (status is now a real offline command that creates nothing). The privacy denial check is kept.
 
 ## Permissioned Manual Journey
 

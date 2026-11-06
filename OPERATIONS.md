@@ -106,3 +106,111 @@ destroying keys works only as far as your storage supports it.
 
 The binary does not do these for you: encrypting the disk or the backups, choosing where backups go and how long
 they are kept, setting recovery-point and recovery-time objectives, and rehearsing a restore.
+
+## WhatsApp connection, pairing and status (feature 003)
+
+This section describes what the binary does today and what has and has not been checked. "Implemented" means
+the code exists and its automated tests pass on Linux, Windows and macOS runners. "Verified" means checked
+against a real WhatsApp account or real hardware. **Nothing in this feature has been verified against a real
+account**, and no check below ran against one.
+
+### Commands
+
+| Command | What it does |
+| --- | --- |
+| `status` | Reports the local snapshot offline. It never connects, never contacts WhatsApp and creates no files. It prints four fields (`connected`, `logged_in`, `pairing_required`, `wa_version`); `connected` is always `false` offline, and `logged_in` means a saved identity exists locally, not that WhatsApp still accepts it. It fails with the holder's PID while another command owns the data directory, and with exit 1 and a warning when the store is marked unsafe or comes from an older schema. |
+| `pair` | Opens one pairing window, draws the current QR code in the terminal and waits. It exits 0 only when the identity was saved and the connection was confirmed. |
+| `stdio`, `serve` | Open the store and the owner. With a clean store and a saved identity they connect once at startup; with an unsafe store they exit 1 and tell you recovery is needed. |
+
+### Pairing
+
+- One approved window covers any number of QR codes. A code lives for the earlier of the server's expiry and 60
+  seconds, and is replaced automatically inside the same window. A code is at most 4 KiB.
+- The window ends on success, on the final timeout, on `Ctrl+C` or a stop signal, on closed input (EOF), on a
+  failure, or on an unsupported flow (a passkey or phone-code request). **Pressing Enter does nothing**: it never
+  retries and never starts recovery.
+- After a final timeout, a failure or a cancel, `pair` exits 1. A device may already be linked on the phone, so
+  the store stays unsafe (below). Do not just run `pair` again.
+- The QR code appears only on the terminal that ran `pair`. It is never logged, never stored and never in an
+  error message.
+- Pairing success is not a complete sync. If repair is still pending (below), `pair` warns that some history may
+  sync later.
+
+### The unsafe marker
+
+Any attempt to connect to WhatsApp (a startup connect, a pairing window, a failed or cancelled attempt) leaves
+the store marked **unsafe** when the process stops, even after a clean drain. The reason is that the library may
+leave work running that cannot be proven finished. While the marker is unsafe the binary starts no connection and
+no QR window. Automatic reconnects are all denied in this version: there are no startup retries, no 405 retry
+budget and no post-pair reconnect, so a lost connection stays lost until you restart.
+
+A store from before this feature (schema 1 or 2) is treated as unsafe, not as clean, because its history is
+unknown. A store whose marker is missing or malformed is refused.
+
+### Offline recovery
+
+Recovery is a separate, deliberate step that works on the local store only; this program never unlinks a device
+on the phone and never connects.
+
+1. Run `pair` from a real interactive terminal (on Windows a native console, not Git Bash or mintty; pipes and
+   redirected input are refused).
+2. Type `recover`. Read the text, and identify the exact account and linked device with your own evidence. A
+   shared "Linux/Chrome" label, the time a device appeared or the lack of a local identity does not identify it.
+3. Type `absent` if the matching entries are gone from the phone. If you cannot tell your entry apart, you may
+   type `unlink`, then `authorize-unlink`, and remove every possibly matching entry yourself (this can disconnect
+   other devices). Then type `verified`.
+4. If a local identity exists, type `remove` to authorize its local removal.
+
+Anything else, including Enter, EOF, an over-long line or `Ctrl+C`, leaves the marker unsafe. Recovery keeps
+chats and messages and keeps pending repair needs. It never starts a connection; a fresh pair needs a second,
+separate invocation. If the disk has less than 512 MiB free after being full, recovery refuses to clear the
+marker; free space first.
+
+A phone-side label for the linked device is not guaranteed by this program: it asks for Linux and Chrome, but the
+text the phone shows has not been observed.
+
+### Pending repair
+
+If a sync was interrupted (a crash, a stop, a disk error), the store keeps a repair marker per collection. After
+the next confirmed connection the owner runs one bounded repair pass: one full resync per collection, waiting at
+most 10 seconds for each call, one call at a time, with no automatic retry. The marker is cleared only by a
+fully successful repair. A failed or timed-out repair keeps it, and the next start tries again. Until then the
+health state is "recovery pending" and `pair` prints a warning. Ordinary app-state sync is deferred while a
+marker is pending and replayed once afterwards.
+
+### Version and limits
+
+| Item | Limit |
+| --- | --- |
+| Version discovery | One request to `web.whatsapp.com`, 15 s, 1 MiB, no redirects. A failure keeps the bundled version, which is the fallback shown by `status`. There is no scheduled refresh yet. |
+| Connect watchdog | 30 s per attempt. |
+| Pairing code | 4 KiB, 60 s. |
+| Repair call | 10 s caller wait. |
+| Disk | New messages refused below 256 MiB free, resumed at 512 MiB. |
+
+### Stopping
+
+The first stop signal starts an orderly drain: windows close, the client disconnects, work finishes, then the
+store closes and the lock is released. A second signal, or a kill, ends the process uncleanly: the store stays
+unsafe and the next start requires recovery. The drain has a timeout; hitting it is a failure, not permission to
+release the store.
+
+### What has been checked
+
+- Automated tests pass on Linux, Windows and macOS runners, including process-kill tests of the markers.
+- **Not checked:** power loss and OS crash; macOS `F_FULLFSYNC` hardware flushes; interactive recovery on a real
+  console, Linux terminal or macOS terminal; a kill between pairing and the first save; any real account (whether
+  the server sends a 515 after pairing, whether pairing completes cleanly, what the phone shows).
+- A known upstream gap, E003-RX-01, is open: the WhatsApp library does not bound some receive-side resources.
+  It is a temporary exception for private, local use, owned by `tiger-seo`, expiring at the start of 2026-12-02
+  UTC, with earlier review before any public release, a relevant upstream fix or a resource incident. See
+  `docs/backlog/003-whatsmeow-receive-resource-bounds.md`. It does not make the device safe to expose and is
+  not a claim that retention is bounded.
+
+### Monitoring and incident response
+
+Local monitoring is not built yet (fixed one-minute memory and goroutine samples are planned, not implemented).
+Watch the process's memory and the data directory size from the operating system against a baseline you have
+seen on your own machine; these are observations, not limits. If memory grows without explanation, stop the
+process with a normal stop signal and wait for it to exit. If you have to kill it, the next start will require
+recovery as above; do not delete the database to get around that.
