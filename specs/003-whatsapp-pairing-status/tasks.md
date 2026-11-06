@@ -102,9 +102,9 @@ Branch `003-whatsapp-pairing-status`. This block is the resume point for a fresh
 
 ### Tests First
 
-- [ ] T030 [P] [US2] Add `internal/wa/pairing_test.go` tests for shared concurrent requests while code is valid or awaiting replacement, per-code vs final timeout, unresolved-final-timeout recovery gating, wait-context cancellation vs window approval, shutdown rejection, stale/late events, one consumer/representation and no automatic new window (FR-005/006/007/018).
-- [ ] T031 [P] [US2] Add `cmd/whatsapp-mcp/pair_retry_test.go` tests showing Enter after an unresolved final timeout does not authorize retry or offline recovery, EOF/cancellation exits 1 without another attempt, recovery input is bounded/cancel-aware and cannot compete with stdio input; cover invalid/unsupported QR events and no QR in errors/logs.
-- [ ] T032 [P] [US2] Add `internal/wa/logout_test.go` synthetic guarded-store tests for immediate false login/connection, no unsolicited pairing, old-generation drain before new client, preserving a late saved identity, and confirmed-revocation cleanup. Failed cleanup must block new generations without deleting chats/messages; explicit stop still closes/unlocks after true drain with unsuccessful exit/unresolved-state warning, not an indefinite post-quiescence hang (FR-003/004/006/014).
+- [X] T030 [P] [US2] Add `internal/wa/pairing_test.go` tests for shared concurrent requests while code is valid or awaiting replacement, per-code vs final timeout, unresolved-final-timeout recovery gating, wait-context cancellation vs window approval, shutdown rejection, stale/late events, one consumer/representation and no automatic new window (FR-005/006/007/018).
+- [X] T031 [P] [US2] Add `cmd/whatsapp-mcp/pair_retry_test.go` tests showing Enter after an unresolved final timeout does not authorize retry or offline recovery, EOF/cancellation exits 1 without another attempt, recovery input is bounded/cancel-aware and cannot compete with stdio input; cover invalid/unsupported QR events and no QR in errors/logs.
+- [X] T032 [P] [US2] Add `internal/wa/logout_test.go` synthetic guarded-store tests for immediate false login/connection, no unsolicited pairing, old-generation drain before new client, preserving a late saved identity, and confirmed-revocation cleanup. Failed cleanup must block new generations without deleting chats/messages; explicit stop still closes/unlocks after true drain with unsuccessful exit/unresolved-state warning, not an indefinite post-quiescence hang (FR-003/004/006/014).
 
 ### Implementation
 
@@ -313,4 +313,4 @@ Stop for expired/triggered exception, a stale/failing design review, a new indep
 | Polish T057-T064 | 8 |
 | Total | 77 |
 
-Thirteen `[P]` tasks: T022-T024, T030-T032, T042-T044, T049-T051 and T059. Checked (42): T001-T029, T042-T048, T065-T067, T074-T076. Unchecked (35): T030-T041, T049-T064, T068-T073 and T077. These historical checkboxes do not establish the revised policy's verification. All 36 FR/SC/SEC identifiers have build/test mappings. The earlier design review does not cover this change; exception acceptance is not a substitute for a current reviewer verdict. See "Current State (handoff, 2026-11-06)" above for what is open and why.
+Thirteen `[P]` tasks: T022-T024, T030-T032, T042-T044, T049-T051 and T059. T001-T029, T065-T067 and T074 are checked (33); T030-T064, T068-T073 and T075-T077 are unchecked (44). These historical checkboxes do not establish the revised policy's verification. All 36 FR/SC/SEC identifiers have build/test mappings. The earlier design review does not cover this change; exception acceptance is not a substitute for a current reviewer verdict.
