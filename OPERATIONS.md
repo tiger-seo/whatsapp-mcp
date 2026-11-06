@@ -209,8 +209,10 @@ release the store.
 
 ### Monitoring and incident response
 
-Local monitoring is not built yet (fixed one-minute memory and goroutine samples are planned, not implemented).
-Watch the process's memory and the data directory size from the operating system against a baseline you have
-seen on your own machine; these are observations, not limits. If memory grows without explanation, stop the
+At debug log level the owner writes one sample at start, one a minute and one at stop (`event=runtime_sample`,
+with the process heap in bytes, the goroutine count and a fixed reason). Nothing is kept between samples and they
+carry no account, QR, key or message data. Also watch the process's memory and the data directory size from the
+operating system against a baseline you have seen on your own machine. Both are observations, not limits, and
+they cannot prevent or prove exhaustion. If memory grows without explanation, stop the
 process with a normal stop signal and wait for it to exit. If you have to kill it, the next start will require
 recovery as above; do not delete the database to get around that.

@@ -9,7 +9,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/tiger-seo/whatsapp-mcp/internal/buildinfo"
 	"github.com/tiger-seo/whatsapp-mcp/internal/config"
@@ -226,7 +228,7 @@ func runPair(cmd *command, args []string, s *streams) int {
 	}
 	oh, err := newOwner(ownerDeps{ctx: lc.ctx, log: logger, store: st})
 	if err != nil {
-		fmt.Fprintf(s.stderr, "whatsapp-mcp: %v\n", err)
+		fmt.Fprintf(s.stderr, "whatsapp-mcp: %s\n", safeError(err))
 		if code := lc.shutdown(); code != exitOK {
 			return code
 		}
@@ -269,7 +271,7 @@ func pairingFlow(lc *lifecycle, oh *ownerHandle, logger *slog.Logger, s *streams
 	defer unsub()
 
 	if err := owner.Start(lc.ctx); err != nil {
-		fmt.Fprintf(s.stderr, "whatsapp-mcp: pair: %v\n", err)
+		fmt.Fprintf(s.stderr, "whatsapp-mcp: pair: %s\n", safeError(err))
 		return false
 	}
 	if owner.Snapshot().LoggedIn {
@@ -324,7 +326,7 @@ func waitSavedConnection(owner wa.Owner, events <-chan wa.Event, s *streams, ctx
 // pairingWindowFlow runs one window to a terminal outcome, rendering the current code only.
 func pairingWindowFlow(owner wa.Owner, events <-chan wa.Event, s *streams, ctx context.Context) bool {
 	if _, err := owner.RequestPairing(context.Background()); err != nil {
-		fmt.Fprintf(s.stderr, "whatsapp-mcp: pair: %v\n", err)
+		fmt.Fprintf(s.stderr, "whatsapp-mcp: pair: %s\n", safeError(err))
 		return false
 	}
 	rendered := ""
@@ -342,7 +344,7 @@ func pairingWindowFlow(owner wa.Owner, events <-chan wa.Event, s *streams, ctx c
 			if snap.Code != "" && snap.Code != rendered {
 				out, err := wa.RenderTerminal(snap.Code)
 				if err != nil {
-					fmt.Fprintf(s.stderr, "whatsapp-mcp: pair: %v\n", err)
+					fmt.Fprintf(s.stderr, "whatsapp-mcp: pair: %s\n", safeError(err))
 					return false
 				}
 				if _, err := io.WriteString(s.stdout, out); err != nil {
@@ -470,7 +472,7 @@ func runShell(kind string, cmd *command, args []string, s *streams, body func(co
 func attachOwner(kind string, lc *lifecycle, logger *slog.Logger, st *store.Store, s *streams) bool {
 	oh, err := newOwner(ownerDeps{ctx: lc.ctx, log: logger, store: st, shell: true})
 	if err != nil {
-		fmt.Fprintf(s.stderr, "whatsapp-mcp: %v\n", err)
+		fmt.Fprintf(s.stderr, "whatsapp-mcp: %s\n", safeError(err))
 		lc.requestStop("owner failed")
 		return true
 	}
@@ -478,7 +480,7 @@ func attachOwner(kind string, lc *lifecycle, logger *slog.Logger, st *store.Stor
 	// device writes drained.
 	lc.addStop("owner", oh.stopStep())
 	if err := oh.owner.Start(lc.ctx); err != nil {
-		fmt.Fprintf(s.stderr, "whatsapp-mcp: %s: %v\n", kind, err)
+		fmt.Fprintf(s.stderr, "whatsapp-mcp: %s: %s\n", kind, safeError(err))
 		lc.requestStop("owner start failed")
 		return true
 	}
@@ -565,4 +567,28 @@ func openStore(ctx context.Context, cfg *config.Config, logger *slog.Logger, s *
 		return nil, exitError, false
 	}
 	return st, exitOK, true
+}
+
+// safeError renders an error for the terminal. Text can originate outside this program, so every
+// control character, including escape, carriage return, bell, backspace, tab, the C1 range and the
+// Unicode line separators, becomes a question mark, and the length is bounded.
+func safeError(err error) string {
+	if err == nil {
+		return ""
+	}
+	const maxRunes = 256
+	var b strings.Builder
+	count := 0
+	for _, r := range err.Error() {
+		if count == maxRunes {
+			b.WriteString("...")
+			break
+		}
+		if unicode.IsControl(r) || r == 0x2028 || r == 0x2029 {
+			r = '?'
+		}
+		b.WriteRune(r)
+		count++
+	}
+	return b.String()
 }

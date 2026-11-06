@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"runtime"
 	"sync"
 	"time"
 
@@ -59,6 +60,8 @@ type connectionOwner struct {
 
 	// slot is the sole connection attempt; capacity one, held until drain.
 	slot chan struct{}
+	// monitor tracks the sampling goroutine, which stop must end before the owner reports done.
+	monitor sync.WaitGroup
 	// repairSlot is the one owner-wide slot for owner-invoked app-state calls, shared by all generations.
 	repairSlot chan struct{}
 
@@ -151,7 +154,9 @@ func (o *connectionOwner) Start(ctx context.Context) error {
 		return ErrStarted
 	}
 	o.started = true
+	o.monitor.Add(1)
 	o.mu.Unlock()
+	go o.runMonitor()
 	defer close(o.startDone)
 
 	if o.cfg.Store != nil {
@@ -350,6 +355,7 @@ func (o *connectionOwner) dispatch(epoch uint64, ev SessionEvent) {
 	case SessionConnected:
 		o.startRepair(gen)
 	case SessionLoggedOut:
+		o.log.Info("logged out by the server", "event", "logged_out", "epoch", epoch)
 		// Retirement runs outside event-handler locks; the shared store stays open.
 		o.cancelPending515(gen, true)
 		go o.retireGeneration(gen)
@@ -505,6 +511,8 @@ func (o *connectionOwner) finishStop() {
 			o.log.Error("run marker could not be cleared; restore disk space and perform offline recovery", "event", "run_guard_clear_failed", "error", err)
 		}
 	}
+	o.monitor.Wait()
+	o.sample("stop")
 	o.mu.Lock()
 	o.phase = PhaseStopped
 	o.publishLocked()
@@ -922,4 +930,37 @@ func (o *connectionOwner) startRepair(gen *genState) {
 			o.log.Warn("app-state repair is incomplete; the marker is kept", "event", "repair_incomplete")
 		}
 	}()
+}
+
+// monitorInterval is the fixed cadence of the runtime samples. It is an observation cadence for an
+// operator, not a resource ceiling.
+const monitorInterval = time.Minute
+
+// runMonitor emits one coarse sample at start and then once per interval until stop. Nothing is
+// kept between samples.
+func (o *connectionOwner) runMonitor() {
+	defer o.monitor.Done()
+	o.sample("start")
+	ticker := time.NewTicker(monitorInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-o.ctx.Done():
+			return
+		case <-ticker.C:
+			o.sample("periodic")
+		}
+	}
+}
+
+// sample logs the process heap and goroutine count at debug level. The fields are numbers and a
+// fixed reason; no account, QR, key, ticket or body data is reachable from here.
+func (o *connectionOwner) sample(reason string) {
+	if !o.log.Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	o.log.Debug("runtime sample", "event", "runtime_sample", "reason", reason,
+		"heap_alloc_bytes", m.HeapAlloc, "goroutines", runtime.NumGoroutine())
 }

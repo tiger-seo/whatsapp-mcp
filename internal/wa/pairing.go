@@ -28,6 +28,7 @@ type pairingWindow struct {
 	gen *genState
 
 	result      PairingResult
+	ended       bool // the terminal outcome was logged; guarded by the owner mutex
 	code        string
 	codeExpires time.Time
 	expiry      *time.Timer
@@ -89,6 +90,7 @@ func (o *connectionOwner) RequestPairing(ctx context.Context) (PairingState, err
 	o.phase = PhasePairing
 	o.publishLocked()
 	o.mu.Unlock()
+	o.log.Info("pairing requested", "event", "pairing_requested", "epoch", gen.epoch)
 	go w.run()
 	o.mu.Lock()
 	snap := w.snapshotLocked()
@@ -402,8 +404,14 @@ func (w *pairingWindow) finish(result PairingResult, _ bool) {
 			o.phase = PhaseDisconnected
 		}
 	}
+	logEnd := !w.ended
+	w.ended = true
 	o.publishLocked()
 	o.mu.Unlock()
+	if logEnd {
+		// The outcome is one of a fixed set of words; it never carries the code or the account.
+		o.log.Info("pairing ended", "event", "pairing_ended", "outcome", string(result), "epoch", gen.epoch)
+	}
 
 	if result == PairingSucceeded {
 		return
