@@ -5,8 +5,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -153,4 +156,170 @@ func TestVersionFailureReasonNamesTheCategoryOnly(t *testing.T) {
 			t.Errorf("%v: reason %q, want %q", err, got, want)
 		}
 	}
+}
+
+// The six-hour scheduler (fake time). The bundled value is the fallback; each scheduled success
+// publishes a new immutable candidate and nothing else.
+
+func counting(revisions *atomic.Int64, calls *atomic.Int64) http.RoundTripper {
+	return roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls.Add(1)
+		body := `"client_revision":` + strconv.FormatInt(revisions.Add(1), 10) + `,`
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), ContentLength: int64(len(body))}, nil
+	})
+}
+
+func TestVersionSchedulerRefreshesEverySixHours(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var rev, calls atomic.Int64
+		rev.Store(100)
+		owner, stop := context.WithCancel(context.Background())
+		p := newVersionProvider(owner, newBoundedHTTPClient(15*time.Second, 1<<20, counting(&rev, &calls)), "https://example.invalid/")
+		done := make(chan struct{})
+		go func() { p.RunRefresh(nil); close(done) }()
+		synctest.Sleep(versionRefreshInterval - time.Minute)
+		synctest.Wait()
+		if calls.Load() != 0 {
+			t.Fatalf("%d fetches before the first interval; the initial fetch belongs to the owner", calls.Load())
+		}
+		synctest.Sleep(time.Minute)
+		synctest.Wait()
+		if calls.Load() != 1 || p.Current() != (Version{2, 3000, 101}) {
+			t.Fatalf("after 6h: %d fetches, candidate %v", calls.Load(), p.Current())
+		}
+		synctest.Sleep(versionRefreshInterval)
+		synctest.Wait()
+		if calls.Load() != 2 || p.Current() != (Version{2, 3000, 102}) {
+			t.Fatalf("after 12h: %d fetches, candidate %v", calls.Load(), p.Current())
+		}
+		stop()
+		synctest.Wait()
+		<-done
+		synctest.Sleep(3 * versionRefreshInterval)
+		synctest.Wait()
+		if calls.Load() != 2 {
+			t.Errorf("%d fetches after the owner stopped", calls.Load())
+		}
+	})
+}
+
+// A scheduled failure keeps the earlier candidate, reports a category only, and the next interval
+// still fires.
+func TestVersionSchedulerFailureKeepsCandidateAndContinues(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var calls atomic.Int64
+		transport := roundTripFunc(func(*http.Request) (*http.Response, error) {
+			n := calls.Add(1)
+			body, status := "SECRET-body", 503
+			if n == 2 {
+				body, status = `"client_revision":55,`, 200
+			}
+			return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), ContentLength: int64(len(body))}, nil
+		})
+		owner, stop := context.WithCancel(context.Background())
+		p := newVersionProvider(owner, newBoundedHTTPClient(15*time.Second, 1<<20, transport), "https://example.invalid/")
+		bundled := p.Current()
+		var reasons []string
+		done := make(chan struct{})
+		go func() {
+			p.RunRefresh(func(err error) { reasons = append(reasons, versionFailureReason(err)); _ = err })
+			close(done)
+		}()
+		synctest.Sleep(versionRefreshInterval)
+		synctest.Wait()
+		if p.Current() != bundled || len(reasons) != 1 || reasons[0] != "response" {
+			t.Fatalf("after a failure: candidate %v, reasons %v", p.Current(), reasons)
+		}
+		synctest.Sleep(versionRefreshInterval)
+		synctest.Wait()
+		if p.Current() != (Version{2, 3000, 55}) {
+			t.Errorf("the next interval did not refresh: %v", p.Current())
+		}
+		stop()
+		synctest.Wait()
+		<-done
+	})
+}
+
+// A scheduled tick and an explicit refresh share one fetch, and a waiter that gives up cannot
+// cancel the shared fetch.
+func TestVersionSchedulerSharesOneFetchWithExplicitRefresh(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var calls atomic.Int64
+		release := make(chan struct{})
+		transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			calls.Add(1)
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return nil, r.Context().Err()
+			}
+			body := `"client_revision":9,`
+			return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body)), ContentLength: int64(len(body))}, nil
+		})
+		owner, stop := context.WithCancel(context.Background())
+		p := newVersionProvider(owner, newBoundedHTTPClient(time.Hour, 1<<20, transport), "https://example.invalid/")
+		go p.RunRefresh(nil)
+		synctest.Sleep(versionRefreshInterval)
+		synctest.Wait()
+		if calls.Load() != 1 {
+			t.Fatalf("%d scheduled fetches in flight at the interval, want 1", calls.Load())
+		}
+		waiter, giveUp := context.WithCancel(context.Background())
+		errc := make(chan error, 1)
+		go func() { errc <- p.Refresh(waiter) }()
+		synctest.Wait()
+		if calls.Load() != 1 {
+			t.Fatalf("%d fetches in flight; the explicit refresh must join the scheduled one", calls.Load())
+		}
+		giveUp()
+		synctest.Wait()
+		if err := <-errc; err == nil {
+			t.Fatal("a cancelled waiter reported success")
+		}
+		close(release)
+		synctest.Wait()
+		if p.Current() != (Version{2, 3000, 9}) {
+			t.Errorf("the waiter's cancellation cancelled the shared fetch: %v", p.Current())
+		}
+		stop()
+		synctest.Wait()
+	})
+}
+
+// Publishing a new candidate never touches a healthy connection: no disconnect, no new connect,
+// the phase stays Connected.
+func TestVersionSchedulerLeavesHealthyConnectionAlone(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ot := newOwnerTest(t, true, true, errScript(map[int64]error{}))
+		var rev, calls atomic.Int64
+		rev.Store(500)
+		ot.o.cfg.Versions.client = newBoundedHTTPClient(15*time.Second, 1<<20, counting(&rev, &calls))
+		providerOwner, stopProvider := context.WithCancel(context.Background())
+		ot.o.cfg.Versions.owner = providerOwner
+		if err := ot.o.Start(context.Background()); err != nil {
+			t.Fatalf("start: %v", err)
+		}
+		synctest.Wait()
+		ot.sess.send(SessionConnected)
+		synctest.Wait()
+		if !ot.o.Snapshot().Connected {
+			t.Fatalf("not connected before the refresh: %+v", ot.o.Snapshot())
+		}
+		connects, disconnects := ot.sess.connectN.Load(), ot.sess.disconnectN.Load()
+		go ot.o.cfg.Versions.RunRefresh(nil)
+		synctest.Sleep(versionRefreshInterval + time.Minute)
+		synctest.Wait()
+		if ot.o.cfg.Versions.Current()[2] <= 500 {
+			t.Fatalf("no scheduled refresh happened: %v", ot.o.cfg.Versions.Current())
+		}
+		if ot.sess.disconnectN.Load() != disconnects || ot.sess.connectN.Load() != connects {
+			t.Errorf("a refresh disturbed the session: disconnects %d (was %d), connects %d (was %d)", ot.sess.disconnectN.Load(), disconnects, ot.sess.connectN.Load(), connects)
+		}
+		if !ot.o.Snapshot().Connected {
+			t.Errorf("the refresh ended the connection: %+v", ot.o.Snapshot())
+		}
+		stopProvider()
+		stopInBubble(t, ot)
+	})
 }

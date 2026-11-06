@@ -549,6 +549,28 @@ One run of the shipped binary built from `cbff875` (`pair --log-level debug`, st
 
 **T077 ticked by the owner's instruction (2026-11-06).** The tick rests on the simulator evidence, this real-account run and the owner's approval above. **Still outstanding from the T077 conditions:** a fresh owner code review of the enabled path (the scoped row at 42ff6f2 is CONCERNS and no PR may be opened on it); the unjoined-goroutine and held-handler gaps, and the Linux and macOS runs, remain accepted residual risk and debt (`docs/backlog/003-post-pair-reconnect-and-unsafe-marker.md`).
 
+## US4 Version Refresh Scheduler and 405 Denial (T049, T052, T055; T050, T051, T053, T054, T056 part) - 2026-11-06
+
+Windows 10, `CGO_ENABLED=0`. No real account and no outside network (fake transports, `testing/synctest` fake time).
+
+**Implemented.** `VersionProvider.RunRefresh` (`internal/wa/version.go`): one owner-lifetime scheduler, first fetch one interval (`versionRefreshInterval`, six hours) after start because the initial fetch belongs to the owner's startup; it shares the single flight with any explicit `Refresh`, publishes only an immutable candidate (no socket is touched), keeps the earlier candidate on failure and stops when the owner context ends. `productionOwner` (`cmd/whatsapp-mcp/commands.go`) starts it and `stopStep` joins it before the store closes; failures log `version_refresh_failed` with `reason=fetch|response|other` only. `status` is unchanged and uses the bundled getter only.
+
+**Tests (all passing).** `internal/wa/version_refresh_test.go`: `TestVersionSchedulerRefreshesEverySixHours` (no fetch at 5h59m, one at 6h, two at 12h, none after the owner stops), `TestVersionSchedulerFailureKeepsCandidateAndContinues`, `TestVersionSchedulerSharesOneFetchWithExplicitRefresh` (a scheduled fetch in flight, an explicit refresh joins it, a waiter that gives up does not cancel the shared fetch), `TestVersionSchedulerLeavesHealthyConnectionAlone` (owner Connected, refresh published, no disconnect, no new connect, still Connected). `internal/wa/version_recovery_test.go`: `TestOwnerClientOutdatedIsNotRetriedAndIsDiagnosed` and `TestOwnerClientOutdatedAfterStopIsIgnored`. `cmd/whatsapp-mcp/version_connection_test.go`: `TestVersionDiscoveryRunsOnceBeforeConnect` and `TestVersionDiscoveryFailureFallsBackWithCategoryOnly`. The earlier version tests (zero and max-uint32 revisions, malformed/overflow, body boundary, non-200/redirect/TLS/stall, shared call and waiter cancellation, handshake snapshots) already covered the rest of T049.
+
+**Failing first.** With a no-op `RunRefresh` stub, three scheduler tests failed on behaviour (no fetch at 6h; no failure report; a disturbed-session check). One test passed with the stub and was strengthened to assert the scheduled fetch is in flight. For the cmd tests, replacing the owner's startup `Refresh` call with a no-op made both fail ("0 discovery fetches", "no category-only fallback diagnostic"); the source was restored. `TestOwnerClientOutdated*` passed on first run: the 405 denial was already implemented, so these are characterization tests with no failing observation.
+
+**Commands.** `gofmt -l` clean; `go vet ./...` exit 0; `go test ./internal/wa ./internal/wasim ./cmd/... -count=1`: wa 13.0 s, wasim 3.4 s, cmd 119.9 s, all ok; `TestVersionScheduler*` also passed `-count=10`.
+
+**Ticked:** T049, T052, T055.
+
+**Not ticked, and why.**
+- T050, T053, T054: the 405 budget (three five-second retries with a refresh before each, reset only on Connected), and ordinary/startup/405 reconnect, are behind the proof gate in `contracts/connection-owner.md` and stay denied. Only the denial is tested (no Connect, no discovery fetch, one diagnostic, no new window, nothing after stop). The 515 owner-initiated connect and its 30-second watchdog and slot retention are covered by the post-pair tests, not re-done here.
+- T051: handshake snapshot, consistency across a candidate refresh, next-handshake candidate and no-I/O callback tests exist (`session_version_test.go`); the clauses about explicit and ordinary reconnect using the selected version concern denied paths and are untested.
+- T056: discovery-before-Connect, fallback with category-only diagnostic and clean stop are covered. Not covered: "running refresh" at command level (the scheduler's first fetch is six hours away, covered with fake time in `internal/wa`), and 405 exhaustion/reset (denied, no budget exists). No timing or budget results exist to record beyond the above.
+- The command-level join of the scheduler is exercised by every command test that stops; there is no test that fails if the join is removed.
+
+**Needs the user.** Whether T050/T053/T054 stay open until the proof gate is satisfied (recommended), or are re-scoped as "denial only" in the next design revision. Re-scoping edits `tasks.md` outside Current State and makes the design review stale.
+
 ## Version Discovery Failure: Cause and Fix - 2026-11-06
 
 **Symptom.** Both real pair runs logged `version discovery failed; keeping the last usable version` and used the bundled version `2.3000.1050728964`. The log gave no cause.

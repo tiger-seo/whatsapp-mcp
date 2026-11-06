@@ -161,3 +161,30 @@ func (p *VersionProvider) fetch() (Version, error) {
 	}
 	return Version{2, 3000, uint32(revision)}, nil
 }
+
+const versionRefreshInterval = 6 * time.Hour
+
+// VersionFailureReason names a discovery failure's category for logs (fetch, response or other),
+// never its content.
+func VersionFailureReason(err error) string { return versionFailureReason(err) }
+
+// RunRefresh is the one owner-lifetime scheduler: it refreshes every versionRefreshInterval until
+// the owner context ends and then returns. The initial fetch belongs to the owner's startup, so the
+// first scheduled fetch is one interval away. It shares the single flight with any explicit
+// refresh, publishes only an immutable candidate (no socket is touched) and reports a failure to
+// fail, if given, so the caller can log its category. A failure keeps the earlier candidate.
+func (p *VersionProvider) RunRefresh(fail func(error)) {
+	timer := time.NewTimer(versionRefreshInterval)
+	defer timer.Stop()
+	for {
+		select {
+		case <-p.owner.Done():
+			return
+		case <-timer.C:
+		}
+		if err := p.Refresh(p.owner); err != nil && p.owner.Err() == nil && fail != nil {
+			fail(err)
+		}
+		timer.Reset(versionRefreshInterval)
+	}
+}

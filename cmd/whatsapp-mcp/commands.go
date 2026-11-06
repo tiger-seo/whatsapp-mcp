@@ -134,6 +134,8 @@ type ownerDeps struct {
 // ownerHandle bundles the owner with its lifecycle wiring.
 type ownerHandle struct {
 	owner wa.Owner
+	// refreshDone closes when the version scheduler has returned; nil for a synthetic owner.
+	refreshDone <-chan struct{}
 }
 
 // ownerSeam carries synthetic dependencies for tests; it is nil outside tests.
@@ -156,7 +158,17 @@ func productionOwner(deps ownerDeps) (*ownerHandle, error) {
 		sessions = ownerSeam.sessionFactory
 	}
 	owner := wa.NewOwner(productionOwnerConfig(deps, provider, sessions))
-	return &ownerHandle{owner: owner}, nil
+	// One owner-lifetime scheduler refreshes the candidate every six hours. It ends when the
+	// command's context is cancelled and is joined by the owner stop step, before the store closes.
+	refreshDone := make(chan struct{})
+	go func() {
+		defer close(refreshDone)
+		provider.RunRefresh(func(err error) {
+			deps.log.Warn("version refresh failed; keeping the last usable version",
+				"event", "version_refresh_failed", "reason", wa.VersionFailureReason(err))
+		})
+	}()
+	return &ownerHandle{owner: owner, refreshDone: refreshDone}, nil
 }
 
 // productionOwnerConfig is the owner configuration of the shipped binary. The post-pair reconnect
@@ -186,6 +198,9 @@ func (h *ownerHandle) stopStep() func(context.Context) error {
 	return func(context.Context) error {
 		h.owner.BeginStop()
 		<-h.owner.Done()
+		if h.refreshDone != nil {
+			<-h.refreshDone
+		}
 		return h.owner.StopError()
 	}
 }
