@@ -127,6 +127,15 @@ jobs:
           echo 'TMP=D:\wa-tmp' >> "$GITHUB_ENV"
       # The store's tests include concurrency and crash tests; the default 10 min is too tight for the slowest runner (Windows needs more than 15 min for the limit and memory tests).
       - run: go test -timeout 30m ./...
+      # Which unsafe-run, recovery and terminal tests ran or skipped on this OS: the plain run above prints only
+      # package results. The summary is the evidence that the platform gates were exercised, not just compiled.
+      - name: unsafe-run platform tests (verbose summary)
+        shell: bash
+        run: |
+          go test -timeout 30m -count=1 -v -run 'RunGuard|Recovery|Recover|Terminal' ./internal/store ./internal/wa ./cmd/whatsapp-mcp > run-guard.log 2>&1 || { tail -n 80 run-guard.log; exit 1; }
+          grep -E '^\s*--- (PASS|SKIP|FAIL)' run-guard.log | sed -E 's/ \([0-9.]+s\)//' | sort | uniq -c | sort -rn | head -150
+          echo "passed: $(grep -cE '^\s*--- PASS' run-guard.log)  skipped: $(grep -cE '^\s*--- SKIP' run-guard.log)  failed: $(grep -cE '^\s*--- FAIL' run-guard.log)"
+          grep -E '^\s*--- SKIP' -B2 run-guard.log | grep -vE '^--$' | head -60 || true
 
   # The tests that take minutes on a slow disk: a 500 MiB listing and a 400,000-message memory check. They show that
   # a limit holds and are not needed on every push, so they run on Linux only, at night, and only if main has a
