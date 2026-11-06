@@ -215,7 +215,12 @@ func TestSimulatorDeviceRemovedWhilePostPairRequestPending(t *testing.T) {
 	if err := conn.SendDeviceRemoved(ctx); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(300 * time.Millisecond)
+	for deadline := time.Now().Add(10 * time.Second); !r.log.contains("Got device removed stream error") && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !r.log.contains("Got device removed stream error") {
+		t.Fatal("the client did not handle the removal while the Save was held")
+	}
 	release()
 	time.Sleep(500 * time.Millisecond)
 	if got := r.srv.Dials(); got != 1 {

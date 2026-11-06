@@ -221,7 +221,14 @@ func TestOwnerPostPairReconnectWaitsForHeldSave(t *testing.T) {
 	if err := conn.SendStreamError(ctx, "515"); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(300 * time.Millisecond) // the Save is blocked; the 515 has been delivered
+	// Wait until the client has handled the 515 while the Save is still blocked, instead of
+	// assuming a delay was long enough.
+	for deadline := time.Now().Add(10 * time.Second); !r.log.contains("Got 515 code") && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !r.log.contains("Got 515 code") {
+		t.Fatal("the client did not handle the 515")
+	}
 	if got := r.srv.Dials(); got != 1 {
 		t.Fatalf("dials while the Save was held = %d, want 1", got)
 	}

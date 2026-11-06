@@ -35,8 +35,9 @@ type OwnerConfig struct {
 	Versions *VersionProvider
 	// Sessions builds adapter generations; nil uses the real pinned adapter.
 	Sessions SessionFactory
-	// ShellStartupBudget enables the bounded saved-session startup retries for long-running shells.
-	// The pair command keeps its single-attempt behaviour.
+	// ShellStartupBudget marks the long-running shells. Saved-session startup retries are denied
+	// by default, so a failed or timed-out first attempt ends disconnected with a diagnostic for
+	// both the shells and the pair command.
 	ShellStartupBudget bool
 	// PostPairReconnect enables the one owner-initiated reconnect that completes a fresh pairing
 	// after the server's 515. It is off until the path has its safety proof and owner review; with
@@ -101,7 +102,10 @@ type genState struct {
 	timingOut  bool // guarded by connectionOwner.mu
 	loggedOut  bool // guarded by connectionOwner.mu
 	// paired records PairSuccess for this generation; pending515 records a 515 waiting for it.
-	paired     bool // guarded by connectionOwner.mu
+	paired bool // guarded by connectionOwner.mu
+	// refused515 records that a 515 was refused, so a later PairSuccess must not leave the phase
+	// at connecting with no attempt running.
+	refused515 bool // guarded by connectionOwner.mu
 	pending515 *time.Timer
 	reconnects int // post-pair reconnects started for this generation
 }
@@ -300,7 +304,10 @@ func (o *connectionOwner) dispatch(epoch uint64, ev SessionEvent) {
 		if o.connected {
 			o.unresolved = false
 		}
-		if o.phase != PhaseConnected {
+		if gen.refused515 {
+			o.connected = false
+			o.phase = PhaseDisconnected
+		} else if o.phase != PhaseConnected {
 			o.phase = PhaseConnecting
 		}
 		if w != nil && w.result == PairingActive {
@@ -760,6 +767,7 @@ func (o *connectionOwner) tryManualReconnect(gen *genState) {
 		return
 	}
 	if !o.cfg.PostPairReconnect {
+		gen.refused515 = true
 		o.connected = false
 		if o.phase != PhaseStopping {
 			o.phase = PhaseDisconnected
@@ -792,16 +800,20 @@ func (o *connectionOwner) cancelPending515(gen *genState, refuse bool) {
 	if timer != nil {
 		timer.Stop()
 	}
+	// The timer can fire long after the generation ended; only the current, live generation
+	// may change the phase.
+	live := o.gen == gen && !gen.retiring && !o.stopping && !o.health.StorageFault && o.phase != PhaseLoggedOut
 	if waiting {
 		gen.reconnects++ // a later PairSuccess must not revive the refused request
-		o.connected = false
-		if o.phase != PhaseStopping && o.phase != PhaseLoggedOut {
+		gen.refused515 = true
+		if live {
+			o.connected = false
 			o.phase = PhaseDisconnected
+			o.publishLocked()
 		}
-		o.publishLocked()
 	}
 	o.mu.Unlock()
-	if waiting && refuse && !o.stoppedOrTerminal() {
+	if waiting && refuse && live {
 		o.denyReconnect("login_515")
 	}
 }

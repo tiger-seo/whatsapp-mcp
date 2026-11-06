@@ -182,3 +182,82 @@ func TestPostPairReconnectStalledConnectIsBounded(t *testing.T) {
 		stopInBubble(t, ot)
 	})
 }
+
+// A pending-515 timer must not rewrite a terminal phase after the fact.
+func TestPostPairPendingTimerKeepsTerminalPhase(t *testing.T) {
+	t.Run("stopped", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ot := newPostPairOwner(t, func(int64, context.Context) error { return nil })
+			startPostPair(t, ot)
+			ot.sess.send(SessionManualLoginReconnect)
+			synctest.Wait()
+			ot.o.BeginStop()
+			synctest.Wait()
+			<-ot.o.Done()
+			synctest.Sleep(connectWatchdog + time.Minute)
+			if p := ot.o.phaseForTest(); p != PhaseStopped {
+				t.Errorf("phase after the timer = %v, want stopped", p)
+			}
+		})
+	})
+	t.Run("storage failed", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ot := newPostPairOwner(t, func(int64, context.Context) error { return nil })
+			ot.sess.faultCh = make(chan struct{})
+			startPostPair(t, ot)
+			ot.sess.send(SessionManualLoginReconnect)
+			synctest.Wait()
+			close(ot.sess.faultCh)
+			synctest.Wait()
+			if p := ot.o.phaseForTest(); p != PhaseStorageFailed {
+				t.Fatalf("phase after the fault = %v, want storage_failed", p)
+			}
+			synctest.Sleep(connectWatchdog + time.Minute)
+			if p := ot.o.phaseForTest(); p != PhaseStorageFailed {
+				t.Errorf("phase after the timer = %v, want storage_failed", p)
+			}
+			stopInBubble(t, ot)
+		})
+	})
+}
+
+// A refused 515 followed by PairSuccess must end disconnected: nothing is connecting, and the pair
+// command reports the unfinished link instead of waiting for a signal.
+func TestRefusedReconnectThenPairSuccessEndsDisconnected(t *testing.T) {
+	t.Run("default deny", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ot := newOwnerTest(t, false, false, func(int64, context.Context) error { return nil })
+			startPostPair(t, ot)
+			ot.sess.send(SessionManualLoginReconnect)
+			ot.sess.send(SessionPairSuccess)
+			synctest.Sleep(5 * time.Minute)
+			if p := ot.o.phaseForTest(); p != PhaseDisconnected {
+				t.Errorf("phase = %v, want disconnected", p)
+			}
+			if got := ot.sess.connectN.Load(); got != 0 {
+				t.Errorf("connects = %d, want 0", got)
+			}
+			if st := ot.o.Snapshot(); st.Connected || !st.LoggedIn {
+				t.Errorf("status = %+v", st)
+			}
+			stopInBubble(t, ot)
+		})
+	})
+	t.Run("candidate wait expired", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ot := newPostPairOwner(t, func(int64, context.Context) error { return nil })
+			startPostPair(t, ot)
+			ot.sess.send(SessionManualLoginReconnect)
+			synctest.Sleep(connectWatchdog + time.Second)
+			ot.sess.send(SessionPairSuccess)
+			synctest.Sleep(time.Minute)
+			if p := ot.o.phaseForTest(); p != PhaseDisconnected {
+				t.Errorf("phase = %v, want disconnected", p)
+			}
+			if got := ot.sess.connectN.Load(); got != 0 {
+				t.Errorf("connects = %d, want 0", got)
+			}
+			stopInBubble(t, ot)
+		})
+	})
+}
