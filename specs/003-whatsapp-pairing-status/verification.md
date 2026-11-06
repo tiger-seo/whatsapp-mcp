@@ -534,6 +534,21 @@ One run of the shipped binary (`a24f15d` plus uncommitted test files, `pair --lo
 
 **Tech debt.** Recorded in `docs/backlog/003-post-pair-reconnect-and-unsafe-marker.md` (local, `docs/` is not tracked): the unjoined upstream work, no reusable session (blocks feature 004's real-account test), thin evidence, and the switch itself.
 
+## Real-Account Observation: Pair With the Post-Pair Reconnect Enabled (not T062) - 2026-11-06
+
+One run of the shipped binary built from `cbff875` (`pair --log-level debug`, stderr to `D:\tmp\wa-t062b-pair.log`) against the same real account, with a fresh empty data directory `D:\tmp\wa-t062b`, after the user's explicit permission for this single step. The user scanned the QR code. This is an observation, not T062: the T060 helper and the rest of the journey were not done, and no recovery, second pair or unlink was run.
+
+**Order of events (UTC, from the log).** 20:38:27 QR emitted. 20:38:46.869 `PairSuccess` ("Successfully paired"; pairing window `succeeded`). 20:38:47.664 stream error 515, about 0.8 s later. 20:38:47.828 the one owner-initiated follow-up connection: redial, then "Successfully authenticated" at 20:38:48.443. Prekeys were uploaded and the server answered at 20:38:51. 20:38:51.262 `connection_confirmed`. `pair` printed "linked. Offline recovery is required before the next run: the connection used for pairing leaves the data directory marked unsafe", then logged `upstream_drain_unproven` and `run_guard_recovery_required` at shutdown.
+
+**Findings.**
+- With the reconnect enabled, pairing completed on a real account: the saved identity authenticated and the owner confirmed the connection. Exactly one extra dial appears; no retry or second reconnect.
+- The 515 again came after `PairSuccess` (about 0.6 s in the first run, 0.8 s here). Two runs on one account; whether every pairing gets a 515 is not established.
+- `status` afterwards: `logged_in: true`, `connected: false`, run state unsafe, offline recovery required (as designed).
+- `version discovery failed; keeping the last usable version` again; the bundled version `2.3000.1050728964` was used. Cause not diagnosed.
+- **Not recorded:** the exit code, and what the phone showed (whether a device is listed and logged in). The user had not reported them when this was written.
+
+**T077 ticked by the owner's instruction (2026-11-06).** The tick rests on the simulator evidence, this real-account run and the owner's approval above. **Still outstanding from the T077 conditions:** a fresh owner code review of the enabled path (the scoped row at 42ff6f2 is CONCERNS and no PR may be opened on it); the unjoined-goroutine and held-handler gaps, and the Linux and macOS runs, remain accepted residual risk and debt (`docs/backlog/003-post-pair-reconnect-and-unsafe-marker.md`).
+
 ## T036 Detached Key Request (part) - 2026-11-06
 
 Windows 10, `CGO_ENABLED=0`. New file `internal/wa/repair_keyreq_test.go` (3 tests) and a small test-only hook in `internal/wasim/conn.go` (`Conn.SetIQHandler`, so a test can answer one client IQ instead of the automatic empty result).
