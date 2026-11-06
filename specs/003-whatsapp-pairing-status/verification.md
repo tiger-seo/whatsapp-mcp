@@ -435,6 +435,19 @@ Commit c4fa914. Windows 10, `CGO_ENABLED=0`; native Windows only, no WSL2 or mac
 
 **Limits.** The tests were not observed failing first: they cover behaviour that already existed, so they are regression coverage, not tests-first evidence. They use fakes (`qrSession`, `scriptedOwner`), not the simulator or a real store; guarded-store interaction is covered only by the existing simulator logout tests. `TestLogoutOldGenerationDrainsBeforeNewClient` uses real time with a 200 ms negative window, because a request blocked on the retirement's `sync.Once` is not durably blocked for `synctest`. The "recovery input cannot compete with stdio input" clause of T031 is not tested: pair has no recovery prompt after a final timeout. T033-T041 integration is untouched. T049-T051 are not written: they test the scheduler and 405 budget that T052/T053 build and that stay behind the default-deny proof gate.
 
+## US4 Test Wave, Partial (T049, T051) - 2026-11-06
+
+Windows 10, `CGO_ENABLED=0`, native Windows only. `go test ./internal/wa -count=1` passed (10.7 s). **T049 and T051 stay unchecked**: only the parts that run against existing code were written.
+
+| Task | File | Tests | Covers |
+| --- | --- | --- | --- |
+| T049 (part) | `internal/wa/version_refresh_test.go` | `TestVersionBodyBoundary` (3 cases), `TestVersionRefreshFailuresKeepCandidate` (4), `TestVersionRefreshRejectsUntrustedTLS`, `TestVersionFailedRefreshLeavesEarlierSnapshotIntact` | declared-length body at and one over the 1 MiB limit, unknown-length one over; 404, 500, redirect, stall to timeout; untrusted certificate; every failure keeps the candidate and leaks nothing from the response |
+| T051 (part) | `internal/wa/session_version_test.go` | `TestSessionFreshHandshakeSnapshotsAreConsistentAcrossCandidateRefresh`, `TestSessionSavedHandshakeUsesNewCandidateOnNextHandshake`, `TestSessionPayloadCallbackDoesNoIO` | a candidate refreshed after a handshake snapshot leaves that snapshot consistent (app version, OS version and build, companion version, build hash); the next fresh and saved handshakes use the new candidate throughout; registration, key and identity fields unchanged; library version global unchanged; the payload callback uses no transport |
+
+**Not written, because the code does not exist or the path is denied by default:** the six-hour fake-time scheduler and overlapping-fetch scheduling (T052); the 405 budget, five-second waits and refresh before each retry (T050/T053); selected-version use on explicit, ordinary and 515 reconnect, and the 30-second watchdog for those connects (T054, behind the proof gate). The barrier is a direct `selected.Store` between two `GetClientPayload` calls, not a refresh racing a handshake in progress.
+
+**Finding.** `boundedBody` (`internal/wa/http.go`) rejects an unknown-length body of exactly the limit with `ErrHTTPBodyLimit`: once the limit is consumed it returns the error without probing for end of stream, while a declared length of the same size is accepted. This is fail-closed (a valid discovery response is far smaller than 1 MiB), so I did not change production code and the case is not asserted. The user decides whether to align it.
+
 ## Handoff - 2026-11-06
 
 For a fresh session. Branch `003-whatsapp-pairing-status`; the last feature commit is `c4fa914` (`test(wa): cover pairing windows, retry gating and logout retirement`), after `51ffbd4` (`feat(status): report the local snapshot offline`) and `a39cf0c` (hook fix); `tasks.md` "Current State (handoff)" lists what is open and in which order. A modified `.gitignore` and an untracked `.kilo/` appeared in the working tree and are not part of this work; an agent must not commit or revert them (check `git status`).
