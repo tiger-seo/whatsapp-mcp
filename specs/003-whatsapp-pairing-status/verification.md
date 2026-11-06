@@ -284,3 +284,34 @@ Commit e65febc. Environment: Windows amd64 (native, Git Bash), Go 1.27.3, `CGO_E
 | Also | `gofmt -l` empty, `go vet ./...` clean, no tracked CRLF | |
 
 The earlier startup-retry and 515-reconnect tests (seven owner tests and `TestShellSavedSessionSuccessOnRetry`) asserted behaviour the temporary policy removes; they were replaced, not weakened to pass. No path is enabled by this task; 515 stays disabled until T077's proof and an applicable owner review. The shell e2e tests `TestShellSavedSessionStartupExhaustion` and `TestShellSavedSessionAttemptTimeoutAndCancellation` also changed from exit 0 to exit 1 after an attempted Connect, per the unsafe-run policy. T068-T073, T077 and native Linux/macOS evidence remain open.
+
+## T077 Post-Pair 515 Investigation (incomplete) - 2026-11-06
+
+Pin `go.mau.fi/whatsmeow v0.0.0-20261027104441-1eec1136a50b`, Windows amd64, Go 1.27.3, `CGO_ENABLED=0`. Synthetic keys, isolated SQLite and a denying transport only; no real account. This records source and one runtime probe. T077 stays unchecked, 515 stays disabled and US1 completion is unverified.
+
+**Source findings (line numbers refer to the pin)**
+
+| Location | Finding |
+| --- | --- |
+| `pair.go:132-160` `handlePairSuccess` | Runs `handlePair` in a new goroutine and returns at once, so the queue loop does not wait for the guarded Save, the confirmation IQ or the `PairSuccess` dispatch. |
+| `pair.go:162-265` `handlePair` | Order: `Store.Save`, LID mapping, `PutIdentity`, `expectDisconnect`, send the confirmation IQ, return. On a later failure its tail calls `Store.Delete`, then the caller calls `Disconnect()` and dispatches `PairError`. After success it starts `go sendUnifiedSession(false)` (an unjoined send on whatever socket exists) and dispatches `PairSuccess`. |
+| `connectionevents.go:19-33` `handleStreamError` | With `DisableLoginAutoReconnect`, 515 dispatches `ManualLoginReconnect` synchronously from its node handler. Without it, the library runs `go { Disconnect(); connect() }`. |
+| `client.go` `handlerQueueLoop` | Handlers are processed in order; one running longer than 10 x 30 s continues in the background. On connection-context cancellation the loop returns without joining the in-flight handler goroutine. A full queue spawns a goroutine per node and the log says ordering "is no longer guaranteed". |
+| `client.go` `unlockedDisconnect` | Waits at most 5 s for the queue loop to close, not for handler goroutines. |
+
+**Runtime probe** `TestInvestigation515PinnedPairSuccessIsDetached` (`internal/wa/pair515_investigation_test.go`, 3 of 3 runs PASS, about 0.1 s). A second SQLite connection holds the write lock so the pinned handler's guarded Save waits; the test then releases it.
+
+1. `HandlePairSuccess` returned while the Save was still blocked.
+2. A 515 delivered in that window reached the owner as `ManualLoginReconnect` before any `PairSuccess`, with no device row yet.
+3. `Disconnect()` returned while the pairing work was still pending.
+4. After the release the work finished on the same client and dispatched `PairError` (the confirmation send has no socket), i.e. the error tail ran after the earlier Disconnect.
+5. One device row remained; the tail's `Store.Delete` did not remove it from the live store (the guarded container defers deletes).
+
+**Assessment.** At the pin, a 515 can reach the owner before `PairSuccess`, and the pairing goroutine, its error tail (`Disconnect`, `Store.Delete`, `PairError`) and `sendUnifiedSession` are not joined by `Disconnect`. Because a same-generation reconnect reuses the same client object, a late `Disconnect()` or `sendUnifiedSession` from earlier work can land on the new connection. The guarded store joins its own admitted calls (Retire waits for them), which covers Save, the mapping and `PutIdentity`, but not the client's `Disconnect` or sends.
+
+**Candidate mechanism (not implemented, not reviewed).** Treat the 515 as a request only: defer it until `PairSuccess` has been dispatched and drained (the Session callback gate already tracks this), deny on `PairError`, logout or a bound with no `PairSuccess`, then run one owner-initiated Connect under the existing 30-second watchdog and attempt slot. It still cannot join `sendUnifiedSession` or any queue-overflow goroutine, so it would need the owner review the contract requires, and the residual unjoined work stated as a limit.
+
+**Not established**
+- No positive fixture reaches Connected: that needs a fake WhatsApp server speaking the Noise handshake to the real client, which I have not built. Without it the same-generation completion cannot be demonstrated, so per T077 the blocker is recorded and 515 stays disabled.
+- No barrier test yet holds a pinned `stream:error` 401 `device_removed` delete across Disconnect, a second Connect, cancellation, retirement and stop.
+- Whether every pairing receives 515 is unknown; this does not show the server requires the reconnect.
