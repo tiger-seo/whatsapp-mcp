@@ -118,3 +118,39 @@ func TestVersionFailedRefreshLeavesEarlierSnapshotIntact(t *testing.T) {
 		t.Errorf("snapshot %v, current %v", snapshot, p.Current())
 	}
 }
+
+// WhatsApp serves the page that carries the client revision only to a request that looks like a
+// browser navigation. Without these headers it returns a page without the revision (observed on a
+// real run, where every refresh failed with an invalid response).
+func TestVersionRequestLooksLikeANavigation(t *testing.T) {
+	var got http.Header
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		got = r.Header.Clone()
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`"client_revision":123,`)), ContentLength: -1}, nil
+	})
+	p := refreshProvider(t, transport, time.Second)
+	if err := p.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for k, want := range map[string]string{
+		"Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "none",
+		"Sec-Fetch-User": "?1", "Accept-Language": "en-US,en;q=0.9",
+	} {
+		if got.Get(k) != want {
+			t.Errorf("%s = %q, want %q", k, got.Get(k), want)
+		}
+	}
+	if !strings.Contains(got.Get("Accept"), "text/html") || !strings.Contains(got.Get("User-Agent"), "Mozilla/5.0") {
+		t.Errorf("Accept %q, User-Agent %q", got.Get("Accept"), got.Get("User-Agent"))
+	}
+}
+
+func TestVersionFailureReasonNamesTheCategoryOnly(t *testing.T) {
+	for err, want := range map[error]string{
+		ErrVersionResponse: "response", ErrVersionFetch: "fetch", context.Canceled: "other",
+	} {
+		if got := versionFailureReason(err); got != want {
+			t.Errorf("%v: reason %q, want %q", err, got, want)
+		}
+	}
+}

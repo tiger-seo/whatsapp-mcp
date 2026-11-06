@@ -608,7 +608,7 @@ func (k attemptOutcome) terminal() bool {
 // retained and the owner stays disconnected without pairing.
 func (o *connectionOwner) runStartupSequence(gen *genState) {
 	if err := o.cfg.Versions.Refresh(gen.lifetime); err != nil {
-		o.log.Warn("version discovery failed; keeping the last usable version", "event", "version_refresh_failed")
+		o.log.Warn("version discovery failed; keeping the last usable version", "event", "version_refresh_failed", "reason", versionFailureReason(err))
 	}
 	o.mu.Lock()
 	if o.phase == PhaseIdle {

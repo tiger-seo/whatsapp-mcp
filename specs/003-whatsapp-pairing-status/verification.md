@@ -545,9 +545,19 @@ One run of the shipped binary built from `cbff875` (`pair --log-level debug`, st
 - The 515 again came after `PairSuccess` (about 0.6 s in the first run, 0.8 s here). Two runs on one account; whether every pairing gets a 515 is not established.
 - `status` afterwards: `logged_in: true`, `connected: false`, run state unsafe, offline recovery required (as designed).
 - `version discovery failed; keeping the last usable version` again; the bundled version `2.3000.1050728964` was used. Cause not diagnosed.
-- **Not recorded:** the exit code, and what the phone showed (whether a device is listed and logged in). The user had not reported them when this was written.
+- **Not recorded:** the exit code (the user did not see it) and what the phone showed during the link. Afterwards the user reported having unlinked the device by hand; that implies an entry was listed, but its label and login state were not captured. The local data directory `D:\tmp\wa-t062b` still holds a saved identity for a device that no longer exists, and its run state is unsafe.
 
 **T077 ticked by the owner's instruction (2026-11-06).** The tick rests on the simulator evidence, this real-account run and the owner's approval above. **Still outstanding from the T077 conditions:** a fresh owner code review of the enabled path (the scoped row at 42ff6f2 is CONCERNS and no PR may be opened on it); the unjoined-goroutine and held-handler gaps, and the Linux and macOS runs, remain accepted residual risk and debt (`docs/backlog/003-post-pair-reconnect-and-unsafe-marker.md`).
+
+## Version Discovery Failure: Cause and Fix - 2026-11-06
+
+**Symptom.** Both real pair runs logged `version discovery failed; keeping the last usable version` and used the bundled version `2.3000.1050728964`. The log gave no cause.
+
+**Cause.** The discovery request sent only a `User-Agent`. A plain `GET https://web.whatsapp.com` (curl, default headers) returned HTTP 200 and a 40 KB page without `"client_revision":N,`; the revision appeared only as `data-btmanifest="1053473644_main"`. The same request with the pinned SDK's own navigation headers (`Sec-Fetch-Dest/Mode/Site/User`, `Accept`, `Accept-Language`), run by the user in their terminal, returned HTTP 200 and a 927 KB page containing `"client_revision":1053473644,`. So every refresh ended in `ErrVersionResponse`. A second probe with only our User-Agent was blocked by the tool classifier and not retried, so that exact request shape was inferred, not observed.
+
+**Fix.** `internal/wa/version.go` now sends the same navigation headers as the pinned SDK. The two `version_refresh_failed` warnings carry `reason=fetch|response|other` (category only, never response content). Tests: `TestVersionRequestLooksLikeANavigation` and `TestVersionFailureReasonNamesTheCategoryOnly` (the build failed before the fix because `versionFailureReason` did not exist). `go vet ./internal/wa` clean; `go test ./internal/wa ./internal/wasim ./cmd/...` pass (wa 13.4 s, cmd 129.2 s).
+
+**Not verified.** That the shipped binary now selects `2.3000.1053473644` against the real server, and that the handshake accepts the refreshed version. The next real run shows it in the log (no `version_refresh_failed`) and `status` should then report a refreshed version. The refreshed value is also what the live handshake sends, so a rejected version would surface as a 405.
 
 ## T036 Detached Key Request (part) - 2026-11-06
 

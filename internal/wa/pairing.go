@@ -164,7 +164,7 @@ func (w *pairingWindow) run() {
 
 	// Version discovery happens before the connection; a failure keeps the last usable version.
 	if err := o.cfg.Versions.Refresh(w.gen.lifetime); err != nil {
-		o.log.Warn("version discovery failed; keeping the last usable version", "event", "version_refresh_failed")
+		o.log.Warn("version discovery failed; keeping the last usable version", "event", "version_refresh_failed", "reason", versionFailureReason(err))
 	}
 	src, ok := w.gen.handle.(QRChannelSource)
 	if !ok {

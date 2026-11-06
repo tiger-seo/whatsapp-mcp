@@ -66,6 +66,18 @@ func newVersionProvider(owner context.Context, client *http.Client, origin strin
 	return p
 }
 
+// versionFailureReason names the failure category for the log: never the response or any detail.
+func versionFailureReason(err error) string {
+	switch {
+	case errors.Is(err, ErrVersionResponse):
+		return "response"
+	case errors.Is(err, ErrVersionFetch):
+		return "fetch"
+	default:
+		return "other"
+	}
+}
+
 // Current takes a lock-free snapshot and performs no network or SDK-global mutation.
 func (p *VersionProvider) Current() Version { return *p.selected.Load() }
 
@@ -119,6 +131,14 @@ func (p *VersionProvider) fetch() (Version, error) {
 		return Version{}, ErrVersionFetch
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36")
+	// The page that carries the client revision is only served to a request that looks like a
+	// browser navigation; the pinned SDK's own discovery sends the same headers.
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Site", "none")
+	req.Header.Set("Sec-Fetch-User", "?1")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 	resp, err := p.client.Do(req)
 	if err != nil {
 		return Version{}, ErrVersionFetch
