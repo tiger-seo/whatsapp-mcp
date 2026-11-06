@@ -502,9 +502,29 @@ Windows 10, `CGO_ENABLED=0`. `go test ./internal/wa ./cmd/whatsapp-mcp -count=1`
 
 **Limits.** The no-same-process-re-pair rule is shown by the single window request per invocation, not by a second attempted production Connect. The synthetic Connect in the repair journey bypasses the adapter's production-attempt latch, so the run marker is not asserted there. Process-kill durability of markers is covered by the store tests and CI, not re-run here. Messages are sentinel-checked in one journey; session keys are not separately seeded beyond the saved identity. Nothing ran against a real WhatsApp account.
 
+## Polish Checks (T059, T061 part) - 2026-11-06
+
+**T059 ticked** (commit 4d42726): `OPERATIONS.md` gains a "WhatsApp connection, pairing and status" section (commands, QR/Enter/EOF behaviour, the unsafe marker, offline recovery steps, pending repair, limits, stopping, implemented vs verified, E003-RX-01 with owner, expiry and triggers, monitoring); `AGENTS.md` "Current state" lists the feature 003 code and what is unverified; `quickstart.md` drops the stale stub and retry-budget text. The local-monitoring text says plainly that the one-minute samples are not implemented (T057). The phone label is documented as not guaranteed.
+
+**T061 not ticked (part run).** Windows 10, `CGO_ENABLED=0`, on `4d42726`:
+
+| Check | Result |
+| --- | --- |
+| `go mod verify` | all modules verified |
+| `gofmt -l .` | no output |
+| `go vet ./...` | exit 0 |
+| `go build ./cmd/whatsapp-mcp` for windows/amd64, linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 | all exit 0 |
+| `go build ./internal/store/testdata/cmd/seed` | exit 0 |
+| `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...` | 0 affecting vulnerabilities; the scan reports 1 vulnerability in a required module that the code does not call: GO-2026-5932 in `golang.org/x/crypto@v0.58.0`, fixed in `v0.58.1-0.20261009181718-2f1f834330b2` |
+| `go test` of `internal/wa` (13.0 s) and `cmd/whatsapp-mcp` (120.7 s) | ok |
+| `go test ./internal/store` (214.1 s, earlier commit) | ok |
+| CI run 42259130137 (`9817f92`): `check`, `test` on ubuntu, windows, macos | success; `heavy` skipped as designed |
+
+**Not run or not possible:** the manual helper `internal/wa/testdata/cmd/session-check` does not exist yet (T060), so its build and test are not recorded; the heavy opt-in tests (`WA_HEAVY_TESTS=1`) were not run and remain a nightly or manual job; the CI driver/libc consistency step is part of the `check` job and passed there but was not re-run locally; native console/PTY, `F_FULLFSYNC` and power-loss evidence stay unverified as recorded above. The unreachable `x/crypto` advisory has a fix available; updating the dependency is a separate decision and was not made.
+
 ## Handoff - 2026-11-06
 
-For a fresh session. Branch `003-whatsapp-pairing-status`; the last feature commit is `d079a2f` (`ci: print which unsafe-run platform tests ran or skipped`), after `c4fa914` (US2 tests), after `51ffbd4` (`feat(status): report the local snapshot offline`) and `a39cf0c` (hook fix); `tasks.md` "Current State (handoff)" lists what is open and in which order. A modified `.gitignore` and an untracked `.kilo/` appeared in the working tree and are not part of this work; an agent must not commit or revert them (check `git status`).
+For a fresh session. Branch `003-whatsapp-pairing-status`; the last feature commit is `4d42726` (`docs(wa): describe pairing, recovery and status for operators`); the repair controller is `9817f92`, after `51ffbd4` (`feat(status): report the local snapshot offline`) and `a39cf0c` (hook fix); `tasks.md` "Current State (handoff)" lists what is open and in which order. A modified `.gitignore` and an untracked `.kilo/` appeared in the working tree and are not part of this work; an agent must not commit or revert them (check `git status`).
 
 **Where the evidence is (sections above):** default-deny reconnect (T075/T076); 515 source findings and probe; candidate post-pair reconnect against the simulator; 401 matrix; stop and cancel while the Save is held; T068-T073 unsafe-run evidence and its gaps; US3 offline status. Owner reviews table: design PASS at 19b0406, and one **scoped** code row `CONCERNS` at 42ff6f2 for the T077 candidate only. There is no full-branch code review yet, so `gh pr create` must not be used.
 
