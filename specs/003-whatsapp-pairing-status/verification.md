@@ -391,3 +391,14 @@ Commit 8ba07ce plus the kill test added after it. Primary environment: Windows 1
 - Process-kill coverage is only at open, armed and cleared. Kills between first pairing and the first Save, during revocation delete and during clear are covered by fault injection, not by a killed process.
 - The exact-device ambiguity and phone-label cases (T072) are covered only by the injected-stream tests above.
 - `govulncheck` was not run; `go mod tidy` would currently rewrite `go.mod` (five directly imported modules are marked `// indirect`); that is unresolved and belongs to T061.
+
+## T077 Stop and Cancel While the Pairing Save Is Held - 2026-11-06
+
+Simulator, real pinned client, real owner and guarded store; Windows amd64, Go 1.27.3. The guarded device Save is held by a database write lock the test controls while the 515 is delivered (`internal/wa/wasim_held_test.go`, both PASS, 5 of 5 runs each).
+
+| Case | Observed |
+| --- | --- |
+| Stop while the Save is held (`TestSimulatorStopWhileSaveHeldDrainsWithoutIdentity`) | The owner finishes within the bound without waiting for the held lock (the generation lifetime cancels the Save). `Store.Close` then returns nil, which shows no admitted call was left. After the lock is released: 1 dial in total, no Connect from the pending 515, 0 identity rows, stop error set (unresolved pairing), marker unsafe, chat sentinel kept |
+| Cancel the window while the Save is held (`TestSimulatorCancelWindowWhileSaveHeldMakesNoConnect`) | Window result cancelled; after release 1 dial, never connected; after stop the marker is unsafe and the chat is kept |
+
+**Limits.** These hold the guarded Save, not an arbitrary pinned node handler: the pinned handlers that could be held across Disconnect are short, and the pair-success work is the only detached one on this path. Removing one cancellation call in the owner's retirement (`gen.cancel()`) did not fail the stop test, because the stop path cancels the Save through more than one route; the test therefore shows the behaviour, not that single call. The unjoined `sendUnifiedSession` and queue-overflow goroutines remain unmeasured. T077 stays open; `PostPairReconnect` stays false.
