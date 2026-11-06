@@ -53,10 +53,18 @@ func (e *HeldError) Error() string {
 // The lock file must be a private regular file, never a link, so that whatever is at its path cannot make
 // Acquire or Release write to another file.
 func Acquire(dataDir string) (*Lock, error) {
+	return acquire(dataDir, true)
+}
+
+func acquire(dataDir string, create bool) (*Lock, error) {
 	path := filepath.Join(dataDir, FileName)
+	flag := os.O_RDWR
+	if create {
+		flag |= os.O_CREATE
+	}
 	// flock does not expose its handle, so the PID goes through a second one. That one is opened first and
 	// checked; flock's must then be the same file, or a swap between the two opens could redirect the writes.
-	f, err := private.OpenFile(path, os.O_RDWR|os.O_CREATE)
+	f, err := private.OpenFile(path, flag)
 	if err != nil {
 		return nil, fmt.Errorf("lock %s: %w", path, err)
 	}
@@ -123,4 +131,13 @@ func readPID(f *os.File) int {
 		return 0
 	}
 	return pid
+}
+
+// AcquireExisting takes the lock like Acquire but never creates the lock file: an absent file
+// returns an error satisfying errors.Is(err, fs.ErrNotExist), so a read-only observer can tell
+// "no owner has ever been here" from "an owner is running" without leaving anything behind. It
+// keeps Acquire's checks (no links, regular private file, same file for both handles) and the
+// same PID bookkeeping; it repairs nothing.
+func AcquireExisting(dataDir string) (*Lock, error) {
+	return acquire(dataDir, false)
 }

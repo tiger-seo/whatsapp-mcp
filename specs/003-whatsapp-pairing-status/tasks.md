@@ -110,7 +110,7 @@
 
 - [ ] T042 [P] [US3] Add `internal/store/inspect_test.go` read-only tests using existing preflight/WAL/synthetic identity fixtures: absence, schema 1/2 legacy-unknown and schema 3 clean/unsafe identity presence, malformed/missing marker, pending repair without running it, committed WAL, orphan/unsafe artifacts, corrupt/unsupported schema and swapped handles; assert no writable probe/upgrade/migration/key loading or database/sidecar changes (FR-008/009/018).
 - [ ] T043 [P] [US3] Add `cmd/whatsapp-mcp/status_test.go` contract tests for all four fields, offline-credentials and bundled-not-refreshed labels, zero client/provider-start/discovery/IPC/QR calls, no missing artifacts, pre-DB holder PID and operational/usage error distinctions; inject dependencies that fail if account/network work is attempted (SC-003).
-- [ ] T044 [P] [US3] Add no-create/private-handle/holder/race tests in `internal/lock/existing_test.go`, then implement AcquireExisting in `internal/lock/lock.go` using the existing safe acquisition machinery; absent lock returns fs.ErrNotExist, no link/reparse following or permission repair, and no duplicated unsafe locking implementation.
+- [X] T044 [P] [US3] Add no-create/private-handle/holder/race tests in `internal/lock/existing_test.go`, then implement AcquireExisting in `internal/lock/lock.go` using the existing safe acquisition machinery; absent lock returns fs.ErrNotExist, no link/reparse following or permission repair, and no duplicated unsafe locking implementation.
 
 ### Implementation
 
