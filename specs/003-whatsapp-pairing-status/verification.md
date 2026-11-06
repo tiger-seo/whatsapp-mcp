@@ -421,9 +421,23 @@ Windows 10 amd64 native and WSL2 Ubuntu (not native Linux), Go 1.27.3, `CGO_ENAB
 
 **Limits.** The swapped-handle case from T042 (a file replaced between the lstat and the view) has no test: the existing identity comparison is reused, not exercised. `status` takes the owner lock, so a running pair, stdio or serve makes it exit 1 by design. Legacy detection treats any message schema below 3 as unknown. Windows and WSL2 only; no macOS. `OPERATIONS.md`, `AGENTS.md` and the quickstart still describe the old stub (T059).
 
+## US2 Test Wave (T030-T032) - 2026-11-06
+
+Commit c4fa914. Windows 10, `CGO_ENABLED=0`; native Windows only, no WSL2 or macOS run.
+
+| Task | File | Tests | Covers |
+| --- | --- | --- | --- |
+| T030 | `internal/wa/pairing_test.go` | 8 added, one with 4 subtests: `TestPairingConcurrentRequestsShareOneWindow`, `TestPairingCodeExpiryIsBoundedAndDoesNotEndWindow`, `TestPairingFinalTimeoutGatesFurtherRequests`, `TestPairingWaitContextCancellationDoesNotCancelWindow`, `TestPairingRejectedDuringShutdown`, `TestPairingStopEndsActiveWindowAndClearsCode`, `TestPairingStaleAndLateEventsAreIgnored`, `TestPairingRejectsUnsupportedAndInvalidFlows` | shared window while a code is valid or awaiting replacement; 60 s bound; an unresolved final timeout refuses another window; caller cancellation vs explicit cancel; shutdown; stale epoch and late code; unsupported flows leave no material in logs |
+| T031 | `cmd/whatsapp-mcp/pair_retry_test.go` | 4: `TestPairEnterAfterUnresolvedFinalTimeoutAuthorizesNothing`, `TestPairEOFAndCancellationExitWithoutAnotherAttempt` (2 subtests), `TestPairInvalidOrUnsupportedQRWritesNoCode` (2 subtests), `TestPairRefusedRequestIsNotRetried` | Enter or EOF never retries or starts recovery; pair never reads stdin after a terminal result; exit 1; no code in stdout or stderr |
+| T032 | `internal/wa/logout_test.go` | 4: `TestLogoutIsImmediateOpensNoPairingAndConfirmsCleanup`, `TestLogoutOldGenerationDrainsBeforeNewClient`, `TestLogoutPreservesLateSavedIdentityOfFreshGeneration`, `TestLogoutCleanupFailureBlocksNewGenerationsAndStopsUnsuccessfully` | immediate false status; no unsolicited window or Connect; no generation overlap; a stale logout leaves the fresh identity; a failed cleanup blocks new generations and stop ends unsuccessfully |
+
+**Commands and results.** `go test ./internal/wa -run 'TestLogout|TestPairing' -count=3` passed. `go test ./internal/wa ./cmd/whatsapp-mcp -count=1 -timeout 15m` passed: `internal/wa` 11.0 s, `cmd/whatsapp-mcp` 121.3 s.
+
+**Limits.** The tests were not observed failing first: they cover behaviour that already existed, so they are regression coverage, not tests-first evidence. They use fakes (`qrSession`, `scriptedOwner`), not the simulator or a real store; guarded-store interaction is covered only by the existing simulator logout tests. `TestLogoutOldGenerationDrainsBeforeNewClient` uses real time with a 200 ms negative window, because a request blocked on the retirement's `sync.Once` is not durably blocked for `synctest`. The "recovery input cannot compete with stdio input" clause of T031 is not tested: pair has no recovery prompt after a final timeout. T033-T041 integration is untouched. T049-T051 are not written: they test the scheduler and 405 budget that T052/T053 build and that stay behind the default-deny proof gate.
+
 ## Handoff - 2026-11-06
 
-For a fresh session. Branch `003-whatsapp-pairing-status`; the last feature commit is `51ffbd4` (`feat(status): report the local snapshot offline`); `tasks.md` "Current State (handoff)" lists what is open and in which order. The working tree has two unrelated entries that are not part of this work and must not be committed or reverted by an agent: a modified `.gitignore` and an untracked `.kilo/`.
+For a fresh session. Branch `003-whatsapp-pairing-status`; the last feature commit is `c4fa914` (`test(wa): cover pairing windows, retry gating and logout retirement`), after `51ffbd4` (`feat(status): report the local snapshot offline`) and `a39cf0c` (hook fix); `tasks.md` "Current State (handoff)" lists what is open and in which order. A modified `.gitignore` and an untracked `.kilo/` appeared in the working tree and are not part of this work; an agent must not commit or revert them (check `git status`).
 
 **Where the evidence is (sections above):** default-deny reconnect (T075/T076); 515 source findings and probe; candidate post-pair reconnect against the simulator; 401 matrix; stop and cancel while the Save is held; T068-T073 unsafe-run evidence and its gaps; US3 offline status. Owner reviews table: design PASS at 19b0406, and one **scoped** code row `CONCERNS` at 42ff6f2 for the T077 candidate only. There is no full-branch code review yet, so `gh pr create` must not be used.
 
@@ -446,4 +460,4 @@ For a fresh session. Branch `003-whatsapp-pairing-status`; the last feature comm
 - Real-account behaviour is unverified everywhere: whether the real server sends 515 before or after `PairSuccess`, whether every pairing gets a 515, and the phone-side label. No real-account step is authorized (T062 needs per-step permission).
 - Stale text to fix in T059: `OPERATIONS.md`, `AGENTS.md` "Current state" (also still says feature 003 work is absent), `quickstart.md`.
 
-**Suggested next step for a fresh session:** write the US2 test wave (T030-T032) or ask the user which gate to attack first; do not enable `PostPairReconnect`, do not open a PR, and do not take any real-account action.
+**Suggested next step for a fresh session:** T030-T032 are done (section "US2 Test Wave"); ask the user which gate to attack first (native US1 evidence, the T077 decision, or T049/T051); do not enable `PostPairReconnect`, do not open a PR, and do not take any real-account action.
