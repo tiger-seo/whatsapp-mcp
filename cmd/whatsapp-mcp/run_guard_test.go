@@ -572,3 +572,12 @@ func TestRunGuardUnsafePairRefusesRedirectedInput(t *testing.T) {
 		t.Error("missing offline recovery diagnostic")
 	}
 }
+
+func TestProductionOwnerEnablesPostPairReconnectOnlyForPair(t *testing.T) {
+	if cfg := productionOwnerConfig(ownerDeps{}, nil, nil); !cfg.PostPairReconnect {
+		t.Error("pair must enable the post-pair reconnect")
+	}
+	if cfg := productionOwnerConfig(ownerDeps{shell: true}, nil, nil); cfg.PostPairReconnect {
+		t.Error("the long-running shells must keep the 515 refused")
+	}
+}

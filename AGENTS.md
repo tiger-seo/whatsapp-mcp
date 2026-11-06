@@ -45,8 +45,9 @@ point. What exists:
 
 - `internal/wa`: the connection owner (state, epochs, one attempt at a time, watchdog, pairing windows), the pinned
   whatsmeow session adapter, the version provider, the app-state repair controller (`recovery.go`) and the bounded
-  HTTP client. Every automatic reconnect is denied by default; `OwnerConfig.PostPairReconnect` is false and enabling it
-  is not approved.
+  HTTP client. Every automatic reconnect is denied by default except the one post-pair connection, which `pair` enables
+  (`PostPairReconnect`, approved 2026-11-06; the long-running commands keep it off). It is not yet checked on a real
+  account or code-reviewed.
 - `internal/wasim`: a simulated WhatsApp server and phone for tests only.
 - `internal/store`: the unsafe-run marker (schema 3), repair markers, the read-only `Inspect` view and offline
   recovery. After any production Connect the marker stays unsafe until a separately authorized offline recovery

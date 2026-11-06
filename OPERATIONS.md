@@ -129,7 +129,7 @@ account**, and no check below ran against one.
 - The window ends on success, on the final timeout, on `Ctrl+C` or a stop signal, on closed input (EOF), on a
   failure, or on an unsupported flow (a passkey or phone-code request). **Pressing Enter does nothing**: it never
   retries and never starts recovery.
-- If the scan succeeds but the server then asks for a restart (stream error 515), the follow-up connection is not allowed in this version: `pair` prints "linking could not be completed safely" and exits 1. The phone may show a failure message and list no device (observed once on a real account, see `verification.md`), or it may list a linked device; open Linked devices on the phone and remove any entry by hand before pairing again.
+- After a successful scan the server asks for a restart (stream error 515, seen about 0.6 s after the pair success on a real account). In `pair` only, the owner then makes exactly one follow-up connection to finish the link; the long-running commands never do. If that connection fails or does not happen, `pair` prints "linking could not be completed safely" and exits 1. The phone may show a failure message and list no device (observed once on a real account, see `verification.md`), or it may list a linked device; open Linked devices on the phone and remove any entry by hand before pairing again.
 - After a final timeout, a failure or a cancel, `pair` exits 1. A device may be linked on the phone (check Linked
   devices), so the store stays unsafe (below). Do not just run `pair` again.
 - The QR code appears only on the terminal that ran `pair`. It is never logged, never stored and never in an
@@ -143,7 +143,7 @@ Any attempt to connect to WhatsApp (a startup connect, a pairing window, a faile
 the store marked **unsafe** when the process stops, even after a clean drain. The reason is that the library may
 leave work running that cannot be proven finished. While the marker is unsafe the binary starts no connection and
 no QR window. Automatic reconnects are all denied in this version: there are no startup retries, no 405 retry
-budget and no post-pair reconnect, so a lost connection stays lost: a restart refuses to connect while the marker is unsafe, and you must run offline recovery (below) and pair again.
+budget; the one exception is the single post-pair connection inside `pair`. A lost connection stays lost: a restart refuses to connect while the marker is unsafe, and you must run offline recovery (below) and pair again.
 
 A store from before this feature (schema 1 or 2) is treated as unsafe, not as clean, because its history is
 unknown. A store whose marker is missing or malformed is refused.
@@ -201,7 +201,7 @@ release the store.
 - Automated tests pass on Linux, Windows and macOS runners, including process-kill tests of the markers.
 - **Not checked:** power loss and OS crash; macOS `F_FULLFSYNC` hardware flushes; interactive recovery on a real
   console, Linux terminal or macOS terminal; a kill between pairing and the first save; any real account (whether
-  the server sends a 515 after pairing, whether pairing completes cleanly, what the phone shows).
+  pairing completes on a real account with the post-pair reconnect enabled, what the phone shows).
 - A known upstream gap, E003-RX-01, is open: the WhatsApp library does not bound some receive-side resources.
   It is a temporary exception for private, local use, owned by `tiger-seo`, expiring at the start of 2026-12-02
   UTC, with earlier review before any public release, a relevant upstream fix or a resource incident. See

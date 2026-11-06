@@ -155,14 +155,22 @@ func productionOwner(deps ownerDeps) (*ownerHandle, error) {
 	if ownerSeam != nil && ownerSeam.sessionFactory != nil {
 		sessions = ownerSeam.sessionFactory
 	}
-	owner := wa.NewOwner(wa.OwnerConfig{
+	owner := wa.NewOwner(productionOwnerConfig(deps, provider, sessions))
+	return &ownerHandle{owner: owner}, nil
+}
+
+// productionOwnerConfig is the owner configuration of the shipped binary. The post-pair reconnect
+// (owner decision 2026-11-06, see verification.md "T077 Decision") is enabled for the pair command
+// only: the long-running shells never start a pairing window, so a 515 there stays refused.
+func productionOwnerConfig(deps ownerDeps, provider *wa.VersionProvider, sessions wa.SessionFactory) wa.OwnerConfig {
+	return wa.OwnerConfig{
 		Log:                deps.log,
 		Store:              deps.store,
 		Versions:           provider,
 		Sessions:           sessions,
 		ShellStartupBudget: deps.shell,
-	})
-	return &ownerHandle{owner: owner}, nil
+		PostPairReconnect:  !deps.shell,
+	}
 }
 
 // newOwner builds the owner; tests replace this factory.
