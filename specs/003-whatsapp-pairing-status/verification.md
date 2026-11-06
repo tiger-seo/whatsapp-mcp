@@ -402,3 +402,21 @@ Simulator, real pinned client, real owner and guarded store; Windows amd64, Go 1
 | Cancel the window while the Save is held (`TestSimulatorCancelWindowWhileSaveHeldMakesNoConnect`) | Window result cancelled; after release 1 dial, never connected; after stop the marker is unsafe and the chat is kept |
 
 **Limits.** These hold the guarded Save, not an arbitrary pinned node handler: the pinned handlers that could be held across Disconnect are short, and the pair-success work is the only detached one on this path. Removing one cancellation call in the owner's retirement (`gen.cancel()`) did not fail the stop test, because the stop path cancels the Save through more than one route; the test therefore shows the behaviour, not that single call. The unjoined `sendUnifiedSession` and queue-overflow goroutines remain unmeasured. T077 stays open; `PostPairReconnect` stays false.
+
+## US3 Offline Status (T042-T048) - 2026-11-06
+
+Windows 10 amd64 native and WSL2 Ubuntu (not native Linux), Go 1.27.3, `CGO_ENABLED=0`. Synthetic storage only; no account, no network.
+
+**Tests first.** Each wave was run red before its implementation: `TestInspect*` against a stub (all failing), `TestStatus*` against the old stub (every case failing), `AcquireExisting` tests before the function existed (compile failure, so not a meaningful failing case).
+
+**Implemented.** `lock.AcquireExisting` (no-create, same link/regular-file/same-file rules, `fs.ErrNotExist` when absent). `store.Inspect` and `store.ArtifactsPresent` (artifact, header and version checks, then one read-only committed view for the marker, identity presence and repair markers; `preflight` now shares its view helper). `status` splits configuration loading from directory preparation and prints the four fields. CI's privacy step now seeds a `mktemp -d` directory with the offline seed helper and runs `status` on it, instead of expecting `status` to create a directory and fail.
+
+| Check | Result |
+| --- | --- |
+| `go test ./internal/lock ./internal/store ./cmd/...` (Windows) | PASS; `internal/store` 264 s, `cmd/whatsapp-mcp` 118 s; `go vet ./...` and `gofmt` clean |
+| Same status, inspect and lock tests under WSL2 | PASS (17 cmd tests; `TestInspect*`, `TestPreflight*`, `AcquireExisting` also PASS) |
+| Inspect (12 tests) on closed and log-only copies | absent dir, empty dir and unrelated file give the empty snapshot and create nothing; paired and unpaired clean schema 3; unsafe marker; schema 1/2 reported as legacy and unsafe, not clean, without upgrading; missing or malformed marker is `ErrUnsafeStorage`; pending repair reported, not run; schema too new or invalid, not a database, truncated, orphan `-wal`/`-shm` and rollback journal refused; cancelled context; every case compares full file state before and after |
+| Status (11 tests) | missing directory exit 0 and not created; empty directory exit 0 and no lock file created; saved identity exit 0 with the offline-credentials warning on stderr; unsafe and legacy exit 1 with the four honest fields and an offline-recovery warning; marker, corruption, orphan, journal and schema refusals exit 1 and change nothing; a held lock exits 1 with the holder PID, before or after the database exists, without reading the database; a present database with no lock file uses the normal lock; usage errors exit 2 and an unusable directory exit 1; the owner and discovery seams fail the test on any account or network use (none triggered) |
+| Replaced stub expectations (T047) | five `cli`, `store` and `e2e` tests asserted "not implemented" or exit 1 and now assert the real contract |
+
+**Limits.** The swapped-handle case from T042 (a file replaced between the lstat and the view) has no test: the existing identity comparison is reused, not exercised. `status` takes the owner lock, so a running pair, stdio or serve makes it exit 1 by design. Legacy detection treats any message schema below 3 as unknown. Windows and WSL2 only; no macOS. `OPERATIONS.md`, `AGENTS.md` and the quickstart still describe the old stub (T059).

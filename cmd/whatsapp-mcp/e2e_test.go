@@ -199,8 +199,8 @@ func TestProcessSingleInstance(t *testing.T) {
 
 	status := start(t, false, env, "status", "--data-dir", dir)
 	status.expectExit(t, exitError, 5*time.Second)
-	if !strings.Contains(status.stderr.String(), "status is not implemented yet") {
-		t.Errorf("status: stderr = %q", status.stderr)
+	if !strings.Contains(status.stderr.String(), held) {
+		t.Errorf("status: stderr = %q, want %q", status.stderr, held)
 	}
 
 	other := start(t, true, env, "stdio", "--data-dir", dir+"-b")

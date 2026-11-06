@@ -27,6 +27,19 @@ type Inspection struct {
 	RepairPending bool
 }
 
+// ArtifactsPresent reports whether the database or any of its sidecars exists, using only lstat. It
+// reads no file, so status can decide whether anything needs the owner lock before touching it.
+func ArtifactsPresent(dataDir string) (bool, error) {
+	for _, p := range artifactNames(filepath.Join(dataDir, dbFileName)) {
+		if _, err := os.Lstat(p); err == nil {
+			return true, nil
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return false, ioError("io")
+		}
+	}
+	return false, nil
+}
+
 // markerSchema is the first message schema that records the unsafe-run marker.
 const markerSchema = 3
 

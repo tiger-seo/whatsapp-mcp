@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/tiger-seo/whatsapp-mcp/internal/buildinfo"
 	"github.com/tiger-seo/whatsapp-mcp/internal/config"
 	"github.com/tiger-seo/whatsapp-mcp/internal/lock"
+	"github.com/tiger-seo/whatsapp-mcp/internal/private"
 	"github.com/tiger-seo/whatsapp-mcp/internal/store"
 	"github.com/tiger-seo/whatsapp-mcp/internal/wa"
 )
@@ -29,12 +31,87 @@ func runVersion(cmd *command, args []string, s *streams) int {
 	return exitOK
 }
 
+// runStatus prints the offline local snapshot. It never connects, discovers a version, pairs,
+// migrates or repairs, and it creates nothing for storage that does not exist.
 func runStatus(cmd *command, args []string, s *streams) int {
-	_, _, code, ok := startup(cmd, args, s)
+	cfg, _, code, ok := loadStartup(cmd, args, s)
 	if !ok {
 		return code
 	}
-	return notImplemented(cmd, s)
+	snap, code, ok := statusSnapshot(cfg, s)
+	if !ok {
+		return code
+	}
+	fmt.Fprintf(s.stdout, "connected: false\nlogged_in: %t\npairing_required: false\nwa_version: %s (bundled; not refreshed)\n",
+		snap.IdentityPresent, wa.BundledVersion())
+	if snap.IdentityPresent {
+		fmt.Fprintln(s.stderr, "Offline snapshot; saved credentials have not been verified with WhatsApp.")
+	}
+	if snap.Unsafe {
+		fmt.Fprintln(s.stderr, "whatsapp-mcp: status: the storage is in an unsafe or unknown run state; offline recovery is required before any connection (start it with pair)")
+		return exitError
+	}
+	return exitOK
+}
+
+// statusSnapshot observes the local storage. Absent storage is the empty snapshot and creates
+// nothing. A lock held by another process is reported with its PID and the database is not read.
+// Present storage is inspected under the normal owner lock, taken without creating a lock file
+// unless a database already exists.
+func statusSnapshot(cfg *config.Config, s *streams) (store.Inspection, int, bool) {
+	dir := cfg.DataDir
+	fail := func(err error) (store.Inspection, int, bool) {
+		var he *lock.HeldError
+		if !errors.As(err, &he) {
+			var de *config.DataDirError
+			if !errors.As(err, &de) && !errors.Is(err, store.ErrUnsafeStorage) && !isStoreError(err) {
+				err = &config.DataDirError{Dir: dir, Err: err}
+			}
+		}
+		fmt.Fprintln(s.stderr, config.FormatError(err))
+		return store.Inspection{}, exitError, false
+	}
+	if _, err := os.Stat(dir); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return store.Inspection{}, exitOK, true
+		}
+		return fail(&config.DataDirError{Dir: dir, Err: err})
+	}
+	if err := private.CheckDir(dir); err != nil {
+		return fail(&config.DataDirError{Dir: dir, Err: err})
+	}
+	l, err := lock.AcquireExisting(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		present, perr := store.ArtifactsPresent(dir)
+		if perr != nil {
+			return fail(perr)
+		}
+		if !present {
+			return store.Inspection{}, exitOK, true
+		}
+		// A database without a lock file: take the normal lock, which only adds lock metadata.
+		l, err = lock.Acquire(dir)
+	}
+	if err != nil {
+		return fail(err)
+	}
+	defer l.Release()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	snap, err := store.Inspect(ctx, dir)
+	if err != nil {
+		fmt.Fprintln(s.stderr, "whatsapp-mcp: "+err.Error())
+		return store.Inspection{}, exitError, false
+	}
+	return snap, exitOK, true
+}
+
+// isStoreError reports whether err is one of the store's own classified errors, which carry their
+// own text.
+func isStoreError(err error) bool {
+	var se *store.StorageError
+	var sc *store.SchemaError
+	return errors.As(err, &se) || errors.As(err, &sc)
 }
 
 // ownerDeps carries what the owner construction needs from the running command.
@@ -417,6 +494,20 @@ func notImplemented(cmd *command, s *streams) int {
 // startup parses the flags, loads and validates the configuration, builds the logger and prepares the
 // data directory. When ok is false the command must return code at once.
 func startup(cmd *command, args []string, s *streams) (cfg *config.Config, logger *slog.Logger, code int, ok bool) {
+	cfg, logger, code, ok = loadStartup(cmd, args, s)
+	if !ok {
+		return nil, nil, code, false
+	}
+	if err := config.PrepareDataDir(cfg.DataDir); err != nil {
+		fmt.Fprintln(s.stderr, config.FormatError(err))
+		return nil, nil, exitError, false
+	}
+	return cfg, logger, exitOK, true
+}
+
+// loadStartup parses the flags, loads and validates the configuration and builds the logger. It
+// does not touch the data directory.
+func loadStartup(cmd *command, args []string, s *streams) (cfg *config.Config, logger *slog.Logger, code int, ok bool) {
 	flags, code, ok := parseFlags(cmd, args, s)
 	if !ok {
 		return nil, nil, code, false
@@ -438,10 +529,6 @@ func startup(cmd *command, args []string, s *streams) (cfg *config.Config, logge
 	}
 	for _, attrs := range cfg.LogValues() {
 		logger.LogAttrs(context.Background(), slog.LevelDebug, "config", attrs...)
-	}
-	if err := config.PrepareDataDir(cfg.DataDir); err != nil {
-		fmt.Fprintln(s.stderr, config.FormatError(err))
-		return nil, nil, exitError, false
 	}
 	return cfg, logger, exitOK, true
 }

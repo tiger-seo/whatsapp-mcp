@@ -67,8 +67,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           go build -o "$RUNNER_TEMP/whatsapp-mcp" ./cmd/whatsapp-mcp
-          dir=$(mktemp -u /tmp/whatsapp-mcp-data.XXXXXX)
-          "$RUNNER_TEMP/whatsapp-mcp" status --data-dir "$dir" && exit 1
+          go build -o "$RUNNER_TEMP/seed" ./internal/store/testdata/cmd/seed
+          # status is offline and creates nothing, so the directory is made private first (mktemp -d is 0700)
+          # and filled with synthetic data by the offline seed helper; no WhatsApp account is involved.
+          dir=$(mktemp -d /tmp/whatsapp-mcp-data.XXXXXX)
+          "$RUNNER_TEMP/seed" -dir "$dir" -n 10
+          "$RUNNER_TEMP/whatsapp-mcp" status --data-dir "$dir"
           echo 'log_level = "info"' > "$dir/config.toml"
           ls -ld "$dir"
           if sudo -u nobody ls "$dir" >/dev/null 2>&1; then echo "::error::nobody can list $dir"; exit 1; fi

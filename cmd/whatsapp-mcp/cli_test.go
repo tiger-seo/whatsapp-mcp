@@ -136,13 +136,28 @@ var logLine = regexp.MustCompile(`^time=\S+ level=(DEBUG|INFO|WARN|ERROR) msg=`)
 
 func checkLogLines(t *testing.T, r result) {
 	t.Helper()
+	checkStderrLogLines(t, r)
+	if r.stdout != "" {
+		t.Errorf("stdout = %q, want empty", r.stdout)
+	}
+}
+
+func checkStderrLogLines(t *testing.T, r result) {
+	t.Helper()
 	for _, line := range strings.Split(strings.TrimSuffix(r.stderr, "\n"), "\n") {
 		if strings.HasPrefix(line, "time=") && !logLine.MatchString(line) {
 			t.Errorf("malformed log line %q", line)
 		}
 	}
-	if r.stdout != "" {
-		t.Errorf("stdout = %q, want empty", r.stdout)
+}
+
+// checkStatusOutput checks a successful status on empty storage: well-formed log lines on stderr and
+// only the four snapshot fields on stdout.
+func checkStatusOutput(t *testing.T, r result) {
+	t.Helper()
+	checkStderrLogLines(t, r)
+	if r.stdout != wantStatus(false) {
+		t.Errorf("stdout = %q, want %q", r.stdout, wantStatus(false))
 	}
 }
 
@@ -162,21 +177,21 @@ func TestConfigLayers(t *testing.T) {
 	env := []string{"WHATSAPP_MCP_LOG_LEVEL=info"}
 
 	r := runIn(t, env, "status", "--data-dir", dir, "--log-level", "debug")
-	r.expect(t, exitError)
+	r.expect(t, exitOK)
 	if !strings.Contains(r.stderr, "level=DEBUG msg=config setting=log_level value=debug source=flag origin=--log-level") {
 		t.Errorf("no debug dump for log_level:\n%s", r.stderr)
 	}
 	if !strings.Contains(r.stderr, "msg=config setting=data_dir value="+dir+" source=flag origin=--data-dir") {
 		t.Errorf("no debug dump for data_dir:\n%s", r.stderr)
 	}
-	checkLogLines(t, r)
+	checkStatusOutput(t, r)
 
 	r = runIn(t, env, "status", "--data-dir", dir)
-	r.expect(t, exitError)
+	r.expect(t, exitOK)
 	if strings.Contains(r.stderr, "level=DEBUG") {
 		t.Errorf("debug lines at level info:\n%s", r.stderr)
 	}
-	checkLogLines(t, r)
+	checkStatusOutput(t, r)
 }
 
 func TestInvalidConfiguration(t *testing.T) {
@@ -195,22 +210,19 @@ func TestInvalidConfiguration(t *testing.T) {
 
 func TestUnknownVariableWarning(t *testing.T) {
 	r := runIn(t, []string{"WHATSAPP_MCP_LOGLEVEL=debug"}, "status", "--data-dir", privateDir(t))
-	r.expect(t, exitError)
+	r.expect(t, exitOK)
 	if !strings.Contains(r.stderr, `level=WARN msg="unknown environment variable" name=WHATSAPP_MCP_LOGLEVEL`) {
 		t.Errorf("no warning:\n%s", r.stderr)
 	}
-	checkLogLines(t, r)
+	checkStatusOutput(t, r)
 }
 
 func TestStatusDataDir(t *testing.T) {
 	nested := filepath.Join(t.TempDir(), "a", "b")
 	r := runIn(t, nil, "status", "--data-dir", nested)
-	r.expect(t, exitError)
-	if !strings.Contains(r.stderr, "whatsapp-mcp: status is not implemented yet") {
-		t.Errorf("stderr = %q", r.stderr)
-	}
-	if fi, err := os.Stat(nested); err != nil || !fi.IsDir() {
-		t.Errorf("data directory not created: %v", err)
+	r.expect(t, exitOK)
+	if _, err := os.Stat(nested); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("status created the data directory (stat: %v)", err)
 	}
 
 	cwd := t.TempDir()
@@ -255,10 +267,11 @@ func TestLockHeld(t *testing.T) {
 			t.Errorf("%s: stderr = %q, want %q", name, r.stderr, want)
 		}
 	}
+	// Status reports the holder like the other commands and does not inspect the storage.
 	r := runIn(t, nil, "status", "--data-dir", dir)
 	r.expect(t, exitError)
-	if !strings.Contains(r.stderr, "status is not implemented yet") {
-		t.Errorf("status was blocked by the lock: %q", r.stderr)
+	if !strings.Contains(r.stderr, want) {
+		t.Errorf("status: stderr = %q, want %q", r.stderr, want)
 	}
 	if err := l.Release(); err != nil {
 		t.Fatal(err)
