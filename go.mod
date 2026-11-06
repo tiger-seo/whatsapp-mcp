@@ -11,7 +11,7 @@ require (
 	go.mau.fi/libsignal v0.2.2
 	go.mau.fi/util v0.11.0
 	go.mau.fi/whatsmeow v0.0.0-20261027104441-1eec1136a50b
-	golang.org/x/crypto v0.58.0
+	golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2
 	golang.org/x/sys v0.49.0
 	golang.org/x/text v0.43.0
 	google.golang.org/protobuf v1.36.12
