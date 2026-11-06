@@ -520,6 +520,20 @@ One run of the shipped binary (`a24f15d` plus uncommitted test files, `pair --lo
 
 **Wording fixed.** The earlier claim that the device "may be linked on the phone" was too strong for this case; the `pair` message and `OPERATIONS.md` now say the phone may show a failure or a linked device and to check Linked devices.
 
+## T077 Decision (drafted, awaiting owner approval) - 2026-11-06
+
+**Status.** Drafted from the owner-judge design review and the first real pair run. Saved at the owner's request. **Not approved:** `OwnerConfig.PostPairReconnect` stays false in production until the owner approves it.
+
+**Proposed decision.** Enable `PostPairReconnect` in production for a fresh pairing window only, as a code-level switch rather than a setting. Reason: the real server sent 515 about 0.6 s after `PairSuccess` and, with the follow-up connection denied, linking failed, so this build cannot deliver a working pairing. The candidate makes exactly one owner-initiated Connect on the same generation under the existing attempt slot and 30-second watchdog; a failed or stalled reconnect is final.
+
+**Unchanged.** Startup retries, 405 and ordinary reconnect stay denied. Any production Connect, this one included, leaves the run marker unsafe, so a completed link needs a separately authorized offline recovery before the next run; `pair` exits 0 with the recovery notice. No session reuse and no same-process re-pair.
+
+**Accepted residual risk (if approved).** Unjoined `sendUnifiedSession` and queue-overflow goroutines and any node handler that outlives 10 x 30 s can still deliver a late send into the reconnected generation. Not proven: a held pinned node handler or `LoggedOut` dispatch across Disconnect and retry, the full cancel, retire and stop matrix with the real client, any Linux or macOS run. The simulator is this repository's own model, not evidence about WhatsApp.
+
+**Conditions.** (1) Re-run the real `pair` check only with the owner's permission for each step and record it. (2) A fresh owner code review of the enabled path before any PR; the current scoped row is CONCERNS at 42ff6f2. (3) If the real reconnect fails or the review blocks it, set the switch back to false and close 003 without working pairing.
+
+**Tech debt.** Recorded in `docs/backlog/003-post-pair-reconnect-and-unsafe-marker.md` (local, `docs/` is not tracked): the unjoined upstream work, no reusable session (blocks feature 004's real-account test), thin evidence, and the switch itself.
+
 ## T036 Detached Key Request (part) - 2026-11-06
 
 Windows 10, `CGO_ENABLED=0`. New file `internal/wa/repair_keyreq_test.go` (3 tests) and a small test-only hook in `internal/wasim/conn.go` (`Conn.SetIQHandler`, so a test can answer one client IQ instead of the automatic empty result).
