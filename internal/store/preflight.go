@@ -53,12 +53,23 @@ type preflightResult struct {
 // so no file is created, changed or deleted. known is the identity of each artifact checkArtifacts saw; the files
 // the view opened must be the same ones. latest is the newest bundled message migration.
 func preflight(ctx context.Context, path string, known map[string]private.FileID, latest int) (res preflightResult, err error) {
+	err = withCommittedView(ctx, path, known, func(db *sql.DB) error {
+		var verr error
+		res, verr = readVersions(ctx, db, latest)
+		return verr
+	})
+	return res, err
+}
+
+// withCommittedView opens the committed view of the database at path, checks that it is the same files
+// checkArtifacts saw, and runs fn on a single read-only connection. Nothing is created, changed or deleted.
+func withCommittedView(ctx context.Context, path string, known map[string]private.FileID, fn func(*sql.DB) error) (err error) {
 	dsn, release, ids, err := openCommittedViewIDs(path)
 	if err != nil {
 		if errors.Is(err, ErrNotDatabase) {
-			return res, notDatabase(path)
+			return notDatabase(path)
 		}
-		return res, ioError("io")
+		return ioError("io")
 	}
 	defer func() {
 		if rerr := release(); rerr != nil && err == nil {
@@ -66,28 +77,27 @@ func preflight(ctx context.Context, path string, known map[string]private.FileID
 		}
 	}()
 	if !sameFile(known, path, ids.main, true) || !sameFile(known, path+"-wal", ids.wal, ids.hasWAL) {
-		return res, unsafeStorage(path, "unsafe_artifact", "was replaced while the store was opening; startup stopped before any change", recoverySectionFix)
+		return unsafeStorage(path, "unsafe_artifact", "was replaced while the store was opening; startup stopped before any change", recoverySectionFix)
 	}
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		return res, ioError("io")
+		return ioError("io")
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 
-	res, err = readVersions(ctx, db, latest)
-	if err != nil {
+	if err = fn(db); err != nil {
 		if sqliteCode(err) != 0 {
 			if mapped := mapDriverError(err); errors.Is(mapped, ErrNotDatabase) {
-				return res, notDatabase(path)
+				return notDatabase(path)
 			} else {
-				return res, mapped
+				return mapped
 			}
 		}
-		return res, err
+		return err
 	}
-	return res, nil
+	return nil
 }
 
 // sameFile checks one file the view opened against the identity recorded earlier. A file that existed at the check
