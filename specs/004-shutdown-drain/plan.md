@@ -101,10 +101,12 @@ internal/wa/
 ├── session.go           # fenced HTTP clients for every generation; retire order; late-call and dropped-event counts; QuietStop
 ├── owner.go             # retireGeneration(deadline); fresh-client post-pair path; switch removed; events
 ├── pairing.go           # end the window's QR context before retiring the pairing generation
-├── fence_test.go, quiet_test.go, quiet_wasim_test.go, quiet_measure_test.go (spike), owner_postpair_test.go (rewritten)
-└── testdata/cmd/session-check/main.go   # drop the PostPairReconnect field
+├── fence_test.go, quiet_test.go, quiet_order_test.go, wasim_quiet_test.go, quiet_measure_test.go (spike),
+│   owner_quiet_test.go, quiet_secrecy_test.go, owner_postpair_test.go (rewritten)
+└── testdata/cmd/session-check/          # drop the PostPairReconnect field; rewrite its tests (outside ./...)
 internal/store/
-├── device.go            # refusal count at every ErrRetired site; DeviceBarrier.Refused
+├── device.go            # the refusal counter on the device session, counted at every guard and context failure
+├── repair.go            # DeviceBarrier.MarkRetiring and DeviceBarrier.Refused, beside StorageFault
 └── device_refused_test.go
 cmd/whatsapp-mcp/
 ├── commands.go          # remove PostPairReconnect; pair, stdio and serve messages per contracts/cli.md
@@ -119,14 +121,19 @@ observes. The store change is one counter in `internal/store`. No new package.
 
 1. **Setup and gates.** Record the E003-RX-01 facts and obtain the owner's decision on whether it covers this
    feature (research R10). Confirm that §8.11 carries the 2026-11-07 decision.
-2. **Measurement spike (test-only).** Build the fence, the store counts, the late-call and dropped-event counts and
-   the observation without wiring them to the marker. Measure on the simulator (quickstart §1), driving the new retire
-   order at the 515 for the pairing case, and record how many simulator-server goroutines the package rule counts.
+2. **Pieces, production retirement order and measurement spike.** Build the fence, the store counts, the late-call
+   and dropped-event counts and the observation. Put the production retirement order of `contracts/quiet-stop.md` in
+   place: the two contexts, the fence between Disconnect and the barrier, and the pairing window ended at
+   retirement. None of this is wired into the marker, so the outcome stays as in feature 003. Then measure that
+   production order on the simulator (quickstart §1), retiring the pairing generation at the 515, and record how many
+   simulator-server goroutines the package rule counts.
    **Gate:** the owner approves `quietStopDeadline` and `postPairQuietDeadline` together with the total stop budget
    against the 10 s bound in `verification.md`; if a kind is under 90%, the owner decides first.
 3. **US1: stop and reuse.** Wire `QuietStop` into `retireGeneration` and `finishStop`. Remove the
    `UpstreamDrainUnproven` latch. Write tests first for every reason category, the late-logout regression, a held
-   pinned handler, the order invariant, an unresolved pairing and low disk.
+   pinned handler, an unresolved pairing and low disk. Until US2, a `pair` run that used the same-client post-pair
+   reconnect keeps the marker unsafe whatever its check shows (invariant I3), so the interim state never clears it on
+   the replaced path.
 4. **US2: fresh-client post-pair reconnect.** Rewrite the post-pair path (contract, owner use) and remove the switch
    from the owner, the commands and the helper. Write tests first: injected late sends, a late `Disconnect` from the
    pairing tail or QR emitter, saved-identity payload and selected version, the 515 waiting for `PairSuccess`, a

@@ -23,6 +23,9 @@ deletion, and low-disk admission for the clear.
 `stop_bound_exceeded`, `observation_incomplete`, `observation_error`. No field carries dump text, function names, argument values, keys, QR material or account
 identifiers, at any log level.
 
+On stderr, the human line names the category only; the counts are in the `quiet_stop_failed` event, which is also on
+stderr. Together they are the stop diagnostic of spec User Story 3.
+
 ## pair
 
 | Situation | Exit | stderr (human line) | Marker after |

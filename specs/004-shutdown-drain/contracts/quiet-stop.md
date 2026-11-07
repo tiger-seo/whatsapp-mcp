@@ -2,7 +2,7 @@
 
 Internal contract between the connection owner (`internal/wa/owner.go`), the session adapter
 (`internal/wa/session.go`), the network fence (`internal/wa/fence.go`), the observation (`internal/wa/quiet.go`) and
-the store's device barrier (`internal/store/device.go`). It replaces, for the post-pair reconnect and for clearing the
+the store's device barrier (`internal/store/device.go`, with `MarkRetiring` and `Refused` in `internal/store/repair.go`). It replaces, for the post-pair reconnect and for clearing the
 marker, feature 003's rule that no Connect may follow the retirement of an unproven generation
 (`specs/003-whatsapp-pairing-status/contracts/connection-owner.md`, proof gate). Every other rule of that contract
 stands.
@@ -46,9 +46,11 @@ counted (step 2), so the separation is a speed measure and the count is the safe
    (`owner_drain_failed`, unsafe).
 9. Cancel the library context (the generation lifetime). Storage is already blocked, so a handler that is released
    now can only be refused and counted.
-10. **Observe** with `min(approved deadline, remaining stop bound)` (see "Stop bound"). Poll the bounded goroutine
-    dump until two observations at least `quietObservationGap` apart both show zero client-library goroutines after
-    removing allow-listed work, or until that deadline.
+10. **Observe** with `min(approved deadline, remaining stop bound)` (see "Stop bound"). The deadline counts from the
+    start of this step, after the barrier has drained and the library context is cancelled; the result's `Duration`
+    still covers the whole retirement from step 1. Poll the bounded goroutine dump until two observations at least
+    `quietObservationGap` apart both show zero client-library goroutines after removing allow-listed work, or until
+    that deadline.
 11. Decide the `QuietStopResult` (data model) and remove the event handler.
 12. `FinishRevocation` and the storage-fault check, as in feature 003.
 
@@ -78,7 +80,7 @@ The owner receives the shutdown bound (10 s, the same constant the lifecycle use
 `BeginStop`. The decision at step 11 is a failure with reason `stop_bound_exceeded` if the bound has already passed,
 and the observation deadline is capped at the remaining time. The marker is never cleared after the bound: the
 lifecycle reports `shutdown timed out` and exit 1 in that case, so a clean marker would contradict it. Steps 6 and 8
-already take up to 5 s and 10 s in the worst case; the owner's approval of the deadlines (task T014) states the
+already take up to 5 s and 10 s in the worst case; the owner's approval of the deadlines (task T019) states the
 total budget.
 
 The post-pair handover is not part of the shutdown bound. A stop signal that arrives during it enters `finishStop`
@@ -118,7 +120,9 @@ The result is a value. It never holds a reference to the dump, the client or the
 
 - I1: No retired generation's dial or write reaches the network after its fence closed.
 - I2: No guarded storage call of a retired generation runs after its barrier drained.
-- I3: Within one process, a fresh generation exists only after the previous generation's check passed.
+- I3: Within one process, a fresh generation exists only after the previous generation's check passed. While feature
+  003's same-client post-pair reconnect still exists (between the US1 and US2 tasks), a generation that used it keeps
+  the marker unsafe whatever its check shows.
 - I4: A clean marker is written only after every checked generation of the run passed, within the stop bound, and
   never while a check is pending.
 - I5: The dump stays inside `quiet.go`. Nothing derived from it except counts and the reason leaves the function.
@@ -137,4 +141,4 @@ The result is a value. It never holds a reference to the dump, the client or the
   `Disconnect`, or a late store call after the barrier.
 - The production observation is always `runtime.Stack`. Tests must not replace it in the simulator suites that
   measure the pass rate. The simulator runs in the same process, so its own websocket server goroutines match the
-  package rule; the measurement records how many and the owner decides at T014 how to treat them (research R6).
+  package rule; the measurement records how many and the owner decides at T019 how to treat them (research R6).
