@@ -106,7 +106,13 @@ rejected because the close frame would be counted and the fence could not tell i
   a stale lease and any other guard error, at every site (admission, `Save`, deferred `Delete`, nested and repair
   paths). A result that the database itself returns (for example "not found") is not counted.
   `DeviceBarrier.Refused()` reads the count.
-- **Two contexts.** The program's own work (a Connect that has not returned, the repair pass, the pairing window) is
+- **Three contexts.** The stop signal cancels the owner context (`o.ctx`) through `BeginStop` (`owner.go:460`), and every
+  generation lifetime is its child (`owner.go:222`), so the stop signal itself cancelled the library context before
+  retirement. The library context (`BackgroundEventCtx` and the parent of the attempt context) is therefore created
+  from `context.WithoutCancel(o.ctx)`; the program's own work (the abort of an unreturned Connect, the QR channel at
+  `pairing.go:174`, the repair pass at `owner.go:922`) uses a separate work context; the attempt context is cancelled by
+  the work context or a watchdog only until `ConnectContext` returns. `BeginStop` calls `MarkRetiring()` first. The
+  program's own work (a Connect that has not returned, the repair pass, the pairing window) is
   cancelled at the start of retirement. The library context of a Connect that has returned is cancelled only after
   the fence and the barrier (contract steps 7-9).
 - **Calls.** The session counts every call to it from the program's own code after the retire bit is set (Connect, QR
@@ -222,8 +228,9 @@ condition before the existing clear.
   - linked and failed: exit 0 with the existing recovery notice (owner decision 516648b);
   - incomplete link: exit 1, unchanged.
 - New log events: `quiet_stop_passed` (info) and `quiet_stop_failed` (error), with a category and counts.
-- A check that finishes after the 10 s shutdown bound fails with `stop_bound_exceeded`; the lifecycle's exit 1 and the
-  unsafe marker then agree.
+- A check whose decision comes after the 10 s shutdown bound fails with `stop_bound_exceeded`, so a late decision never
+  clears the marker. A passed decision inside the bound can still be followed by `shutdown timed out` and exit 1 with a
+  clean marker; that is safe.
 
 Details are in `contracts/cli.md`.
 

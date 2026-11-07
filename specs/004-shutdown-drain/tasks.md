@@ -76,7 +76,7 @@ No commit carries attribution lines.
 - [ ] T010 In `internal/wa/session.go`:
   - build the three fenced HTTP clients for every generation from the library defaults (or the injected `SessionConfig.PreLoginHTTP` and `WebsocketHTTP`), and install them with `SetWebsocketHTTPClient`, `SetPreLoginHTTPClient` and `SetMediaHTTPClient` (research R3);
   - keep the event handler registered after the retire bit is set, and change `finishRetire` so the handler is removed only when the check ends (research R4);
-  - add the atomic counter `droppedEvents`: every event that `Session.handleEvent` would have forwarded to the owner and dropped after the retire bit, except `Disconnected`. Read the forwarded set from `handleEvent`. The library's `Disconnect` emits no event, a remote `Disconnected` after the 515 is expected, and receipts and presence carry no owner state;
+  - add the atomic counter `droppedEvents`: every event that `Session.handleEvent` would have forwarded to the owner and dropped after the retire bit, except a disconnect (the raw `Disconnected` event and the `SessionDisconnected` that `handleEvent` maps from it or from `StreamReplaced`). Read the forwarded set from `handleEvent`. The library's `Disconnect` emits no event, a remote `Disconnected` after the 515 is expected, and receipts and presence carry no owner state;
   - add the atomic counter `lateCalls`: every call from the program's own code to the session after the retire bit (`Connect`, which today returns `ErrSessionRetired` uncounted, `GetQRChannel`, `RunRepairs`/`fetchAppState` and `Disconnect`), except the retirement sequence's own Disconnect, which uses an internal method. `GetQRChannel` and `RunRepairs` gain the generation check they lack.
 
   Write the tests first in `internal/wa/session_test.go`:
@@ -105,8 +105,10 @@ No commit carries attribution lines.
   - assert the sequence of `contracts/quiet-stop.md`: program work cancelled, Disconnect, fence close, store barrier retire, library context cancel, observe, event handler removal;
   - assert that the store is never blocked while the fence is open, and that the library context is not cancelled before the barrier has drained;
   - make the test fail when the fence and barrier steps are swapped or the library cancel moves earlier, with negative variants through a test seam that expect the order check to report a violation;
-  - the lost-write case: a pinned handler that has committed a decrypt transaction and is about to store an app-state key or sender key when the stop begins completes that write (its context is not cancelled), the key is in the store afterwards, and the check passes;
-  - the control case: when the context is cancelled first, the same write fails with `context.Canceled`, which is counted and fails the check with `storage_refused`.
+  - the lost-write case, driven through the real stop entry and not by calling `retireGeneration` directly: a pinned handler that has committed a decrypt transaction and is about to store an app-state key or sender key when the stop signal arrives (the owner is started with a context that the test cancels, so `BeginStop` calls `o.cancel()`). The handler's context is not cancelled, it completes the write, the key is in the store afterwards, and the check passes;
+  - the same case for the connect watchdog: `ConnectContext` has returned, no connected event arrives, the 30-second watchdog fires (fake time). The watchdog disconnects and does not cancel the handler context, a handler writing in the gap completes, and nothing is lost;
+  - the control cases: when the library context is cancelled first (by the owner context or by the watchdog), the same write fails with `context.Canceled`, which is counted from the first cancellation and fails the check with `storage_refused`;
+  - a Connect that has not returned is still aborted promptly by the stop signal, the work context and the watchdog, and that cancellation starts the count.
 - [ ] T014 [P] Write the pairing-window case in `internal/wa/pairing_test.go`: retiring a generation with an active or just-succeeded pairing window ends the window's QR channel context at contract step 3, before Disconnect. The window's diagnostics and its unresolved-pairing accounting are unchanged, and no QR emitter goroutine of that window is left at the observation.
 - [ ] T015 In `internal/wa/session.go` make `Retire` follow contract steps 2 and 6–8:
   - set the retire bit and call `DeviceBarrier.MarkRetiring()` first;
@@ -115,13 +117,15 @@ No commit carries attribution lines.
   - then retire the store barrier.
 
   Each step runs in that order and only that order. The existing `Retire` and `finishRetire` remove the event handler first, then disconnect and retire the barrier: insert the fence close between them, and keep the handler until the check ends. Keep the existing context and the 10-second stop bound. Make the session-level part of T013 pass.
-- [ ] T016 In `internal/wa/owner.go` separate the two contexts of `contracts/quiet-stop.md`. Today `gen.cancel()` runs first (`retireGeneration`, near line 530), and `attemptCtx` derives from `gen.lifetime` (near line 710) and is the context the library gives its node handlers.
-  - Give the program's own work (a Connect that has not returned, the repair pass, the pairing window) a context cancelled at the start of retirement.
-  - Keep the library context (the lifetime used as `BackgroundEventCtx`, and the handler context after Connect has returned) uncancelled until the barrier has drained (step 9).
+- [ ] T016 In `internal/wa/owner.go` and `internal/wa/pairing.go` separate the three contexts of `contracts/quiet-stop.md`. Today `gen.lifetime` is a child of the owner context (`o.ctx`, near line 222), `BeginStop` cancels it (near line 460), `retireGeneration` calls `gen.cancel()` first (near line 530), `attemptCtx` derives from `gen.lifetime` (near line 710) and is the context the library gives its node handlers, and the connect and pairing watchdogs cancel it (`owner.go` near 713-726, `pairing.go` near 183-193).
+  - Create `gen.work` as a child of `o.ctx` for the program's own work, and use it for the abort of an unreturned Connect, the pairing window and QR channel (`GetQRChannel`, near `pairing.go:174`) and the repair pass (`RunRepairs`, near `owner.go:922`).
+  - Create `gen.lib` from `context.WithoutCancel(o.ctx)` and use it as the library's `BackgroundEventCtx` and the parent of the attempt context. Only retirement step 9 (and the forced path when the barrier cannot drain) cancels it.
+  - Make the attempt context a child of `gen.lib` and let `gen.work`, the stop signal and the watchdog cancel it only while `ConnectContext` has not returned (`context.AfterFunc`, stopped when it returns). After it returned, a watchdog calls `Disconnect()` and does not cancel the handler context.
+  - Call `MarkRetiring()` on the generation's barrier before the first of: `BeginStop` cancelling `o.ctx`, the start of retirement, and any cancellation of the attempt context.
   - A stop during a Connect that has not returned must still abort it promptly.
 
-  `retireGeneration` keeps its feature-003 signature and outcome in this task (`UpstreamDrainUnproven` still marks unsafe). Make T013 pass.
-- [ ] T017 In `internal/wa/pairing.go` add an explicit way to end the pairing window of a generation: cancel the QR channel context so the emitter goroutine in whatsmeow `qrchan.go` can return. Call it from retirement step 3 of `contracts/quiet-stop.md`, and keep the window's existing diagnostics and unresolved-pairing accounting. Make T014 pass. Record the failing observations of T013 and T014 in the Handoff section of `specs/004-shutdown-drain/verification.md`.
+  `retireGeneration` keeps its feature-003 signature and outcome in this task (`UpstreamDrainUnproven` still marks unsafe). Make T013 pass, including the stop-signal and watchdog cases.
+- [ ] T017 In `internal/wa/pairing.go` add an explicit way to end the pairing window of a generation: cancel the QR channel context (a child of `gen.work`, never of `gen.lib`) so the emitter goroutine in whatsmeow `qrchan.go` can return. Call it from retirement step 3 of `contracts/quiet-stop.md`, and keep the window's existing diagnostics and unresolved-pairing accounting. Make T014 pass. Record the failing observations of T013 and T014 in the Handoff section of `specs/004-shutdown-drain/verification.md`.
 
 ### Measurement spike and owner gate
 
@@ -135,7 +139,7 @@ No commit carries attribution lines.
   Run it as in quickstart §1 (`CGO_ENABLED=0 go test ./internal/wa -run TestQuietStopMeasurement -count=1 -v -timeout 30m`), once natively on Windows and once under WSL2. Paste the tables into `specs/004-shutdown-drain/verification.md` under "Measurement and deadline approval" with commands, dates and exit codes read without a pipe.
 - [ ] T019 **OWNER GATE.** The owner reads the T018 tables and records in `specs/004-shutdown-drain/verification.md` (value, date, evidence):
   - approval of `quietStopDeadline` and `postPairQuietDeadline`;
-  - the total stop budget: `Disconnect` (up to 5 s) plus the barrier drain (up to 10 s) plus the observation, against the 10 s `stopBound`, and what a check that finishes late means (it fails with `stop_bound_exceeded`; the marker stays unsafe; exit 1 as the lifecycle reports);
+  - the total stop budget: `Disconnect` (up to 5 s) plus the barrier drain (up to 10 s) plus the observation, against the 10 s `stopBound`, the reserve left for the steps after the decision (marker write with fsync, refresh wait, store close, lock release), and what a late check means: a decision after the bound fails with `stop_bound_exceeded` and the marker stays unsafe; a passed decision inside the bound may still be followed by `shutdown timed out` and exit 1 with a clean marker, which is safe;
   - how the simulator-server goroutines are treated: accept the measured number, run the simulator out of process, or filter by `internal/wasim` frames in the measurement only (never in production code);
   - if any kind passes under 90%, first the decision whether to keep option A, tune it (including a reviewed allow-list entry with evidence) or move to the fork (SC-005).
 
@@ -167,7 +171,7 @@ No commit carries attribution lines.
   - the check never lengthens the 10-second stop bound for writes (FR-011);
   - a failed check is not a failed shutdown (orderly close, lock released last);
   - the whole stop runs inside the 10 s `stopBound`, and the observation deadline is capped at the time left;
-  - a decision reached after the bound fails with `stop_bound_exceeded`, logs `quiet_stop_failed` and keeps the marker unsafe, so the lifecycle's `shutdown timed out` exit 1 never comes with a clean marker (scenario 6).
+  - a decision reached after the bound fails with `stop_bound_exceeded`, logs `quiet_stop_failed` and keeps the marker unsafe, so a late decision never clears the marker (scenario 6). A passed decision inside the bound followed by `shutdown timed out` and exit 1 with a clean marker is allowed and tested as such.
 - [ ] T021 [P] [US1] Write `internal/wa/wasim_quiet_test.go` (real pinned client, one simulator at a time, outside synctest bubbles):
   - a connected `stdio`-shaped run and a `serve`-shaped run stop and the marker is clear; reopening connects with zero QR codes, zero recoveries and zero registrations (SC-001);
   - a held pinned message handler across retirement fails the check until it returns, and passes only if it made no call after the blocks (scenario 9);
@@ -202,6 +206,7 @@ No commit carries attribution lines.
 - [ ] T025 [US1] In `internal/wa/owner.go` `finishStop` (near line 476):
   - pass `quietStopDeadline` to `retireGeneration`;
   - remove the `UpstreamDrainUnproven` branch (near line 544) and its `upstream_drain_unproven` event;
+  - after `finishStop` retires the current generation and takes the attempt slot, re-read `o.gen` under `o.mu` and retire whatever generation exists, repeating until none is left, and only then release the slot (invariant I9);
   - keep every other clear condition (`unresolved`, `unsafeStop`, `health.StorageFault`, latched-logout cleanup, `ClearRunGuard` low-disk admission) exactly as in the data-model "Run outcome";
   - while the same-client post-pair path still exists, set `unsafeStop` for a generation whose `reconnects > 0` (it made a same-client post-pair reconnect), whatever its check shows. T034 removes this rule together with that path;
   - remove `UpstreamDrainUnproven()` from `Session` (`internal/wa/session.go` near line 170) and its interface assertion, and delete or rewrite the `internal/wa/session_reconnect_test.go` cases that asserted it.
@@ -231,12 +236,13 @@ No commit carries attribution lines.
   - the fresh generation exists only after the previous check passed (I3);
   - the attempt slot is held across retire, load, connect and teardown drain;
   - the recheck-after-disconnect, stop-during-disconnect and recheck-after-slot cases keep their meaning;
-  - after a fresh-client post-pair link and a passed stop, the marker clears (the T025 same-client rule no longer applies).
+  - after a fresh-client post-pair link and a passed stop, the marker clears (the T025 same-client rule no longer applies);
+  - a stop signal at each interleaving, all with `testing/synctest` barriers: during the pairing generation's retirement, between its retirement and the fresh generation's creation, between creation and `ConnectContext`, and during the attempt. In each, no Connect begins after `BeginStop`, every generation that exists is retired and checked (or never connected) before storage closes and the lock is released, the unpublished generation is discarded without connecting, and the marker stays unsafe because the pairing is unresolved (invariant I9).
 - [ ] T029 [P] [US2] Extend `internal/wa/wasim_owner_test.go` (`TestOwnerPostPairReconnectReachesConnectedAgainstSimulator`, `TestOwnerDeniesPostPairReconnectByDefaultAgainstSimulator`, `TestOwnerPostPairReconnectWaitsForHeldSave`) and add simulator cases:
   - the fresh client logs in with the saved-identity payload (no registration), the currently selected WhatsApp Web version and the Linux/Chrome identification, asserted on the wasim handshake (FR-004);
   - injected late sends from the pairing generation through the real client after its `Disconnect` and fence (a session announcement, a receipt, a key share, a resent request, a disconnect) never reach the fresh connection (scenario 7, SC-003). They return `ErrNotConnected` inside the library, the simulator counts zero frames from the retired generation on the fresh connection, and any dial or write through the retired generation's media or pre-login clients is refused and counted. Do not prove this by writing to the wrapped connection directly;
   - a late `Disconnect()` from the pairing error tail or the QR emitter reaches only the retired client, and the fresh connection stays up;
-  - a stop signal during the post-pair handover keeps the drain order.
+  - a stop signal at each point of the post-pair handover (T028's interleavings, on the real client): the drain order holds, the simulator sees no dial from a fresh client after the stop began, and the store closes only after every generation is retired.
 
   The window-ending case is covered by T014.
 - [ ] T030 [P] [US2] Update `cmd/whatsapp-mcp/pair_test.go`, `pair_retry_test.go` and `run_guard_test.go`. Replace `TestProductionOwnerEnablesPostPairReconnectOnlyForPair`, which tested the switch, with a test that `stdio` and `serve` have no reconnect and no pairing path. Then check the `pair` exit codes and stderr of `contracts/cli.md`:
@@ -255,9 +261,9 @@ No commit carries attribution lines.
   1. take the attempt slot;
   2. run `retireGeneration(pairGen, postPairQuietDeadline)`, which ends the pairing window through T017;
   3. if that check failed, take the incomplete-link path;
-  4. otherwise `openGeneration` a new client (`LoadDevice` from the durably saved identity, the currently selected version, Linux/Chrome properties, no registration);
+  4. otherwise `openGeneration` a new client (`LoadDevice` from the durably saved identity, the currently selected version, Linux/Chrome properties, no registration) and publish it under `o.mu` together with a check that no stop has begun. If one has, discard the unpublished generation without connecting and take the stopped path (the pairing is unresolved, so the marker stays unsafe). Immediately before `ConnectContext`, re-check under `o.mu` that no stop has begun and set `accountWork` in the same critical section (`attempt`, near line 706, makes no such check today);
   5. run exactly one `attemptPostPair` under the 30-second watchdog;
-  6. release the slot after that attempt and its teardown drain.
+  6. release the slot after that attempt and its teardown drain. `finishStop` (T025) retires a generation published meanwhile.
 
   Any failure, stall, cancellation or failed check is final. Keep the 515 waiting rules and duplicate-request sharing. Make T028 and T029 pass.
 - [ ] T033 [US2] Remove `OwnerConfig.PostPairReconnect` (`internal/wa/owner.go` near line 46) and every use:
@@ -305,7 +311,7 @@ No commit carries attribution lines.
 
 **Purpose**: Documentation, the pass-rate evidence, full gates, platform evidence and the permitted real-account journey. No pull request until the code review passes.
 
-- [ ] T039 [P] Update `OPERATIONS.md`: a reusable session after a passed quiet-stop check; offline recovery still required after a failed one or an unresolved pairing; the new stop wording; the `quiet_stop_passed` and `quiet_stop_failed` events; `upstream_drain_unproven` gone; and the split between implemented and verified. Update `AGENTS.md` "Current state" to describe feature 004 as built (do not call it merged until it is) and the removal of `PostPairReconnect`. Keep both files LF.
+- [ ] T039 [P] Update `OPERATIONS.md`: a reusable session after a passed quiet-stop check; offline recovery still required after a failed one or an unresolved pairing; the new stop wording; the `quiet_stop_passed` and `quiet_stop_failed` events; `upstream_drain_unproven` gone; and the split between implemented and verified. Update `AGENTS.md` "Current state" to describe feature 004 as built (do not call it merged until it is) and the removal of `PostPairReconnect`. Update `docs/backlog/003-post-pair-reconnect-and-unsafe-marker.md` and `docs/backlog/INDEX.md` to say that debts 1, 2 and 4 are delivered and that stage 2 stays open (docs are local and not in the repository; report the change to the user). Keep the repository files LF.
 - [ ] T040 [P] Check the doc comments in `internal/wa/owner.go`, `session.go`, `pairing.go`, `fence.go` and `quiet.go` for stale text about `PostPairReconnect`, "upstream drain unproven" and the same-client reconnect, and fix them. Do not cite FR-, SC-, US, research or finding IDs in code comments (constitution, user rule).
 - [ ] T041 Add the pass-rate recorder to `internal/wa/quiet_measure_test.go`. Reuse the T018 harness with the approved deadlines and the production `retireGeneration` path. Run at least 50 simulated orderly stops each of `pair` with the post-pair reconnect, `stdio` and `serve`, and print and record the pass rate per kind and the failure categories (SC-005). The bar is 90% for `stdio`, for `serve`, and for the pairing generation's check. Below either bar, record the numbers and ask the owner for the decision before the code review. Paste the result into `specs/004-shutdown-drain/verification.md` "Pass-rate run".
 - [ ] T042 Run the full gates of quickstart §4 and record each exit code read directly:

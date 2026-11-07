@@ -9,33 +9,49 @@ stands.
 
 ## Two contexts, not one
 
-Today the generation lifetime is cancelled first, and the attempt context derived from it is also the context the
-client library gives its detached node handlers. Cancelling it while the socket is live makes every in-flight handler's
-next store call fail with `context.Canceled`. That error is not a refusal, so a lost key or session write would look
-like a quiet stop. The design therefore separates:
+Today every generation lifetime is a child of the owner context (`o.ctx`, which the lifecycle's stop signal cancels
+through `BeginStop`), and the attempt context derived from the lifetime is also the context the client library gives
+its detached node handlers (`BackgroundEventCtx` and the handler context). A stop signal, a connect watchdog or the
+start of retirement therefore cancels every in-flight handler while the socket is live, and its next store call fails
+with `context.Canceled`. That error is not a refusal, so a lost key or session write would look like a quiet stop.
+The design separates three contexts per generation:
 
-- **the program's own work**: a Connect that has not returned, the pairing window, the repair pass. These are cancelled
-  at the start of retirement, as they must be for a prompt stop; they are resumable by design (repair markers) or
-  have no handlers yet;
-- **the library context** of a Connect that has returned (the context its node handlers run with). It is cancelled
-  only after the network fence and the storage barrier are in place (step 9).
+- **the owner context** (`o.ctx`): cancelled by the stop signal. It reaches only the program's own work;
+- **the work context** (`gen.work`, a child of `o.ctx`): the program's own work, namely the abort of a Connect that
+  has not returned, the pairing window and QR channel, and the repair pass. It is cancelled by the stop signal and at
+  the start of retirement, as it must be for a prompt stop. The QR channel and the repair pass use it, never the
+  library context;
+- **the library context** (`gen.lib`, created from `context.WithoutCancel(o.ctx)`): it is the library's
+  `BackgroundEventCtx` and the parent of the attempt context that the library gives its handlers. Nothing cancels it
+  except step 9 (and the forced path when the barrier cannot drain). The stop signal, the work context and the
+  watchdogs do not reach it.
 
-Any guarded call that still fails because of a context error, a stale lease or a refusal after retirement began is
-counted (step 2), so the separation is a speed measure and the count is the safety measure.
+The attempt context passed to `ConnectContext` is a child of `gen.lib`. The work context, a watchdog or the stop
+signal may cancel it only while `ConnectContext` has not returned (an `AfterFunc` that is stopped when it returns). A
+connect watchdog that fires after `ConnectContext` returned calls `Disconnect()` and does not cancel the handler
+context.
+
+Counting backs the separation. `DeviceBarrier.MarkRetiring()` is called at the first of: `BeginStop`, the start of
+retirement, or any cancellation of the attempt context (including a watchdog or stop that aborts a Connect that has not
+returned). From then on a guarded call that fails with a context error, a stale lease or a refusal is counted (step 2).
+The separation is the speed and safety measure, the count is the evidence.
 
 ## Retirement order (one generation)
 
+0. `BeginStop` (the stop signal) calls `MarkRetiring()` on the current generation **before** it cancels `o.ctx`, then
+   cancels `o.ctx`. Because of the separation above, this reaches only `gen.work`.
 1. Mark the generation retiring. New owner admissions for this epoch are refused, as in feature 003.
-2. Set the session's retire bit and call `DeviceBarrier.MarkRetiring()`. From now on:
+2. Set the session's retire bit and call `DeviceBarrier.MarkRetiring()` if it has not been called. From now on:
    - every guarded device call of this generation that fails with `ErrRetired`, a context error, a stale lease or any
      other error raised by the guard (not a result the database itself returns, such as "not found") is counted;
    - every call from the program's own code to the session (Connect, QR channel, repairs, Disconnect from any caller
      except this sequence) is refused and counted;
-   - every event that the session would forward to the owner is dropped and counted, except `Disconnected`;
+   - every event that the session would forward to the owner is dropped and counted, except a disconnect: the raw
+     `Disconnected` event and the `SessionDisconnected` that the session maps from it or from `StreamReplaced`;
    - the event handler stays registered.
 3. End any pairing window of this generation, so its QR channel context ends.
-4. Cancel the program's own work: a Connect attempt that has not returned and the repair pass. Do not cancel the
-   library context of a Connect that has returned.
+4. Cancel `gen.work`: it aborts a Connect attempt that has not returned and the repair pass. Do not cancel `gen.lib`
+   or the attempt context of a Connect that has returned.
 5. Wait for the repair pass, as in feature 003.
 6. `client.Disconnect()`: the library's own orderly close (this sequence's call, not counted). It writes the close
    frame and sets the library's socket to nil.
@@ -44,7 +60,7 @@ counted (step 2), so the separation is a speed measure and the count is the safe
 8. **Retire the store barrier.** Refuse and count every later guarded call, and wait for admitted calls to finish.
    The existing context and the stop bound apply. A barrier that does not drain fails as today
    (`owner_drain_failed`, unsafe).
-9. Cancel the library context (the generation lifetime). Storage is already blocked, so a handler that is released
+9. Cancel `gen.lib`, which cancels the library's handler context. Storage is already blocked, so a handler that is released
    now can only be refused and counted.
 10. **Observe** with `min(approved deadline, remaining stop bound)` (see "Stop bound"). The deadline counts from the
     start of this step, after the barrier has drained and the library context is cancelled; the result's `Duration`
@@ -78,10 +94,12 @@ either order is reversed (spec SC-004).
 
 The owner receives the shutdown bound (10 s, the same constant the lifecycle uses; not a setting) and starts a timer at
 `BeginStop`. The decision at step 11 is a failure with reason `stop_bound_exceeded` if the bound has already passed,
-and the observation deadline is capped at the remaining time. The marker is never cleared after the bound: the
-lifecycle reports `shutdown timed out` and exit 1 in that case, so a clean marker would contradict it. Steps 6 and 8
-already take up to 5 s and 10 s in the worst case; the owner's approval of the deadlines (task T019) states the
-total budget.
+and the observation deadline is capped at the remaining time. A marker is never cleared by a decision that was made
+after the bound. The guarantee is one way: a passed decision made inside the bound can still be followed by the
+marker write (an fsync), the refresh wait, the store close and the lock release, and the lifecycle's timer covers all
+of them, so the command may print `shutdown timed out` and exit 1 with a clean marker. That is safe, because the
+check passed and the stop completed in order. The owner's approval of the deadlines (task T019) states the total
+budget and the reserve left for those steps. Steps 6 and 8 already take up to 5 s and 10 s in the worst case.
 
 The post-pair handover is not part of the shutdown bound. A stop signal that arrives during it enters `finishStop`
 and gets the bound from that moment.
@@ -105,14 +123,24 @@ The result is a value. It never holds a reference to the dump, the client or the
 - `retireGeneration(gen, deadline)` runs steps 1–12 and records a failed result in `unsafeStop`, logging
   `quiet_stop_failed`. A passed result logs `quiet_stop_passed`. A generation that never attempted Connect is not
   checked.
-- `finishStop` passes `quietStopDeadline` and the bound described above.
+- `finishStop` passes `quietStopDeadline` and the bound described above. It retires the current generation, then takes
+  the attempt slot, then reads `o.gen` again under `o.mu` and retires whatever generation exists now (and repeats until
+  none is left), and only then releases the slot. A generation published while the stop was in progress is therefore
+  always retired and checked before storage closes and the lock is released.
 - The post-pair path, in this order:
   1. a 515 after `PairSuccess`, or `PairSuccess` releasing a pending 515;
   2. take the attempt slot;
   3. `retireGeneration(pairGen, postPairQuietDeadline)`, which ends the pairing window (step 3);
   4. if that check failed, take the incomplete-link path (final, unsafe);
-  5. otherwise open a new generation with `LoadDevice`, then run one `attemptPostPair` under the 30-second watchdog;
-  6. release the slot after that attempt and its teardown drain, as in feature 003.
+  5. otherwise open a new generation with `LoadDevice` and publish it under `o.mu` together with a check that no stop
+     has begun; if one has, discard the unpublished generation without connecting and take the stopped path (the
+     marker stays unsafe: the pairing is unresolved). Immediately before `ConnectContext`, re-check under `o.mu` that
+     no stop has begun, and set `accountWork` in the same critical section;
+  6. run one `attemptPostPair` under the 30-second watchdog;
+  7. release the slot after that attempt and its teardown drain, as in feature 003.
+- No Connect begins after `BeginStop`. A stop that interleaves at any point of the post-pair path (during the
+  pairing generation's retirement, between retire and open, between open and Connect, during the attempt) ends with
+  every generation that exists retired and checked, or never connected.
 - No other path opens a generation after one that attempted Connect. Startup retries, 405, ordinary reconnect and
   same-process re-pair stay denied.
 
@@ -130,7 +158,10 @@ The result is a value. It never holds a reference to the dump, the client or the
   late call or drop.
 - I7: The allow-list holds exact function names only, and its `ReviewedFor` equals the `go.mod` whatsmeow version.
 - I8: The library context of a connected generation is not cancelled before the fence is closed and the barrier has
-  drained.
+  drained. The stop signal, the work context and the connect watchdog never cancel it once `ConnectContext` has
+  returned.
+- I9: No Connect begins after `BeginStop`, and `finishStop` retires every generation that exists after it holds the
+  attempt slot, so the store never closes and the lock is never released while a generation's socket may be live.
 
 ## Test seams
 
