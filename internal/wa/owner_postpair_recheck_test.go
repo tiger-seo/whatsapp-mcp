@@ -92,8 +92,10 @@ func TestPostPairReconnectRecheckStopDuringDisconnect(t *testing.T) {
 }
 
 // First recheck: the reconnect is queued behind the attempt slot while a 405 or a storage fault
-// lands. Neither cancels the generation's lifetime, so the reconnect wins the slot once it is
-// released and must stop at the first recheck.
+// lands. A 405 does not cancel the generation's lifetime, so the reconnect wins the slot once it is
+// released and must stop at the first recheck. A storage fault retires the generation, which
+// cancels its lifetime, so the queued reconnect gives up its wait for the slot instead; the
+// subtest pins that no Connect and no further Disconnect follow either way.
 func TestPostPairReconnectRecheckAfterSlot(t *testing.T) {
 	for name, event := range map[string]func(ot *ownerTest){
 		"outdated": func(ot *ownerTest) { ot.sess.send(SessionClientOutdated) },

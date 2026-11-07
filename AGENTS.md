@@ -15,8 +15,8 @@ Without it, ask the user for the specification before planning; don't guess the 
 
 ## Current state
 
-Features 001 (binary skeleton, pull request #1) and 002 (SQLite storage, pull request #5) are implemented,
-verified and merged into `main`. The code:
+Features 001 (binary skeleton, pull request #1), 002 (SQLite storage, pull request #5) and 003 (WhatsApp
+connection, pairing and status, pull request #9) are implemented, verified and merged into `main`. The code:
 
 - `cmd/whatsapp-mcp`: the commands, flag parsing, the logger and the shutdown lifecycle. `version`, `status` (offline
   local snapshot) and `pair` (QR window, offline recovery) work; `stdio` and `serve` open the store and the owner but
@@ -39,23 +39,23 @@ verified and merged into `main`. The code:
   about 12 times faster than the runner's default). A nightly `heavy` job on Linux runs the heavy store tests when
   `main` has changed; it can also be started by hand.
 
-Feature 003 (WhatsApp connection, pairing and status) is implemented on branch `003-whatsapp-pairing-status` (pull
-request #9, not merged): all tasks are done and the owner reviews passed (design 8edc293, code 71edddf and ecd18b1).
-`specs/003-whatsapp-pairing-status/tasks.md` ("Current State") is its resume point. What exists:
+Feature 003 added (owner reviews: design PASS at 8edc293, code PASS at 71edddf and ecd18b1; accepted risks in
+`specs/003-whatsapp-pairing-status/verification.md`):
 
 - `internal/wa`: the connection owner (state, epochs, one attempt at a time, watchdog, pairing windows), the pinned
   whatsmeow session adapter, the version provider, the app-state repair controller (`recovery.go`) and the bounded
   HTTP client. Every automatic reconnect is denied by default except the one post-pair connection, which `pair` enables
-  (`PostPairReconnect`, approved 2026-11-06; the long-running commands keep it off). Checked on one real account
-  (2026-11-06 and 2026-11-07, Windows). The 405 budget, startup retries and ordinary reconnect are deferred to the
-  roadmap follow-up "logout and shutdown drain".
+  (`PostPairReconnect`, approved 2026-11-06; the long-running commands keep it off). Checked in three permitted runs
+  on one real account and phone (2026-11-06 and 2026-11-07, Windows). The 405 budget, startup retries and ordinary
+  reconnect are deferred to the roadmap follow-up "logout and shutdown drain".
 - `internal/wasim`: a simulated WhatsApp server and phone for tests only.
 - `internal/store`: the unsafe-run marker (schema 3), repair markers, the read-only `Inspect` view and offline
   recovery. After any production Connect the marker stays unsafe until a separately authorized offline recovery
   (`pair`, interactive terminal).
 - `internal/lock`: also `AcquireExisting`, for `status`.
-- Evidence is Windows, WSL2 and Linux/Windows/macOS CI runners. Not verified: a real account, native console/PTY
-  recovery, macOS `F_FULLFSYNC`, power loss. `OPERATIONS.md` separates implemented from verified.
+- Evidence is Windows, WSL2, Linux/Windows/macOS CI runners and one real account on Windows. Not verified: another
+  account or phone, native Linux or macOS runs, native console/PTY recovery, macOS `F_FULLFSYNC`, power loss.
+  `OPERATIONS.md` separates implemented from verified.
 
 Spike results are in `docs/spikes.md`.
 S1 (§8.5) is done: `sqlstore` works on `modernc.org/sqlite` with the dialect name `"sqlite"`. Nothing is
