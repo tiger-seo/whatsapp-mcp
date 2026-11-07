@@ -35,11 +35,30 @@ come after a scheduling delay and a Connect could start dialling after the stop 
 that no stop has begun and records the abort in the same critical section of `o.mu`, so a stop either sees the abort
 and calls it or is seen by the attempt and prevents the Connect.
 
+The pairing generation's Connect (the `pair` command's pairing window) uses exactly the same mechanism: its context is a
+child of `gen.lib`, the stop check and the recorded abort share one critical section of `o.mu`, and its watchdog only
+calls `Disconnect()` once the Connect has returned. Only the window's QR channel and its diagnostics are `gen.work`.
+The stop signal during an open pairing window, and retirement step 4 for the pairing generation at the 515, therefore
+never cancel the context the pairing socket's handlers run with.
+
 Once `ConnectContext` has returned, nothing cancels the attempt context: the watchdog calls `Disconnect()` and the
 existing `if !connected { cancel() }` defer in `attempt` does not cancel it (the attempt context is released with
 `gen.lib` at step 9). A startup attempt that ends in a remote disconnect, a stop or a timeout after `ConnectContext`
 returned therefore leaves the handler context alone. Every other former use of the generation lifetime moves to the
 work context: the version refresh, the QR drain, the storage-fault watcher and the post-pair slot wait.
+
+**Known windows.** `ConnectContext` returning cannot be made atomic with `o.mu`: the library starts its handler loop
+before it returns, and the owner clears the recorded abort only afterwards. Two interleavings follow, both fail
+closed and both are counted:
+
+- (a) the abort is still recorded when `ConnectContext` has returned, and the stop or a watchdog calls it. The handler
+  context of a live socket is cancelled before the fence. `MarkRetiring()` came first, so a guarded call that fails
+  is counted and the check fails with `storage_refused`;
+- (b) the stop calls the abort and retirement sets the retire bit before the attempt goroutine calls
+  `Session.Connect`. Nothing was dialled. `Session.Connect` does not count this as a late call when the attempt was
+  already aborted through the recorded abort; the generation never attempted a Connect and is not checked.
+
+In both cases the marker is never cleared by a false pass. The measurement (T018) records how often (a) occurs.
 
 Counting backs the separation. `DeviceBarrier.MarkRetiring()` is called at the first of: `BeginStop`, the start of
 retirement, or any cancellation of the attempt context (including a watchdog or stop that aborts a Connect that has not
@@ -60,8 +79,9 @@ The separation is the speed and safety measure, the count is the evidence.
      `Disconnected` event and the `SessionDisconnected` that the session maps from it or from `StreamReplaced`;
    - the event handler stays registered.
 3. End any pairing window of this generation, so its QR channel context ends.
-4. Cancel `gen.work`: it aborts a Connect attempt that has not returned and the repair pass. Do not cancel `gen.lib`
-   or the attempt context of a Connect that has returned.
+4. If a Connect attempt has not returned, call the recorded attempt abort under `o.mu` (through the `MarkRetiring`
+   helper). Then cancel `gen.work`, which ends the repair pass and the pairing window's QR channel. `gen.work` does not
+   reach any Connect context. Do not cancel `gen.lib` or the attempt context of a Connect that has returned.
 5. Wait for the repair pass, as in feature 003.
 6. `client.Disconnect()`: the library's own orderly close (this sequence's call, not counted). It writes the close
    frame and sets the library's socket to nil.
@@ -173,7 +193,7 @@ The result is a value. It never holds a reference to the dump, the client or the
 - I7: The allow-list holds exact function names only, and its `ReviewedFor` equals the `go.mod` whatsmeow version.
 - I8: The library context of a connected generation is not cancelled before the fence is closed and the barrier has
   drained. The stop signal, the work context, the connect watchdog and the `attempt` defer never cancel the attempt
-  context once `ConnectContext` has returned.
+  context once `ConnectContext` has returned, except in the two windows below, which are counted.
 - I9: No Connect begins after `BeginStop` (on every path because the stop check and the recording of the attempt abort
   share one critical section of `o.mu`, and `BeginStop` calls the abort synchronously; on the post-pair path also
   because of the atomic publish and re-check), and `finishStop` retires every generation that exists after it holds the

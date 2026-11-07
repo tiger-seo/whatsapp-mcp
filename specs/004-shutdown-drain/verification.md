@@ -28,6 +28,10 @@ Facts collected 2026-11-07T21:53Z from `specs/003-whatsapp-pairing-status/verifi
    verified".
 5. Not covered: stop and drain ordering. It is what this feature implements, so it is its own acceptance gate.
 
+Editorial note, 2026-11-08: item 4 originally read "a short soak run recorded in the roll-up (T046)". After the
+design reviews the soak run became its own task T046 (4 hours, simulator) and the roll-up became T047, so the
+reference was renumbered. The substance of the decision is unchanged.
+
 This is a feature-level extension recorded by the owner. It does not close F09 and does not amend the constitution.
 
 ## Owner reviews

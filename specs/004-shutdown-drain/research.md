@@ -109,7 +109,7 @@ rejected because the close frame would be counted and the fence could not tell i
 - **Three contexts.** The stop signal cancels the owner context (`o.ctx`) through `BeginStop` (`owner.go:460`), and every
   generation lifetime is its child (`owner.go:222`), so the stop signal itself cancelled the library context before
   retirement. The library context (`BackgroundEventCtx` and the parent of the attempt context) is therefore created
-  as `context.WithCancel(context.WithoutCancel(o.ctx))`; the program's own work (the abort of an unreturned Connect, the QR channel at
+  as `context.WithCancel(context.WithoutCancel(o.ctx))`; the program's own work (the QR channel at
   `pairing.go:174`, the repair pass at `owner.go:922`) uses a separate work context; the attempt context is cancelled only until `ConnectContext` returns,
   through a recorded abort function called synchronously under `o.mu` (an `AfterFunc` would run in a new goroutine and
   let a Connect start after the stop began). `BeginStop` calls `MarkRetiring()` first. The
@@ -247,3 +247,8 @@ covers feature 004, and records the owner's answer. The implementer does not wri
 same recheck is repeated at code review. If the exception has expired or the owner says it does not cover this
 feature, work stops until the owner records a new decision (constitution X). The full reassessment stays with stage 2
 or the expiry.
+
+**Owner answer, 2026-11-07.** The owner extended E003-RX-01 to feature 004 as proposed (scope, pin and expiry
+unchanged, earlier trigger on a resource incident or a pin change, a soak run as the compensating control, stop and
+drain ordering not covered). The record is in `verification.md`, "E003-RX-01 (implementation start)". The soak run is
+task T046.

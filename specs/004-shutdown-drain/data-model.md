@@ -16,7 +16,7 @@ One client instance and its connection: an owner `genState` plus its `Session`.
 | `barrier` | the store's device barrier | unchanged; gains a refusal count |
 | `droppedEvents` | owner-relevant events dropped after retirement, except `Disconnected` | counted from the moment the retire bit is set |
 | `lateCalls` | calls from the program's own code to the session after the retire bit is set, except the retirement sequence's own Disconnect | counted from the same moment |
-| `work` | the program's own work: an unreturned Connect's abort, the pairing window and QR channel, the repair pass | a child of the owner context; cancelled by the stop signal and at the start of retirement |
+| `work` | the program's own work: the pairing window's QR channel, the repair pass; never a Connect context | a child of the owner context; cancelled by the stop signal and at the start of retirement |
 | `lib` | the library's `BackgroundEventCtx` and the parent of the attempt context its handlers run with | created as `context.WithCancel(context.WithoutCancel(o.ctx))`; cancelled only after the fence and the barrier (invariants I8); never by the stop signal, `work` or a watchdog once Connect has returned |
 | `quiet` | the generation's `QuietStopResult` | written once, by retirement |
 
