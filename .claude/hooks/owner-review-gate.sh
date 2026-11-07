@@ -12,7 +12,8 @@
 # The last row of a stage counts. It passes when the verdict is PASS, or CONCERNS with the owner's decision
 # filled in, and nothing it covers has changed since the commit it names. verification.md itself is never
 # covered, so recording a verdict does not make it stale. Nor is ticking tasks off: a tasks.md that differs only in
-# its "- [ ]" / "- [X]" markers counts as unchanged.
+# its "- [ ]" / "- [X]" markers counts as unchanged. The same goes for AGENTS.md or CLAUDE.md when only its
+# "## Current state" section differs; tasks.md is compared without that section too.
 #
 # A BLOCK also passes when the owner parked its findings (constitution, Development Workflow): the stage has at
 # least 3 BLOCK rows, the decision reads "Parked at <commit>: <findings>", that commit changed nothing the
@@ -151,14 +152,28 @@ if [[ -n ${parked_at:-} ]]; then
   base=$parked_at
 fi
 changed=$( { git diff --name-only "$base" -- "${paths[@]}"; git ls-files --others --exclude-standard -- "${paths[@]}"; } )
+# The "## Current state" section (any suffix after the words, e.g. "(handoff, 2026-11-06)") is a status log, not
+# part of what was reviewed. It runs until the next "##" heading.
+without_state() {
+  tr -d '\r' | awk '
+    /^##[[:space:]]/ { skip = (tolower($0) ~ /^##[[:space:]]+current[[:space:]]+state([^[:alnum:]_]|$)/) }
+    !skip'
+}
 # Implementation marks each task done in tasks.md; that is progress, not a change to what was reviewed.
-unticked() { tr -d '\r' | sed -E 's/^([[:space:]]*- )\[[xX]\]/\1[ ]/'; }
+unticked() { without_state | sed -E 's/^([[:space:]]*- )\[[xX]\]/\1[ ]/'; }
 tasks=$feature_dir/tasks.md
 if grep -qxF "$tasks" <<<"$changed" && [[ -f $tasks ]] &&
   git cat-file -e "$base:$tasks" 2>/dev/null &&
   cmp -s <(git show "$base:$tasks" | unticked) <(unticked <"$tasks"); then
   changed=$(grep -vxF "$tasks" <<<"$changed")
 fi
+for doc in AGENTS.md CLAUDE.md; do
+  if grep -qxF "$doc" <<<"$changed" && [[ -f $doc ]] &&
+    git cat-file -e "$base:$doc" 2>/dev/null &&
+    cmp -s <(git show "$base:$doc" | without_state) <(without_state <"$doc"); then
+    changed=$(grep -vxF "$doc" <<<"$changed")
+  fi
+done
 changed=$(head -n 5 <<<"$changed")
 [[ -z $changed ]] ||
   decide deny "files changed since the reviewed commit $base, so the review is stale: $(tr '\n' ' ' <<<"$changed")$how"

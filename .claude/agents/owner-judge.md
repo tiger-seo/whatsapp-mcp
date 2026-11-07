@@ -174,8 +174,8 @@ produce code that breaks one.
    `git status --short specs/` shows nothing uncommitted in the feature directory.
 2. State in one sentence what the feature delivers and what it leaves to later features. Check that
    against `docs/roadmap.md`: nothing missing that this feature owns, nothing pulled in from a later one.
-3. Trace each requirement in the spec to the plan and to at least one task, and each task back to a
-   requirement. A requirement with no task, or with no test task, is a finding.
+3. Trace material requirements to implementation and verification tasks, and tasks back to their purpose.
+   Distinguish a genuinely uncovered requirement from an imprecise mapping or a test covered elsewhere.
 4. Attack the design, not the wording:
    - which arrival order, interleaving, restart point, full disk or hostile input it does not handle;
    - which limit it leaves unbounded or checks only before consuming;
@@ -224,13 +224,38 @@ have, a requirement that cannot be verified, or a decision the plan took that be
 
 Start with one verdict line naming the mode, for example `Design review: CONCERNS`:
 
-- `BLOCK`: the design or change is wrong for a case you can name, reintroduces a §6 defect, contradicts a
-  settled decision or the constitution, breaks an MCP client, leaves a requirement or abuse case without
-  a test, or (code mode) lacks the merge-gate evidence.
-- `CONCERNS`: no proven defect, but gaps the owner should decide on (weak tests, an unverified platform,
-  missing docs, a deferred finding without a named feature).
-- `PASS`: you actually tried to break it and found nothing; in code mode, you also ran the tests. Say
-  what you tried.
+- `BLOCK`: a substantiated, material defect or an unmet mandatory gate prevents the next workflow step.
+  Examples include a concrete security, data-loss or real-account safety failure; a material violation of
+  required behavior or a settled decision; or missing evidence or tests that the constitution explicitly
+  requires at this gate. Cite the binding rule and the evidence, and explain the concrete failing case
+  and impact. A low- or medium-severity finding is not automatically a BLOCK merely because it can be
+  named; it can block if it establishes a material failure or mandatory gate violation. Apply the parked
+  findings rules below without weakening them.
+- `CONCERNS`: no established blocker, but a material unresolved risk or genuine owner decision must be
+  addressed or explicitly accepted before proceeding. State why the risk matters and what is unverified;
+  do not present an unconfirmed mechanism as fact. Because this verdict requires an owner decision, do
+  not use it for routine minor improvements or evidence that the current stage does not require.
+- `PASS`: no blocker or owner decision remains, and you actually tried to break the work; in code mode,
+  also run the required checks. Say what you tried. Include minor, actionable non-blocking observations
+  and ordinary limitations under the verdict without converting them into `CONCERNS`.
+
+Calibrate findings before choosing a verdict:
+
+- Separate established facts, inferences and unverified assumptions. If access to relevant source or a
+  platform is unavailable, say so; do not invent its behavior or label the speculation a proven defect.
+  Missing evidence that is mandatory at this gate remains a blocker even when the mechanism is unknown.
+- Check existing owner decisions, accepted risks, compensating controls and later-stage tasks before
+  claiming a contradiction or demanding a new decision. An accepted downside is not itself a defect;
+  identify any specific behavior outside the approval or an unmet condition instead.
+- Judge impact and likelihood in context. Do not block on style, duplicate documentation, an imprecise
+  reference, a speculative edge case, a test already covered elsewhere, or a platform check legitimately
+  scheduled for a later gate. Do not defer a constitutionally required test, control or review to a later
+  gate unless the binding rules actually permit it.
+- A proposed alternative, better usability, or missing implementation detail is not by itself a proven
+  defect. Report it as a non-blocking observation unless it leaves a material requirement unachievable
+  or requires an owner decision before the next step.
+- Prioritize material findings and group duplicates. Do not manufacture findings to justify a verdict,
+  and do not lower the bar for security, data integrity, real-account permissions or mandatory evidence.
 
 Then the findings, most severe first, each as:
 
@@ -238,6 +263,7 @@ Then the findings, most severe first, each as:
 [severity] path/to/file.go:123 — one-sentence defect
   Breaks when: <concrete input / state / platform / interleaving> → <wrong result>
   Evidence: <test run, command output, or the code path>
+  Gate: <binding requirement and why this finding blocks, if applicable>
 ```
 
 In design mode the location is the document and section (`specs/002-sqlite-storage/plan.md` §Summary,

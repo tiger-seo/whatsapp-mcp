@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/tiger-seo/whatsapp-mcp/internal/private"
+	"github.com/tiger-seo/whatsapp-mcp/internal/walog"
 	"go.mau.fi/util/dbutil"
+	wastore "go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/store/sqlstore/upgrades"
 	_ "modernc.org/sqlite" // registers the "sqlite" driver
@@ -26,7 +28,7 @@ import (
 // BEGIN IMMEDIATE. temp_store(MEMORY) keeps sorts out of the system temp directory, and the hard heap limit bounds
 // SQLite's own memory, which Go cannot see.
 const (
-	writeParams = "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)" +
+	writeParams = "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(FULL)" +
 		"&_pragma=temp_store(MEMORY)&_pragma=journal_size_limit(67108864)&_pragma=hard_heap_limit(268435456)&_txlock=immediate"
 	readParams = "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)" +
 		"&_pragma=hard_heap_limit(268435456)&_pragma=query_only(1)"
@@ -42,10 +44,18 @@ type Store struct {
 	disk      *diskGuard
 	ev        *events
 	container *sqlstore.Container
+	wrapped   *dbutil.Database
 	hooks     *testHooks
 
+	deviceMu     sync.Mutex
+	device       *deviceSession
+	deviceFinal  bool // protected by deviceMu; no generations after clear or recovery
+	runMu        sync.Mutex
+	runArmed     bool
+	runArmFailed bool
+
 	closeMu sync.Mutex
-	closed  bool
+	closed  bool // pools closed after quiescence; never set while work is active
 }
 
 // openOptions are for tests only: the migration list and the injected failures.
@@ -56,15 +66,18 @@ type openOptions struct {
 
 // testHooks inject failures and pauses at fixed points. The zero value does nothing.
 type testHooks struct {
-	afterCheck       func() // after the artifact checks and the preflight, before the writer opens
-	afterCreate      func() // after a new database file was created, before the writer opens
-	beforeCommit     func(ctx context.Context)
-	afterSenderMerge func() error                           // MergeLID, after the sender rewrite
-	afterChatInsert  func() error                           // StoreMessages, after the chat insert
-	free             func(dir string) (uint64, error)       // free-space measurement
-	queryHold        func(ctx context.Context, name string) // a query holds its reader here
-	wrapReader       func(q querier) querier                // a read operation runs its queries through the wrapper
-	onRead           func(conn *sql.Conn) (done func())     // a read operation starts on conn; done runs when it ends
+	afterCheck         func() // after the artifact checks and the preflight, before the writer opens
+	afterCreate        func() // after a new database file was created, before the writer opens
+	beforeCommit       func(ctx context.Context)
+	afterSenderMerge   func() error                           // MergeLID, after the sender rewrite
+	afterChatInsert    func() error                           // StoreMessages, after the chat insert
+	free               func(dir string) (uint64, error)       // free-space measurement
+	queryHold          func(ctx context.Context, name string) // a query holds its reader here
+	wrapReader         func(q querier) querier                // a read operation runs its queries through the wrapper
+	onRead             func(conn *sql.Conn) (done func())     // a read operation starts on conn; done runs when it ends
+	devicePutHold      func(ctx context.Context) error        // a guarded device Save holds here, before the raw put
+	devicePutCommitted func()                                 // after Save commits, before publishing recovery state
+	protectedHold      func()                                 // after protected admission check, before readiness check
 }
 
 // Open checks, creates if missing, preflights, upgrades and opens <dataDir>/whatsapp.db. The caller holds the
@@ -117,6 +130,7 @@ func open(ctx context.Context, dataDir string, logger *slog.Logger, opts openOpt
 		return nil, err
 	}
 	var pf preflightResult
+	created := false
 	switch _, exists := known[dbPath]; {
 	case !exists:
 		id, err := createDB(dbPath)
@@ -124,6 +138,7 @@ func open(ctx context.Context, dataDir string, logger *slog.Logger, opts openOpt
 			return nil, err
 		}
 		known[dbPath] = id
+		created = true
 		pf.fresh = true
 		ev.preflight(op, true, 0, 0, 0)
 		if opts.hooks.afterCreate != nil {
@@ -189,6 +204,16 @@ func open(ctx context.Context, dataDir string, logger *slog.Logger, opts openOpt
 		}
 		return nil, err
 	}
+	if reached >= 3 && len(migrations) >= 3 && migrations[2].name == "unsafe_run" {
+		if created {
+			if err := st.changeRunGuard(ctx, "unsafe", "clean"); err != nil {
+				return nil, err
+			}
+		}
+		if _, _, err := readRunGuard(ctx, st.writer); err != nil {
+			return nil, err
+		}
+	}
 	if err := st.recheck(known); err != nil {
 		return nil, err
 	}
@@ -252,7 +277,9 @@ func (s *Store) recheck(known map[string]private.FileID) error {
 }
 
 // upgradeDevice runs whatsmeow's own schema upgrade on the writer connection. Each of its steps is one
-// transaction with its version record, so a failure leaves the device schema at the last completed step.
+// transaction with its version record, so a failure leaves the device schema at the last completed step. The
+// configured dbutil.Database is kept on the store: the device container and every later device delegate share
+// that one handle, so dbutil's transaction key is the same for all of them.
 func (s *Store) upgradeDevice(ctx context.Context, op string, version *int) error {
 	wrapped, err := dbutil.NewWithDB(s.writer, "sqlite")
 	if err != nil {
@@ -261,7 +288,8 @@ func (s *Store) upgradeDevice(ctx context.Context, op string, version *int) erro
 	wrapped.VersionTable = "whatsmeow_version"
 	wrapped.UpgradeTable = upgrades.Table
 	wrapped.ReadOnlyDB = s.reader
-	s.container = sqlstore.NewWithWrappedDB(wrapped, newWALog(s.ev.log))
+	s.wrapped = wrapped
+	s.container = sqlstore.NewWithWrappedDB(wrapped, walog.New(s.ev.log))
 
 	from := *version
 	if err := s.container.Upgrade(ctx); err != nil {
@@ -282,9 +310,107 @@ func (s *Store) upgradeDevice(ctx context.Context, op string, version *int) erro
 	return nil
 }
 
-// Device returns whatsmeow's device-store container, which shares the store's file and writer connection.
-// Feature 003 builds the WhatsApp client from it. It is the only handle on the database outside this package.
-func (s *Store) Device() *sqlstore.Container { return s.container }
+// LoadDevice loads the saved device identity, or a fresh unwired device when none is saved, through the shared
+// admission policy. It returns the guarded device and the barrier of that one generation. Only one device
+// session may be active: a second call fails until the previous generation is retired and fully drained, and no
+// raw container or store is ever handed out.
+func (s *Store) LoadDevice(ctx context.Context) (*wastore.Device, *DeviceBarrier, error) {
+	if s.gate.isClosed() {
+		return nil, nil, ErrClosed
+	}
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	if s.runArmFailed {
+		return nil, nil, ErrUnsafeRun
+	}
+	s.deviceMu.Lock()
+	defer s.deviceMu.Unlock()
+	if s.deviceFinal {
+		return nil, nil, ErrClosed
+	}
+	if s.device != nil && !s.device.drained() {
+		return nil, nil, ErrSessionExists
+	}
+	if s.device != nil {
+		s.device.mu.Lock()
+		pendingRemoval := s.device.deleted && !s.device.removed
+		s.device.mu.Unlock()
+		if pendingRemoval {
+			return nil, nil, ErrDeleteDeferred
+		}
+	}
+
+	op := newOpID()
+	release, opCtx, err := s.gate.enter(ctx)
+	if err != nil {
+		return nil, nil, s.report(op, err)
+	}
+	defer release()
+	if err := s.disk.check(); err != nil {
+		return nil, nil, s.report(op, err)
+	}
+	var count int
+	if err := s.reader.QueryRowContext(opCtx, "SELECT count(*) FROM (SELECT 1 FROM whatsmeow_device LIMIT 2)").Scan(&count); err != nil {
+		return nil, nil, s.report(op, err)
+	}
+	if count > 1 {
+		err = unsafeStorage(filepath.Base(s.path), "multiple_devices",
+			"contains more than one saved device identity; this binary never creates that state",
+			"keep exactly one row in the whatsmeow_device table, then restart")
+		s.ev.refused(op, err, s.path, "", 0, 0)
+		return nil, nil, err
+	}
+	if count == 1 {
+		var size int64
+		err = s.reader.QueryRowContext(opCtx, `SELECT
+			4 * (coalesce(length(jid), 0) + coalesce(length(lid), 0) +
+			coalesce(length(platform), 0) + coalesce(length(business_name), 0) +
+			coalesce(length(push_name), 0) + coalesce(length(facebook_uuid), 0) +
+			coalesce(length(companion_meta_nonce), 0)) +
+			coalesce(length(noise_key), 0) + coalesce(length(identity_key), 0) +
+			coalesce(length(signed_pre_key), 0) + coalesce(length(signed_pre_key_sig), 0) +
+			coalesce(length(adv_key), 0) + coalesce(length(adv_details), 0) +
+			coalesce(length(adv_account_sig), 0) + coalesce(length(adv_account_sig_key), 0) +
+			coalesce(length(adv_device_sig), 0)
+			FROM whatsmeow_device LIMIT 1`).Scan(&size)
+		if err != nil {
+			return nil, nil, s.report(op, err)
+		}
+		if size > maxResultBytes {
+			return nil, nil, s.report(op, limitErr("result_bytes"))
+		}
+	}
+	devices, err := s.container.GetAllDevices(opCtx)
+	if err != nil {
+		err = s.report(op, err)
+		if isRefusal(err) {
+			s.ev.refused(op, err, s.path, "", 0, 0)
+		}
+		return nil, nil, err
+	}
+	switch {
+	case len(devices) > 1:
+		err = unsafeStorage(filepath.Base(s.path), "multiple_devices",
+			"contains more than one saved device identity; this binary never creates that state",
+			"keep exactly one row in the whatsmeow_device table, then restart")
+		s.ev.refused(op, err, s.path, "", 0, 0)
+		return nil, nil, err
+	case len(devices) == 1:
+		if err := validateDeviceIdentity(devices[0].ID, devices[0].LID); err != nil {
+			err = unsafeStorage(filepath.Base(s.path), "device_identity",
+				"the saved device identity is not a valid phone-number JID: "+err.Error(),
+				"verify the whatsmeow_device row, then restart")
+			s.ev.refused(op, err, s.path, "", 0, 0)
+			return nil, nil, err
+		}
+		s.device = newDeviceSession(s, devices[0])
+		s.device.bind(*devices[0].ID, devices[0].LID)
+		return s.device.dev, &DeviceBarrier{sess: s.device}, nil
+	default:
+		s.device = newDeviceSession(s, s.container.NewDevice())
+		return s.device.dev, &DeviceBarrier{sess: s.device}, nil
+	}
+}
 
 func (s *Store) closePools() {
 	if s.reader != nil {
@@ -295,18 +421,32 @@ func (s *Store) closePools() {
 	}
 }
 
-// Close stops admitting operations, waits up to 2 s for running ones, cancels what is still running, waits up to
-// 1 s more, then closes both pools. It is safe to call twice. ctx can shorten every wait. Any call made during or
-// after Close returns ErrClosed.
+// Quiesce permanently closes shared admission: new and waiting calls are refused at once, running operations
+// keep their grace period, are then cancelled and must still finish. It reports nil only when quiescence is
+// proved — zero admitted operations and no future admissions — and ErrNotQuiescent while work is active. The
+// pools stay open either way; Close finishes after quiescence. ctx can shorten every wait.
+func (s *Store) Quiesce(ctx context.Context) error { return s.gate.quiesce(ctx) }
+
+// Quiesced returns the store's completion signal. It closes exactly once, after Quiesce or Close has shut
+// shared admission and the last admitted operation has finished. A signal is not implied by a bounded wait
+// returning: only this channel proves the drain.
+func (s *Store) Quiesced() <-chan struct{} { return s.gate.quiesced }
+
+// Close quiesces the store and then closes both pools. It reports ErrNotQuiescent without closing the pools or
+// marking the store closed while work is active, so a later call can finish the close with a live context. Only
+// after the drain does it close the pools and report their errors; pool-close errors after quiescence mean an
+// unsuccessful exit, not an active writer. It is safe to call again. ctx can shorten every wait. Any call made
+// during or after the closed state returns ErrClosed.
 func (s *Store) Close(ctx context.Context) error {
 	s.closeMu.Lock()
 	defer s.closeMu.Unlock()
 	if s.closed {
 		return nil
 	}
-	s.closed = true
 	start := time.Now()
-	s.gate.close(ctx)
+	if err := s.gate.quiesce(ctx); err != nil {
+		return err
+	}
 	var errs []error
 	if s.reader != nil {
 		errs = append(errs, s.reader.Close())
@@ -314,6 +454,7 @@ func (s *Store) Close(ctx context.Context) error {
 	if s.writer != nil {
 		errs = append(errs, s.writer.Close())
 	}
+	s.closed = true
 	s.ev.closed(newOpID(), time.Since(start))
 	if err := errors.Join(errs...); err != nil {
 		return mapDriverError(err)

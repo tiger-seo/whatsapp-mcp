@@ -23,11 +23,11 @@ func phoneJID(digits string) string { return digits + "@s.whatsapp.net" }
 func lidJID(user string) string     { return user + "@lid" }
 
 // seedDeviceAs saves a synthetic device under the given own JID (which may carry a device part) and LID (the
-// zero JID for none), and returns it loaded back.
+// zero JID for none) through the raw container, and returns it loaded back.
 func seedDeviceAs(t testing.TB, st *Store, own, lid types.JID) *wastore.Device {
 	t.Helper()
 	ctx := context.Background()
-	dev := st.Device().NewDevice()
+	dev := st.container.NewDevice()
 	dev.ID = &own
 	dev.LID = lid
 	dev.PushName = "Test Account"
@@ -35,7 +35,7 @@ func seedDeviceAs(t testing.TB, st *Store, own, lid types.JID) *wastore.Device {
 	if err := dev.Save(ctx); err != nil {
 		t.Fatalf("Save device: %v", err)
 	}
-	loaded, err := st.Device().GetFirstDevice(ctx)
+	loaded, err := st.container.GetFirstDevice(ctx)
 	if err != nil {
 		t.Fatalf("GetFirstDevice: %v", err)
 	}

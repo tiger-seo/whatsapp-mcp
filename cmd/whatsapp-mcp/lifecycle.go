@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -9,9 +10,11 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/tiger-seo/whatsapp-mcp/internal/store"
 )
 
-// shutdownTimeout bounds the whole graceful shutdown.
+// shutdownTimeout marks a slow shutdown as unsuccessful without abandoning cleanup.
 const shutdownTimeout = 10 * time.Second
 
 type stopStep struct {
@@ -20,7 +23,7 @@ type stopStep struct {
 }
 
 // lifecycle runs a long-running command until the first stop signal or stop request, then runs the stop
-// steps in reverse order of registration under shutdownTimeout. A second signal exits at once.
+// steps in reverse order of registration. A second signal exits at once.
 type lifecycle struct {
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -79,6 +82,18 @@ func (lc *lifecycle) addStop(name string, stop func(context.Context) error) {
 	lc.steps = append(lc.steps, stopStep{name, stop})
 }
 
+// addStoreStop retains the lock until the store proves its admitted work has drained.
+func (lc *lifecycle) addStoreStop(closeStore func(context.Context) error, drained <-chan struct{}) {
+	lc.addStop("store", func(ctx context.Context) error {
+		err := closeStore(ctx)
+		if !errors.Is(err, store.ErrNotQuiescent) {
+			return err
+		}
+		<-drained
+		return errors.Join(err, closeStore(ctx))
+	})
+}
+
 // requestStop stops the command for a reason other than a signal, such as stdin closing.
 func (lc *lifecycle) requestStop(reason string) {
 	select {
@@ -89,6 +104,7 @@ func (lc *lifecycle) requestStop(reason string) {
 
 func (lc *lifecycle) watch() {
 	stopping := false
+	signalSeen := false
 	begin := func(reason string) {
 		stopping = true
 		lc.log().Info("shutting down", "reason", reason)
@@ -97,12 +113,17 @@ func (lc *lifecycle) watch() {
 	for {
 		select {
 		case sig := <-lc.signals:
-			if stopping {
+			if signalSeen {
 				lc.log().Warn("forced exit")
 				lc.exit(exitError)
 				return
 			}
-			begin(sig.String())
+			signalSeen = true
+			if !stopping {
+				begin(sig.String())
+			} else {
+				lc.log().Info("first stop signal received; continuing orderly shutdown")
+			}
 		case reason := <-lc.requests:
 			if !stopping {
 				begin(reason)
@@ -114,7 +135,7 @@ func (lc *lifecycle) watch() {
 }
 
 // shutdown runs the stop steps and returns the exit code: 0 after a clean stop, 1 if a step failed or
-// the deadline passed.
+// the notification deadline passed. The deadline never abandons a cleanup step.
 func (lc *lifecycle) shutdown() int {
 	defer lc.close()
 	lc.cancel()
@@ -122,22 +143,34 @@ func (lc *lifecycle) shutdown() int {
 	steps := append([]stopStep(nil), lc.steps...)
 	lc.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), lc.timeout)
-	defer cancel()
+	timer := time.NewTimer(lc.timeout)
+	defer timer.Stop()
+	timeout := timer.C
 	code := exitOK
 	for i := len(steps) - 1; i >= 0; i-- {
 		step := steps[i]
 		errc := make(chan error, 1)
-		go func() { errc <- step.stop(ctx) }()
+		go func() { errc <- step.stop(context.Background()) }()
 		select {
 		case err := <-errc:
+			select {
+			case <-timeout:
+				lc.log().Error("shutdown timed out", "waiting_for", step.name)
+				code = exitError
+				timeout = nil
+			default:
+			}
 			if err != nil {
 				lc.log().Error("stop failed", "step", step.name, "error", err)
 				code = exitError
 			}
-		case <-ctx.Done():
+		case <-timeout:
 			lc.log().Error("shutdown timed out", "waiting_for", step.name)
-			return exitError
+			code = exitError
+			timeout = nil
+			if err := <-errc; err != nil {
+				lc.log().Error("stop failed", "step", step.name, "error", err)
+			}
 		}
 	}
 	lc.log().Info("stopped")

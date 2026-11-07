@@ -18,8 +18,9 @@ Without it, ask the user for the specification before planning; don't guess the 
 Features 001 (binary skeleton, pull request #1) and 002 (SQLite storage, pull request #5) are implemented,
 verified and merged into `main`. The code:
 
-- `cmd/whatsapp-mcp`: the commands, flag parsing, the logger and the shutdown lifecycle. Only `version`
-  does real work yet.
+- `cmd/whatsapp-mcp`: the commands, flag parsing, the logger and the shutdown lifecycle. `version`, `status` (offline
+  local snapshot) and `pair` (QR window, offline recovery) work; `stdio` and `serve` open the store and the owner but
+  have no MCP tools yet.
 - `internal/config`: layered settings and the data directory. Every setting is one descriptor in the
   registry in `internal/config/setting.go`; a new setting is one descriptor plus one `Config` field.
 - `internal/lock`: the single-instance lock on the data directory.
@@ -37,6 +38,24 @@ verified and merged into `main`. The code:
   macOS for every push and pull request (the Windows job keeps its temporary directory on the `D:` drive, which is
   about 12 times faster than the runner's default). A nightly `heavy` job on Linux runs the heavy store tests when
   `main` has changed; it can also be started by hand.
+
+Feature 003 (WhatsApp connection, pairing and status) is implemented on branch `003-whatsapp-pairing-status` (pull
+request #9, not merged): all tasks are done and the owner reviews passed (design 8edc293, code 71edddf and ecd18b1).
+`specs/003-whatsapp-pairing-status/tasks.md` ("Current State") is its resume point. What exists:
+
+- `internal/wa`: the connection owner (state, epochs, one attempt at a time, watchdog, pairing windows), the pinned
+  whatsmeow session adapter, the version provider, the app-state repair controller (`recovery.go`) and the bounded
+  HTTP client. Every automatic reconnect is denied by default except the one post-pair connection, which `pair` enables
+  (`PostPairReconnect`, approved 2026-11-06; the long-running commands keep it off). Checked on one real account
+  (2026-11-06 and 2026-11-07, Windows). The 405 budget, startup retries and ordinary reconnect are deferred to the
+  roadmap follow-up "logout and shutdown drain".
+- `internal/wasim`: a simulated WhatsApp server and phone for tests only.
+- `internal/store`: the unsafe-run marker (schema 3), repair markers, the read-only `Inspect` view and offline
+  recovery. After any production Connect the marker stays unsafe until a separately authorized offline recovery
+  (`pair`, interactive terminal).
+- `internal/lock`: also `AcquireExisting`, for `status`.
+- Evidence is Windows, WSL2 and Linux/Windows/macOS CI runners. Not verified: a real account, native console/PTY
+  recovery, macOS `F_FULLFSYNC`, power loss. `OPERATIONS.md` separates implemented from verified.
 
 Spike results are in `docs/spikes.md`.
 S1 (§8.5) is done: `sqlstore` works on `modernc.org/sqlite` with the dialect name `"sqlite"`. Nothing is
@@ -81,6 +100,10 @@ asks for confirmation instead; put the verdict in the pull request. The hook nee
 
 ## Conventions
 
+- Ubuntu WSL2 is available for Linux tests from this Windows workspace. From PowerShell, run for example
+  `wsl -d Ubuntu --cd /mnt/d/projects-mou/whatsapp-mcp-next --exec env CGO_ENABLED=0 go test ./... -count=1 -timeout 10m`.
+  Use a Linux Go toolchain compatible with `go.mod` and Linux temporary storage with enough free space for the
+  store tests. Record WSL2 results as such; they do not establish native Linux hardware or CI results.
 - One Go module at the root; the binary is `whatsapp-mcp` (`cmd/whatsapp-mcp`); code goes in `internal/...`
   (§8.3 A4).
 - Always `CGO_ENABLED=0`. Never add a dependency that needs CGO.
