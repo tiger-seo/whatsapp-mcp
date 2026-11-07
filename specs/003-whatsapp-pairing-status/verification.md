@@ -697,6 +697,20 @@ Windows 10, shipped binary and helper built from `a3b787f` (`D:\tmp\sc-bin\`). E
 
 **Result.** The T062 journey ran as the task describes: fresh link, unsafe-marker retention, no automatic reuse, unsafe restart refused, separately authorized offline recovery, live logout, denial of same-process re-pair, phone label observed. T062 is ticked on that basis, with the gaps above.
 
+## US4 Denial-Only Scope Check - 2026-11-07
+
+T050, T051, T053, T054 and T056 were ticked on the re-scoped (denial-only) text after the design PASS at 8edc293. Windows 10, `CGO_ENABLED=0`: `go test ./internal/wa -count=1 -run 'Outdated|Denies|Denied|Race|Watchdog|Version|PostPair|Session'` passed (7.1 s) and `go test ./cmd/whatsapp-mcp -count=1 -run 'Version|Outdated|PostPair'` passed (22.0 s).
+
+| Task | Covered by |
+| --- | --- |
+| T050 | `TestOwnerClientOutdatedIsNotRetriedAndIsDiagnosed` (five duplicate 405 events: no Connect, no refresh fetch, exactly one `reconnect_denied`, identity kept, no new window), `TestOwnerClientOutdatedAfterStopIsIgnored`, `TestRaceFinalTimeoutVersusDelayed405`, the watchdog tests in `owner_test.go` and `owner_postpair_test.go` (stalled connect cancelled before Disconnect, slot kept until drain) |
+| T051 | `TestSessionFreshHandshakeSnapshotsAreConsistentAcrossCandidateRefresh`, `TestSessionSavedHandshakeUsesNewCandidateOnNextHandshake`, `TestSessionPayloadCallbackDoesNoIO` |
+| T053 | the 405 handling in `owner.go` (one denial per burst, terminal state, no budget); same tests as T050 |
+| T054 | `TestSessionDeniesEveryLibraryReconnectPath`, `TestOwnerManualLoginReconnectIsDenied`, the post-pair tests and `TestOwnerDeniesPostPairReconnectByDefaultAgainstSimulator` |
+| T056 | `version_connection_test.go`, `TestShellSavedSessionOutdatedHandoff`, `TestVersionRefreshSharesCallAndWaiterCancellation`, `TestVersionOwnerCancellationStopsRefresh`, the scheduler tests |
+
+**Not shown.** There is no dedicated assertion that the post-pair 515 reconnect selects the refreshed version; it uses the same per-call handshake payload as a saved-session handshake, which is tested. The three-retry budget, five-second waits, reset on Connected and ordinary-reconnect version use are not built (deferred to the reconnect follow-up). Timing numbers for budgets do not exist because there is no budget.
+
 ## T036 Accepted Limit - 2026-11-07
 
 The owner (`tiger-seo`) accepted the key-delivery gap of T036 as a recorded limit. **Not tested:** the end-to-end case in which the phone shares an app-state key and a retry then succeeds; it needs a peer Signal session in the simulator. **Tested:** store admission of `PutAppStateSyncKey` while repair is pending and while the repair fence is held (`internal/store/repair_save_race_test.go`), the detached request context, refusal after retirement and the per-key bound (`internal/wa/repair_keyreq_test.go`), the 16-MiB consumption limit and discarded errors. **Effect if the untested part is broken:** repair stays pending, so contacts and app-state stay stale and the unsafe marker stays; no message is lost and no security property changes. **Conditions:** (1) the "failing first" evidence of `repair_keyreq_test.go` came from inverting the test's own assertions and shows nothing about its power, so the full-branch code review must ask for at least one production-side mutation (for example, letting the guarded store serve a lookup after retirement); (2) the gap stays listed as not verified.
