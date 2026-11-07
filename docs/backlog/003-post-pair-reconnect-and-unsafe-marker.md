@@ -280,6 +280,27 @@ offline recovery. Conditions to make A acceptable:
 - ordinary reconnect has a rate limit;
 - E003-RX-01 is reassessed before the reconnect paths are enabled.
 
+## Correction: a process exit does not prove the data is intact (analysis 2026-11-07, not decided)
+
+An idea raised the same day: let every retry be "exit and start a new process", on the argument that the unsafe
+marker only guards in-process work, so a dead process proves nothing can still send or write. The research above
+contradicts the premise.
+
+- **The marker also guards durable state.** A store write rejected after retire is crash-like, and a decrypt that fails
+  because its write was refused makes whatsmeow send an ack, so the server may drop the message for good
+  (`message.go:420-432`). A process exit repairs neither. Exit alone is not proof.
+- **What survives from the idea.** Option A's conditions already cover the durable part: close the socket and HTTP
+  traffic first, block the store second, and require a refused-call count of zero. If that holds at an orderly stop,
+  goroutines that had not yet written anything die with the process and leave no inconsistent state. This might let
+  the `runtime.Stack` scan be dropped from stage 1 and be replaced by the process exit. **Hypothesis, not a finding:**
+  it needs a simulator test (a stop with a goroutine pending, a stop with a refused call) and an owner decision. Its
+  cost for `stdio` is open: a process cannot restart itself under a client that holds stdin and stdout.
+- **Scope for feature 003.** The open US4 tasks (T050, T051, T053, T054, T056) are stage 2 above. They need the
+  revised gate, a rate limit for ordinary reconnect and a reassessment of E003-RX-01, so they cannot be finished by
+  implementation inside 003. Options for 003: rewrite them as "denial by default and diagnostics" (already built and
+  tested; needs a `tasks.md` change outside Current State and a fresh owner design review) or leave them open into
+  the code review. The owner has not chosen.
+
 ## Closure
 
 Close when the marker clears safely after an orderly stop and the switch is gone, or when the owner records a reviewed decision to accept the current policy permanently. Do not close it by silence.
