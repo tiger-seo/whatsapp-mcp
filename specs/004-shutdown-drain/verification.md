@@ -9,3 +9,4 @@ approval, simulator results, pass-rate run, platform evidence, real-account jour
 | --- | --- | --- | --- | --- |
 | design | 2026-11-07 | 11ac064 | BLOCK | |
 | design | 2026-11-07 | 14f648a | BLOCK | |
+| design | 2026-11-07 | 8c32753 | CONCERNS | |
