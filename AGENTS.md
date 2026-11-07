@@ -39,15 +39,16 @@ verified and merged into `main`. The code:
   about 12 times faster than the runner's default). A nightly `heavy` job on Linux runs the heavy store tests when
   `main` has changed; it can also be started by hand.
 
-Feature 003 (WhatsApp connection, pairing and status) is in progress on branch `003-whatsapp-pairing-status`, not
-merged and with no full code review yet. `specs/003-whatsapp-pairing-status/tasks.md` ("Current State") is its resume
-point. What exists:
+Feature 003 (WhatsApp connection, pairing and status) is implemented on branch `003-whatsapp-pairing-status` (pull
+request #9, not merged): all tasks are done and the owner reviews passed (design 8edc293, code 71edddf and ecd18b1).
+`specs/003-whatsapp-pairing-status/tasks.md` ("Current State") is its resume point. What exists:
 
 - `internal/wa`: the connection owner (state, epochs, one attempt at a time, watchdog, pairing windows), the pinned
   whatsmeow session adapter, the version provider, the app-state repair controller (`recovery.go`) and the bounded
   HTTP client. Every automatic reconnect is denied by default except the one post-pair connection, which `pair` enables
-  (`PostPairReconnect`, approved 2026-11-06; the long-running commands keep it off). It is not yet checked on a real
-  account or code-reviewed.
+  (`PostPairReconnect`, approved 2026-11-06; the long-running commands keep it off). Checked on one real account
+  (2026-11-06 and 2026-11-07, Windows). The 405 budget, startup retries and ordinary reconnect are deferred to the
+  roadmap follow-up "logout and shutdown drain".
 - `internal/wasim`: a simulated WhatsApp server and phone for tests only.
 - `internal/store`: the unsafe-run marker (schema 3), repair markers, the read-only `Inspect` view and offline
   recovery. After any production Connect the marker stays unsafe until a separately authorized offline recovery
