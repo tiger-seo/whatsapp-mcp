@@ -246,6 +246,7 @@ Validation utility: `D:\wa-003-repro-20261102-202105\validate-tasks.py`, run suc
 | design | 2026-11-07 | 54b3df2 | BLOCK | |
 | design | 2026-11-07 | 8edc293 | PASS | |
 | code | 2026-11-07 | 71edddf | PASS | |
+| code | 2026-11-07 | ecd18b1 | PASS | Scoped to 71edddf..ecd18b1. Three low findings left open for a follow-up docs commit: OPERATIONS.md real-account count and dates (three permitted runs on one account, 2026-11-06 and 2026-11-07), OPERATIONS.md wording on CI (CI runs on every push; it has not run for this HEAD), and a wrong comment on the storage-fault subtest in `owner_postpair_recheck_test.go`. |
 
 **Design review at c832c39**: Owner-judge returned BLOCK on the revised design. Findings concerned identifying the correct phone-side linked device, recovery after forced termination, marker clearing under the disk reserve, macOS power-loss durability, the definition of an unresolved pairing attempt, interactive-terminal detection, missing pinned-source evidence, logout racing marker clear, and design artifact alignment. The review identified several owner decisions and explicitly did not verify pinned sources outside the repository, native platform behavior, phone labels or real-account behavior. No account action or tests were performed. The findings require resolution and a fresh review; this record does not approve a change, exception, or parked finding.
 
