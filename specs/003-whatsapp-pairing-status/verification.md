@@ -243,6 +243,8 @@ Validation utility: `D:\wa-003-repro-20261102-202105\validate-tasks.py`, run suc
 | design | 2026-11-05 | 19b0406 | PASS | |
 | code | 2026-11-06 | 42ff6f2 | CONCERNS | Scoped to the T077 post-pair 515 candidate only (commits e65febc, 97a7cf4, 9ff4f18, 42ff6f2); this is not the feature code review and no PR may be opened on this row. `PostPairReconnect` stays false and enabling it is not approved: the proof gate is unmet (no held pinned node handler or LoggedOut dispatch across Disconnect and retry, incomplete cancel/retire/stop matrix, no Linux/macOS run, T068-T073 open). The two medium findings (pending-timer phase, refused-515 phase) were fixed afterwards in a separate commit. |
 | design | 2026-11-06 | 516648b | CONCERNS | (1) A link confirmed without a 515 makes `pair` exit 0 with a recovery-required notice (marker stays unsafe; a storage fault or any other stop error still exits 1). (2) The out-of-order US2 integration is accepted on condition that any T077 outcome that changes the pairing or connection flow reopens it; T036 stays unchecked. T077 and real-account pairing stay undecided pending a separately permissioned T062. Low findings (tasks.md Current State, OPERATIONS.md, plan.md) fixed. |
+| design | 2026-11-07 | 54b3df2 | BLOCK | |
+| design | 2026-11-07 | 8edc293 | PASS | |
 
 **Design review at c832c39**: Owner-judge returned BLOCK on the revised design. Findings concerned identifying the correct phone-side linked device, recovery after forced termination, marker clearing under the disk reserve, macOS power-loss durability, the definition of an unresolved pairing attempt, interactive-terminal detection, missing pinned-source evidence, logout racing marker clear, and design artifact alignment. The review identified several owner decisions and explicitly did not verify pinned sources outside the repository, native platform behavior, phone labels or real-account behavior. No account action or tests were performed. The findings require resolution and a fresh review; this record does not approve a change, exception, or parked finding.
 
@@ -534,7 +536,7 @@ One run of the shipped binary (`a24f15d` plus uncommitted test files, `pair --lo
 
 **Tech debt.** Recorded in `docs/backlog/003-post-pair-reconnect-and-unsafe-marker.md` (local, `docs/` is not tracked): the unjoined upstream work, no reusable session (blocks feature 004's real-account test), thin evidence, and the switch itself.
 
-### T077 Residual Risk Corrected - 2026-11-07 (owner re-confirmation pending)
+### T077 Residual Risk Corrected - 2026-11-07 (owner re-confirmation given)
 
 The source audit in the backlog item (Debt 1) corrects the risk list above. Besides the unjoined `sendUnifiedSession` and queue-overflow goroutines, **every** node handler still running at Disconnect is detached at once, not only one that outlives 10 x 30 s. An interrupted IQ request can be resent on the new socket within 5 s; retry receipts and app-state key shares can go out on it; and the pairing error tail or the QR emitter can call `Disconnect()` on the new connection. These were found by reading the source and were not observed on the real account (one run, 2026-11-06, plus the T062 run, 2026-11-07, showed no such effect). They act on a real account, so only the owner can accept them.
 
@@ -753,7 +755,7 @@ For a fresh session. Branch `003-whatsapp-pairing-status`; the last feature comm
 **Where the evidence is (sections above):** default-deny reconnect (T075/T076); 515 source findings and probe; candidate post-pair reconnect against the simulator; 401 matrix; stop and cancel while the Save is held; T068-T073 unsafe-run evidence and its gaps; US3 offline status. Owner reviews table: design PASS at 19b0406, and one **scoped** code row `CONCERNS` at 42ff6f2 for the T077 candidate only. There is no full-branch code review yet, so `gh pr create` must not be used.
 
 **State of the code worth knowing**
-- `OwnerConfig.PostPairReconnect` is false in production; tests set it true. Production starts a Connect only at startup (once) and in a pairing window (once). Log event `reconnect_denied` marks every refusal; the production Connect latch is `Session.UpstreamDrainUnproven`.
+- Superseded by "T077 Decision": `OwnerConfig.PostPairReconnect` is true for `pair` and false for `stdio` and `serve`. Production starts a Connect only at startup (once) and in a pairing window (once). Log event `reconnect_denied` marks every refusal; the production Connect latch is `Session.UpstreamDrainUnproven`.
 - `status` takes the owner lock (`AcquireExisting`, or `Acquire` when a database exists without a lock file), so it fails with the holder's PID while a pair, stdio or serve process runs.
 - `go.mod` was tidied (commit 9940272); do not run Go commands with `GOFLAGS=-mod=mod`, which rewrote it once.
 
@@ -771,4 +773,4 @@ For a fresh session. Branch `003-whatsapp-pairing-status`; the last feature comm
 - Real-account behaviour is unverified everywhere: whether the real server sends 515 before or after `PairSuccess`, whether every pairing gets a 515, and the phone-side label. No real-account step is authorized (T062 needs per-step permission).
 - Stale text to fix in T059: `OPERATIONS.md`, `AGENTS.md` "Current state" (also still says feature 003 work is absent), `quickstart.md`.
 
-**Suggested next step for a fresh session:** T030-T032 are done (section "US2 Test Wave"); ask the user which gate to attack first (native US1 evidence, the T077 decision, or T049/T051); do not enable `PostPairReconnect`, do not open a PR, and do not take any real-account action.
+**Suggested next step for a fresh session:** T030-T032 are done (section "US2 Test Wave"); ask the user which gate to attack first (native US1 evidence, the T077 decision, or T049/T051); do not change the `PostPairReconnect` switch (superseded by "T077 Decision"), do not open a PR, and do not take any real-account action.
