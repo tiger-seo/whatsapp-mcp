@@ -697,6 +697,75 @@ Windows 10, shipped binary and helper built from `a3b787f` (`D:\tmp\sc-bin\`). E
 
 **Result.** The T062 journey ran as the task describes: fresh link, unsafe-marker retention, no automatic reuse, unsafe restart refused, separately authorized offline recovery, live logout, denial of same-process re-pair, phone label observed. T062 is ticked on that basis, with the gaps above.
 
+## T063 Evidence Roll-Up - 2026-11-07
+
+Windows 10, Go 1.27.3, `CGO_ENABLED=0`, HEAD `f6865b9` (clean apart from the unrelated `.gitignore`, `.kilo/`, `reports/`, `research_notes/`). Logs: `D:\tmp\t063_*.log` (local). No account action, no push, no CI trigger, no network beyond the Go module cache.
+
+**Commands run now (exit codes read directly, no pipe).**
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Formatting | `gofmt -l .` | exit 0, nothing listed |
+| Vet | `go vet ./...` | exit 0 |
+| Module integrity | `go mod verify` | exit 0, "all modules verified" |
+| Full tests | `go test ./... -count=1 -timeout 15m` | exit 0 for all nine packages: cmd 131.3 s, buildinfo 2.0 s, config 5.2 s, lock 3.6 s, private 3.8 s, store 221.1 s, wa 14.9 s, walog 2.3 s, wasim 4.9 s. The tree has 624 top-level `Test` functions (outside the helper under `internal/wa/testdata`); the run does not report skips, so platform-specific skips on Windows are not counted here. |
+| Quickstart: `version` | built binary, `version` | exit 0; prints version, commit, date, Go and target. |
+| Quickstart: `status` on a fresh directory | built binary, `status --data-dir D:\tmp\t063-empty` | exit 1: the directory was refused because other users can access it, with the `icacls` fix printed; nothing was created in it (0 entries). A fail-closed observation for the private-directory rule, not a status result. The offline status outputs are covered by `status_test.go`. |
+
+The quickstart checks that need a real account (pair, restart, recovery, helper) are not rerun here; T062 ran them on 2026-11-07 under per-step permission. Earlier gates that this run did not repeat (five cross-builds, `govulncheck` v1.9.0, WSL2 Ubuntu run, heavy opt-in tests, `go mod tidy -diff`) stay as recorded in "T061 Verification Gates" at `808205f`; since then, `a3b787f` removed the two stale `go.sum` lines.
+
+**Evidence kinds.** *Test* means an automated test on Windows in this run (simulator or fake session, never a real account). *CI* means the same tests on Linux, Windows and macOS runners at earlier commits, per "CI Platform Evidence" (not rerun for this HEAD). *Real* means the two permitted real-account pair runs (2026-11-06 and the T062 journey, 2026-11-07): one account, one phone, Windows only. The baseline probes (the pinned library's behaviour, "T077 Post-Pair 515 Investigation") stay separate from feature controls: they show what upstream does, not that a feature control works.
+
+| ID | Proved by | Simulator/test only | Not verified |
+| --- | --- | --- | --- |
+| FR-001 | `TestProcessSingleInstance`, `TestPairHolderPIDRefusal`, `TestStatusHeldLockReportsHolderWithoutInspecting`, `internal/lock` tests, `TestSessionOpensGuardedDeviceWithReviewedOptions` | all | native Linux/macOS lock behaviour beyond CI |
+| FR-002 | `TestPairSucceedsOnlyWithDurableIdentityAndConnected`, `TestPairConnectionEventsAreNotProofOfSuccess`, `TestPairRendersCurrentCodeWithoutPayloadLogs`, `TestPairLinkedWithRecoveryRequiredExitsZeroWithNotice`, `TestSimulatorPairsAndReconnectsToConnected`; Real: two links on one account, exit 0 with the recovery notice | the success-only-after-confirmation rules | another account or phone model; whether every pairing gets 515; the exit code of the T062 helper runs |
+| FR-003 | `TestSessionValidIdentityRestartsWithoutQR`, `TestRunGuardUnsafeBlocksClientConstruction`, `TestShellSavedSession*`; Real: T062 step A refused the restart on an unsafe store | clean-marker reuse | a real reuse of a clean saved session (none exists: any production Connect leaves the marker unsafe) |
+| FR-004 | `TestOwnerStatusFourFieldsAndCopiedSnapshots`, `TestOwnerSavedButUnverifiedInitialAndOrdinaryDisconnect` | all | live status on a real long-running session |
+| FR-005 | `TestPairingCodeExpiryIsBoundedAndDoesNotEndWindow`, `TestPairingStaleAndLateEventsAreIgnored`, `TestOwnerPairingSnapshotIsCopied` | all | |
+| FR-006 | `TestPairingFinalTimeoutGatesFurtherRequests`, `TestJourneyFinalTimeoutStartsNoSecondWindow`, `TestRunGuardUnresolvedPairingBlocksRetryAndClear`; Real: T062 denial of a second pairing in the same process | | |
+| FR-007 | `TestPairingConcurrentRequestsShareOneWindow`, `TestPairingWaitContextCancellationDoesNotCancelWindow` | all | |
+| FR-008 | `status_test.go` (missing and empty directory create nothing, held lock, unsafe and legacy storage exit non-zero), `TestStatusAndVersionDoNotCreateTheDatabase`; Real: offline `status` after the T062 pairs showed the unsafe warning and no QR or connection | | native macOS/Linux file-identity paths beyond CI |
+| FR-009 | `TestStatusSavedIdentity`, `TestStatusUnpairedDatabase`; Real: `logged_in: true` offline with the warning, `false` after recovery | | |
+| FR-010 | `TestVersionSchedulerRefreshesEverySixHours`, `TestVersionSchedulerSharesOneFetchWithExplicitRefresh`, `TestSessionVersionSelectedBeforeConnect`, `TestVersionRequestLooksLikeANavigation`, `TestVersionDiscoveryRunsOnceBeforeConnect` | all | that the real server accepts the refreshed version: T062 step C logged no discovery warning, but the selected version was not printed |
+| FR-011 | **Denial branch only.** `TestOwnerClientOutdatedIsNotRetriedAndIsDiagnosed`, `TestOwnerClientOutdatedAfterStopIsIgnored`, `TestRaceFinalTimeoutVersusDelayed405`, `TestShellSavedSessionOutdatedHandoff` | all | the three-retry budget is not built; it is deferred to the reconnect follow-up |
+| FR-012 | `internal/wa/fake_test.go`, `internal/wasim` tests, the `ownerRig`/`simRig` simulator tests | the offline substitutes themselves | none for a real account (they model WhatsApp, they are not evidence about it) |
+| FR-013 | **Startup budget denied.** `TestShellSavedSessionFailureIsNotRetried`, `TestShellSavedSessionStartupExhaustion`, `TestProcessUnpairedShellsStayOffline`, `TestOwnerStopWaitsForConnectReturnAndClearsStatus` | all | the retry sequence is deferred; `stdio` and `serve` have no MCP tools yet |
+| FR-014 | `TestStopStepsInReverseOrder`, `TestShutdownUnderWriteLoad`, `TestShutdownWaitsForHeldDeviceTransaction`, `TestSessionLateSaveAfterCloseDoesNotReplaceCredentials`, `TestOwnerRetirementJoinsRunningRepair`, `recovery_races_test.go` | all | joining of upstream goroutines (unproven, see the drain follow-up and `upstream_drain_unproven`) |
+| FR-015 | `TestOwnerLogsCarryNoPairingMaterialAtAnyLevel`, `TestOwnerLogsCarryNoErrorTextFromSessions`, `TestProcessStdoutStaysEmpty`, `TestMonitoringSamplesOncePerMinuteAndStopsWithTheOwner` | all | |
+| FR-016 | `repair_test.go` and `repair_store_test.go` (`internal/wa`), `internal/store` repair and `repair_save_race_test.go`, `TestAppStateHTTPEnforcesConsumedBudget`, `TestJourneyRepairMarkerSurvivesFailedPassAndRestart` | the store and controller parts | end-to-end key delivery from a peer session (accepted limit, "T036 Accepted Limit"); a real app-state repair |
+| FR-017 | `TestSessionFreshRegistrationIdentification`, `TestSessionPayloadPreservesUnknownFields`, `TestSessionPayloadCloneLeavesLibraryGlobalsUnchanged`, `session_version_test.go`; Real: phone label "Google Chrome (Linux)" once | companion and version consistency | the label is not stable and is not promised; **no dedicated assertion that the post-pair 515 reconnect selects the refreshed version** (it shares the per-call payload path) |
+| FR-018 | `internal/store` `run_guard_test.go`, `run_guard_kill_test.go`, `recovery_identity_test.go`, `internal/wa/run_guard_test.go`, `cmd` `run_guard_test.go` and `recovery_test.go`; Real: T062 steps A, B and D | process-kill and recovery journeys | native console/PTY recovery on Windows, Linux and macOS; recovery with real chats in the store (the T062 store was empty) |
+| SC-001 | `TestRunGuardOwnerLifecycle`, `TestJourneyUnsafeRunNeedsOfflineRecoveryBeforeFreshPair`; Real: T062 steps A and C | | |
+| SC-002 | `logout_test.go`, `TestRunGuardConfirmedLogoutCleanup`; Real: T062 step D (live logout, identity removed, same-process pair denied) | | a delayed logout against the real client under load |
+| SC-003 | `TestOwnerStatusFourFieldsAndCopiedSnapshots`, `status_test.go`; zero network is by construction (the offline path builds no client) and by the quickstart `status` run above refusing before any network use | | |
+| SC-004 | **Retry clauses deferred.** Six-hour refresh without interrupting a connection: `TestVersionSchedulerRefreshesEverySixHours`, `TestOwnerHealthyConnectionSurvivesWatchdog`; denial: the FR-011 tests | | repeated 405 after refresh (not built) |
+| SC-005 | `recovery_races_test.go`, `TestOwnerStorageFaultRetiresConnectedGeneration`, `TestShutdownUnderWriteLoad`, `TestRunGuardStorageFaultDuringDrain` | all | upstream goroutines not joined: late writes are blocked by the store guard, not prevented |
+| SC-006 | `security_test.go`, `TestProcessStdoutStaysEmpty`, `TestPairRendersCurrentCodeWithoutPayloadLogs`, "T057 Secrecy and Monitoring Tests" | all | |
+| SC-007 | T062 journey ("T062 Permissioned Real-Account Journey"): per-step permission, unsafe restart, offline recovery, live logout | | exit codes of the helper and recovery runs were not captured; the prompt wording is poor (backlog `003-offline-recovery-prompt-usability.md`) |
+| SC-008 | `internal/wa/fake_test.go`, `internal/wasim` tests, command tests with the synthetic owner (`TestProcessPairUsesSyntheticOwner`) | all | |
+| SC-009 | `TestRepairClearsEachCollectionAfterOneFullResync`, `TestRepairWriteFaultDuringCallNeverClears`, `TestRaceWriteFaultDuringRepairNeverClearsAndRestartRecovers`, `TestJourneyRepairMarkerSurvivesFailedPassAndRestart` | all | key delivery (accepted limit) |
+| SC-010 | **Denial branch only.** The FR-011 and FR-013 tests plus the watchdog tests (`TestOwnerWatchdogCancelsStalledDialBeforeDisconnect`, `TestOwnerWatchdogDrainsBeforeSlotRelease`, `TestPostPairReconnectStalledConnectIsBounded`) | all | the bounded retry timings are not measured because no retry exists |
+| SEC-001 | `TestQRCodeFloodKeepsOnlyTheCurrentCode`, `TestPairingRejectsUnencodableAndLateCodes`, `qr_test.go`, `security_test.go` | all | |
+| SEC-002 | `TestPairingRejectedDuringShutdown`, `TestStatusEmptyDirectoryCreatesNothing`, `TestPairAlreadyPairedDiagnostic`, `TestProcessUnpairedShellsStayOffline` | all | |
+| SEC-003 | `internal/private` tests, `internal/config` secure tests, `internal/store` `walview_test.go`, `recovery_identity_test.go`; this run's quickstart `status` refusal of a non-private directory | Windows here; Linux/macOS via CI | CI-only "denied to other users" step on Linux; macOS hardware flush |
+| SEC-004 | `TestBoundedHTTPRejectsTLSRedirectAndCredentials`, `TestBoundedHTTPConsumption`, `TestVersionRefreshRejectsUntrustedTLS`, `TestVersionRefreshFailuresKeepCandidate` | all | |
+| SEC-005 | `TestBoundedHTTPDeadlineCoversBody`, `TestAppStateHTTPProfile`, `TestQRBoundedAndInvalidInputs`, `TestRecoveryEndlessInputIsConsumedOnlyUpToTheBound`, the watchdog tests | all | the 405 budget accounting (not built); upstream receive bounds (E003-RX-01, below) |
+| SEC-006 | `TestOwnerLogsCarryNoErrorTextFromSessions`, `TestBoundedHTTPConsumption`, "T057 Secrecy and Monitoring Tests" | all | |
+| SEC-007 | the synthetic-only test suite (no real data in tests); `session-check` helper tests (`internal/wa/testdata/cmd/session-check/main_test.go`, run as T060 recorded); T062 per-step permissions | | helper not part of `./...`; its tests were last run for T060/T061 |
+| SEC-008 | this run's `go mod verify`, `go vet ./...`, `gofmt -l .`; T061 (five cross-builds, `govulncheck` v1.9.0, driver/libc check) at `808205f` | Windows (+ WSL2 for T061) | `govulncheck` and the cross-builds were not repeated for `f6865b9`; no CI result for this HEAD |
+
+**Exception E003-RX-01.** Expires at the start of 2026-12-02 UTC, 25 days from 2026-11-07, with no automatic renewal. The pin is unchanged (`go.mau.fi/whatsmeow v0.0.0-20261027104441-1eec1136a50b`, confirmed by `go mod verify` and the unchanged `go.mod`). No earlier trigger fired: no public release, no broader or shared deployment, no relevant upstream fix adopted, no resource incident seen. Reassessment is tied to the drain follow-up decision (fork, Matrix proposal or fresh-client route), since a pin change or fork reassesses it earlier, and both decisions are due before 2026-12-02 (`docs/backlog/003-whatsmeow-receive-resource-bounds.md`, `docs/backlog/003-post-pair-reconnect-and-unsafe-marker.md`).
+
+**Remaining proof gaps (not closed by this task).**
+- Real account: one account, one phone model, Windows only; exit codes of the T062 helper and recovery runs not captured; no recovery with real chats; no second pairing; no run on a clean-marker session (none can exist).
+- Native Linux, native macOS and native console/PTY recovery; CI results for this HEAD (nothing was pushed); the CI-only "denied to other users" step; macOS `F_FULLFSYNC`; power loss and OS crash.
+- Upstream goroutines are not joined; the post-pair reconnect's late-send risks are source-audit findings, never observed (see "T077 Residual Risk Corrected").
+- The 405 budget, startup retries, ordinary reconnect and 515 beyond the post-pair connection are not built (deferred feature); FR-011, FR-013, SC-004 and SC-010 are met only through their conditional "otherwise unavailable" clauses.
+- T036 end-to-end key delivery (accepted limit); the "failing first" evidence of `repair_keyreq_test.go` shows nothing about its power, so the code review should request a production-side mutation.
+- Heavy store test failed once on a 50 ms limit (backlog `003-heavy-test-wall-clock-limit.md`); `go.sum` hygiene fixed in `a3b787f`.
+- The feature is not closed: the full-branch code review (T064) and its commit-level verdict are still to come, and no PR may be opened on the scoped row at `42ff6f2`.
+
 ## US4 Denial-Only Scope Check - 2026-11-07
 
 T050, T051, T053, T054 and T056 were ticked on the re-scoped (denial-only) text after the design PASS at 8edc293. Windows 10, `CGO_ENABLED=0`: `go test ./internal/wa -count=1 -run 'Outdated|Denies|Denied|Race|Watchdog|Version|PostPair|Session'` passed (7.1 s) and `go test ./cmd/whatsapp-mcp -count=1 -run 'Version|Outdated|PostPair'` passed (22.0 s).
