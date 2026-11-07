@@ -16,7 +16,7 @@ require (
 	golang.org/x/text v0.43.0
 	google.golang.org/protobuf v1.36.12
 	modernc.org/libc v1.79.0
-	modernc.org/sqlite v1.61.0
+	modernc.org/sqlite v1.61.1
 	rsc.io/qr v0.2.0
 )
 
