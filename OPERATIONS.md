@@ -110,11 +110,12 @@ they are kept, setting recovery-point and recovery-time objectives, and rehearsi
 ## WhatsApp connection, pairing and status (feature 003)
 
 This section describes what the binary does today and what has and has not been checked. "Implemented" means
-the code exists and its automated tests pass (Windows locally; Linux, Windows and macOS runners in CI once
-a pull request runs them). "Verified" means checked against a real WhatsApp account or real hardware. **Only one
-journey has run against a real account**: a fresh link, an unsafe restart refused, offline recovery, a live logout and
-the denial of a same-process re-pair, on one account and one phone (2026-11-07, see `verification.md`). Every other
-check below is simulated or local.
+the code exists and its automated tests pass (Windows locally, and Linux, Windows and macOS runners in CI on every
+push). "Verified" means checked against a real WhatsApp account or real hardware. **Three permitted runs have used a
+real account, all on one account and one phone on Windows**: two pairings on 2026-11-06 (the first with the
+post-pair reconnect refused, the second with it enabled) and on 2026-11-07 one full journey: a fresh link, an unsafe
+restart refused, offline recovery, a live logout and the denial of a same-process re-pair (see `verification.md`).
+Every other check below is simulated or local.
 
 ### Commands
 
@@ -202,8 +203,8 @@ release the store.
 
 - Automated tests pass on Linux, Windows and macOS runners, including process-kill tests of the markers.
 - **Not checked:** power loss and OS crash; macOS `F_FULLFSYNC` hardware flushes; interactive recovery on a real
-  console, Linux terminal or macOS terminal; a kill between pairing and the first save; any real account (a run on another account or
-  phone model; T062 on 2026-11-07 checked one pairing with the post-pair reconnect enabled).
+  console, Linux terminal or macOS terminal; a kill between pairing and the first save; a second real account or
+  phone model (the three runs above used one account and one phone).
 - A known upstream gap, E003-RX-01, is open: the WhatsApp library does not bound some receive-side resources.
   It is a temporary exception for private, local use, owned by `tiger-seo`, expiring at the start of 2026-12-02
   UTC, with earlier review before any public release, a relevant upstream fix or a resource incident. See
