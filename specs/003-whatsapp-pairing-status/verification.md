@@ -534,6 +534,12 @@ One run of the shipped binary (`a24f15d` plus uncommitted test files, `pair --lo
 
 **Tech debt.** Recorded in `docs/backlog/003-post-pair-reconnect-and-unsafe-marker.md` (local, `docs/` is not tracked): the unjoined upstream work, no reusable session (blocks feature 004's real-account test), thin evidence, and the switch itself.
 
+### T077 Residual Risk Corrected - 2026-11-07 (owner re-confirmation pending)
+
+The source audit in the backlog item (Debt 1) corrects the risk list above. Besides the unjoined `sendUnifiedSession` and queue-overflow goroutines, **every** node handler still running at Disconnect is detached at once, not only one that outlives 10 x 30 s. An interrupted IQ request can be resent on the new socket within 5 s; retry receipts and app-state key shares can go out on it; and the pairing error tail or the QR emitter can call `Disconnect()` on the new connection. These were found by reading the source and were not observed on the real account (one run, 2026-11-06, plus the T062 run, 2026-11-07, showed no such effect). They act on a real account, so only the owner can accept them.
+
+**Owner re-confirmation: given on 2026-11-07.** The owner (`tiger-seo`) confirmed ("підтверджую") the 2026-11-06 approval of the post-pair reconnect for `pair` against the corrected risk list above. The approval stays a code-level switch for `pair` only, with the conditions of the T077 Decision unchanged.
+
 ## Real-Account Observation: Pair With the Post-Pair Reconnect Enabled (not T062) - 2026-11-06
 
 One run of the shipped binary built from `cbff875` (`pair --log-level debug`, stderr to `D:\tmp\wa-t062b-pair.log`) against the same real account, with a fresh empty data directory `D:\tmp\wa-t062b`, after the user's explicit permission for this single step. The user scanned the QR code. This is an observation, not T062: the T060 helper and the rest of the journey were not done, and no recovery, second pair or unlink was run.
@@ -688,6 +694,10 @@ Windows 10, shipped binary and helper built from `a3b787f` (`D:\tmp\sc-bin\`). E
 **Not captured or not covered.** Exit codes of the helper and the recovery run were not seen by the user. No second pairing on the same directory, no recovery of `wa-t062c`, no run on another account or phone model, and no native Linux or macOS run. The usability problems seen during step B (the phone check is asked twice and never says where to look) are recorded in `docs/backlog/003-offline-recovery-prompt-usability.md`.
 
 **Result.** The T062 journey ran as the task describes: fresh link, unsafe-marker retention, no automatic reuse, unsafe restart refused, separately authorized offline recovery, live logout, denial of same-process re-pair, phone label observed. T062 is ticked on that basis, with the gaps above.
+
+## T036 Accepted Limit - 2026-11-07
+
+The owner (`tiger-seo`) accepted the key-delivery gap of T036 as a recorded limit. **Not tested:** the end-to-end case in which the phone shares an app-state key and a retry then succeeds; it needs a peer Signal session in the simulator. **Tested:** store admission of `PutAppStateSyncKey` while repair is pending and while the repair fence is held (`internal/store/repair_save_race_test.go`), the detached request context, refusal after retirement and the per-key bound (`internal/wa/repair_keyreq_test.go`), the 16-MiB consumption limit and discarded errors. **Effect if the untested part is broken:** repair stays pending, so contacts and app-state stay stale and the unsafe marker stays; no message is lost and no security property changes. **Conditions:** (1) the "failing first" evidence of `repair_keyreq_test.go` came from inverting the test's own assertions and shows nothing about its power, so the full-branch code review must ask for at least one production-side mutation (for example, letting the guarded store serve a lookup after retirement); (2) the gap stays listed as not verified.
 
 ## T036 Detached Key Request (part) - 2026-11-06
 

@@ -29,7 +29,7 @@ The new tests must use injected fake clients/providers, synthetic keys and contr
 | Scenario | Required observation |
 | --- | --- |
 | Link/restart | Synthetic save and Connected; after any production adapter Connect attempt, including failure/cancellation, orderly drain retains unsafe and restart starts neither Connect nor QR. Clean-state saved identity is tested separately; failed save cannot succeed. |
-| Startup/reconnect bounds | Both shells: initial failure/timeout. The startup retries, 405, 515 and ordinary reconnect are denied by default today, so assert no retry and an unavailable diagnostic; never Connect after retiring an unproven generation. They return only behind the proof gate (T077/T050/T053/T054). Verify watchdog and no overlap before drain. |
+| Startup/reconnect bounds | Both shells: initial failure/timeout. The startup retries, 405, 515 and ordinary reconnect are denied by default today, so assert no retry and an unavailable diagnostic; never Connect after retiring an unproven generation. The only exception is the post-pair reconnect of `pair` (T077). The rest return only through the deferred reconnect feature. Verify watchdog and no overlap before drain. |
 | QR/window | First/replacement expiry, automatic code rotation within one window, final timeout requiring offline recovery rather than Enter-to-retry, EOF failure, concurrent sharing and stale-epoch rejection. |
 | Offline status | Four fields/caveats, zero client/version/network calls, no missing artifacts created, held lock PID, committed WAL and unchanged DB/sidecars. |
 | Version/retries | Real consumed-byte counting, redirects/TLS/oversize/stall rejection, no valid truncated prefix, immutable payload/hash snapshots, six-hour fake time and conditional 405 budget or safe unavailability. |
@@ -53,7 +53,7 @@ Explicitly build the manual helper (./... excludes testdata):
 go build -o "$env:TEMP\wa-session-check.exe" ./internal/wa/testdata/cmd/session-check
 ```
 
-The helper is planned, not currently present. It must use the production owner/store/lock, an explicitly selected private acceptance directory and interactive per-action approval. It exposes no listener or shipped account-management command. Review it separately; never invoke it from automated tests.
+The helper exists (`internal/wa/testdata/cmd/session-check`) and was used for T062 on 2026-11-07. It must use the production owner/store/lock, an explicitly selected private acceptance directory and interactive per-action approval. It exposes no listener or shipped account-management command. Review it separately; never invoke it from automated tests.
 
 The CI cross-identity privacy fixture creates synthetic private storage with the offline store seed helper, not with status (status is now a real offline command that creates nothing). The privacy denial check is kept.
 

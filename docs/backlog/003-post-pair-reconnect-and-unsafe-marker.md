@@ -299,7 +299,7 @@ contradicts the premise.
   revised gate, a rate limit for ordinary reconnect and a reassessment of E003-RX-01, so they cannot be finished by
   implementation inside 003. Options for 003: rewrite them as "denial by default and diagnostics" (already built and
   tested; needs a `tasks.md` change outside Current State and a fresh owner design review) or leave them open into
-  the code review. The owner has not chosen.
+  the code review. Decided 2026-11-07: the tasks were rewritten as denial-only and this work is deferred to a separate feature (roadmap follow-up).
 
 ## Closure
 
