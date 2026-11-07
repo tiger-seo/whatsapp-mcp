@@ -172,7 +172,7 @@ func productionOwner(deps ownerDeps) (*ownerHandle, error) {
 }
 
 // productionOwnerConfig is the owner configuration of the shipped binary. The post-pair reconnect
-// (owner decision 2026-11-06, see verification.md "T077 Decision") is enabled for the pair command
+// (owner decision 2026-11-06, see the post-pair reconnect decision in the feature verification.md) is enabled for the pair command
 // only: the long-running shells never start a pairing window, so a 515 there stays refused.
 func productionOwnerConfig(deps ownerDeps, provider *wa.VersionProvider, sessions wa.SessionFactory) wa.OwnerConfig {
 	return wa.OwnerConfig{

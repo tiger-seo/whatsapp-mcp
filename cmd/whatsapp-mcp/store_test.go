@@ -205,7 +205,7 @@ func TestShutdownUnderWriteLoad(t *testing.T) {
 	}
 }
 
-// --- US1 T029: real owner-shell behaviour over isolated synthetic paths. ---
+// --- Real owner-shell behaviour over isolated synthetic paths. ---
 
 // shellRun drives one shell command in this process with streaming output capture and an optional
 // signal channel, like startPair does for pair.

@@ -110,9 +110,11 @@ they are kept, setting recovery-point and recovery-time objectives, and rehearsi
 ## WhatsApp connection, pairing and status (feature 003)
 
 This section describes what the binary does today and what has and has not been checked. "Implemented" means
-the code exists and its automated tests pass on Linux, Windows and macOS runners. "Verified" means checked
-against a real WhatsApp account or real hardware. **Nothing in this feature has been verified against a real
-account**, and no check below ran against one.
+the code exists and its automated tests pass (Windows locally; Linux, Windows and macOS runners in CI once
+a pull request runs them). "Verified" means checked against a real WhatsApp account or real hardware. **Only one
+journey has run against a real account**: a fresh link, an unsafe restart refused, offline recovery, a live logout and
+the denial of a same-process re-pair, on one account and one phone (2026-11-07, see `verification.md`). Every other
+check below is simulated or local.
 
 ### Commands
 
@@ -126,8 +128,8 @@ account**, and no check below ran against one.
 
 - One approved window covers any number of QR codes. A code lives for the earlier of the server's expiry and 60
   seconds, and is replaced automatically inside the same window. A code is at most 4 KiB.
-- The window ends on success, on the final timeout, on `Ctrl+C` or a stop signal, on closed input (EOF), on a
-  failure, or on an unsupported flow (a passkey or phone-code request). **Pressing Enter does nothing**: it never
+- The window ends on success, on the final timeout, on `Ctrl+C` or a stop signal, on a
+  failure, or on an unsupported flow (a passkey or phone-code request). **Pressing Enter does nothing**, and closed input (EOF) does not end the window: it never
   retries and never starts recovery.
 - After a successful scan the server asks for a restart (stream error 515, seen about 0.6 s after the pair success on a real account). In `pair` only, the owner then makes exactly one follow-up connection to finish the link; the long-running commands never do. If that connection fails or does not happen, `pair` prints "linking could not be completed safely" and exits 1. The phone may show a failure message and list no device (observed once on a real account, see `verification.md`), or it may list a linked device; open Linked devices on the phone and remove any entry by hand before pairing again.
 - After a final timeout, a failure or a cancel, `pair` exits 1. A device may be linked on the phone (check Linked

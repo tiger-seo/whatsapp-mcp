@@ -267,7 +267,7 @@ func TestProcessTerminate(t *testing.T) {
 	testStopSignal(t, "terminate", "terminated")
 }
 
-// --- US1 T029: the shells over isolated synthetic paths in a real process. ---
+// --- The shells over isolated synthetic paths in a real process. ---
 
 // countingProxy counts connections routed through HTTPS_PROXY, not direct connections.
 type countingProxy struct {
