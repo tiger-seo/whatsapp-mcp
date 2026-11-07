@@ -15,12 +15,12 @@ deletion, and low-disk admission for the clear.
 | Event | Level | Fields | When |
 | --- | --- | --- | --- |
 | `quiet_stop_passed` | info | `epoch`, `duration_ms` | a check passed |
-| `quiet_stop_failed` | error | `epoch`, `reason`, `library_goroutines`, `network_refused`, `storage_refused`, `events_dropped`, `duration_ms` | a check failed |
+| `quiet_stop_failed` | error | `epoch`, `reason`, `library_goroutines`, `network_refused`, `storage_refused`, `calls_refused`, `events_dropped`, `duration_ms` | a check failed |
 | `run_guard_recovery_required` | error | (unchanged) | the marker stays unsafe for any reason |
 | `upstream_drain_unproven` | — | — | **removed**; the check's result replaces it |
 
-`reason` is one of `work_running`, `network_refused`, `storage_refused`, `event_dropped`, `observation_incomplete`,
-`observation_error`. No field carries dump text, function names, argument values, keys, QR material or account
+`reason` is one of `work_running`, `network_refused`, `storage_refused`, `call_refused`, `event_dropped`,
+`stop_bound_exceeded`, `observation_incomplete`, `observation_error`. No field carries dump text, function names, argument values, keys, QR material or account
 identifiers, at any log level.
 
 ## pair

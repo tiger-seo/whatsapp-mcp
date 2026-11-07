@@ -14,7 +14,9 @@ One client instance and its connection: an owner `genState` plus its `Session`.
 | `accountWork` | a production Connect was attempted on this client | set before `ConnectContext`; when false, no check is needed |
 | `fence` | the generation's network block | one per generation; never shared with another generation |
 | `barrier` | the store's device barrier | unchanged; gains a refusal count |
-| `droppedEvents` | events refused after retirement, except the self-caused disconnect | counted from the moment the retire bit is set |
+| `droppedEvents` | owner-relevant events dropped after retirement, except `Disconnected` | counted from the moment the retire bit is set |
+| `lateCalls` | calls from the program's own code to the session after the retire bit is set, except the retirement sequence's own Disconnect | counted from the same moment |
+| `libCtx` | the context the library's node handlers run with after a Connect has returned | cancelled only after the fence and the barrier (invariant I8); the program's own work uses a separate context cancelled at the start |
 | `quiet` | the generation's `QuietStopResult` | written once, by retirement |
 
 **States.** open → connecting / connected / pairing → retiring → retired (blocks closed, drained) → checked (result
@@ -33,23 +35,28 @@ Reads that fail after closing are not counted (research R3).
 
 ## Storage refusal count
 
-`DeviceBarrier.Refused() uint64`: the number of guarded calls for this device session that returned `ErrRetired`.
-It is monotonic, and is read only after `Retire` has drained the admitted work.
+`DeviceBarrier.MarkRetiring()` starts the count when retirement starts. `DeviceBarrier.Refused() uint64` is the number
+of guarded calls for this device session that failed after that point for a reason that comes from the guard or the
+context: `ErrRetired`, a context error, a stale lease or another guard error. A result the database itself returns
+(for example "not found") is not counted. It is monotonic, and is read only after `Retire` has drained the admitted
+work.
 
 ## QuietStopResult
 
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `Passed` | bool | true only when every condition of FR-002 holds |
-| `Reason` | enum | `passed`, `work_running`, `network_refused`, `storage_refused`, `event_dropped`, `observation_incomplete`, `observation_error`, `not_checked` |
+| `Reason` | enum | `passed`, `work_running`, `network_refused`, `storage_refused`, `call_refused`, `event_dropped`, `stop_bound_exceeded`, `observation_incomplete`, `observation_error`, `not_checked` |
 | `LibraryGoroutines` | int | client-library goroutines left at the last observation, after removing allow-listed work |
 | `NetworkRefused` | uint64 | refused dials plus refused writes |
-| `StorageRefused` | uint64 | the barrier's refusal count |
-| `EventsDropped` | uint64 | dropped events (see Generation) |
+| `StorageRefused` | uint64 | the barrier's count (refusals, context errors, stale leases, guard errors) |
+| `CallsRefused` | uint64 | late calls to the session (see Generation) |
+| `EventsDropped` | uint64 | dropped owner-relevant events (see Generation) |
 | `Duration` | duration | from the start of retirement to the decision |
 
 When several conditions fail, `Reason` names the first in this order: `observation_incomplete`,
-`observation_error`, `storage_refused`, `network_refused`, `event_dropped`, `work_running`. The counts report all of
+`observation_error`, `stop_bound_exceeded`, `storage_refused`, `network_refused`, `call_refused`, `event_dropped`,
+`work_running`. The counts report all of
 them. `not_checked` is used for a generation that never attempted a Connect. The result never holds dump text,
 function names, argument values, keys or account identifiers.
 
@@ -71,6 +78,7 @@ The existing `finishStop` decision, with one more input:
 clear = guardArmed
         && !unresolved            // no unresolved pairing attempt (FR-003, clarification 2026-11-07)
         && !unsafeStop            // set by a failed check of a generation that attempted Connect, among the existing causes
+        && withinStopBound        // the decision is made before stopBound has passed
         && !health.StorageFault
 then ClearRunGuard, which still enforces low-disk admission
 ```
@@ -84,6 +92,10 @@ then ClearRunGuard, which still enforces low-disk admission
 | `quietStopDeadline` | the observation deadline for an ordinary stop | measured by the spike (research R6), then approved |
 | `postPairQuietDeadline` | the observation deadline for the pairing generation before the fresh connection | measured by the spike, then approved |
 | `quietObservationGap` | the minimum gap between the two clean observations | 100 ms (research R1) |
+| `stopBound` | the whole orderly stop, from `BeginStop` to the clear decision | 10 s, the lifecycle's shutdown timeout, passed in by the command; not a setting |
 | `stackBufferMax` | the largest goroutine-dump buffer | 8 MiB (research R2) |
 
-The existing constants are unchanged: the 30-second connect watchdog and the 10-second stop bound for writes.
+The existing constants are unchanged: the 30-second connect watchdog and the 10-second stop bound for writes. The
+observation deadline is capped at the time left in `stopBound`; a decision after it fails with `stop_bound_exceeded`.
+The owner's approval of the two deadlines records the total budget (Disconnect up to 5 s, barrier drain up to 10 s,
+observation) against `stopBound`.
