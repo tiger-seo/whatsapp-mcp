@@ -8,3 +8,4 @@ approval, simulator results, pass-rate run, platform evidence, real-account jour
 | Stage | Date | Commit | Verdict | Owner decision |
 | --- | --- | --- | --- | --- |
 | design | 2026-11-07 | 11ac064 | BLOCK | |
+| design | 2026-11-07 | 14f648a | BLOCK | |
