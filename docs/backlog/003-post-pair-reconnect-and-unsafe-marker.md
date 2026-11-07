@@ -1,10 +1,10 @@
 # Backlog: post-pair reconnect and the unsafe-run marker (feature 003 debt)
 
 - **Created:** 2026-11-06
-- **Status:** Open. The owner approved enabling `OwnerConfig.PostPairReconnect` for the `pair` command on 2026-11-06. Still to do: a permissioned real-account re-check and a fresh code review of the enabled path. Research done 2026-11-07 ("Research", "Options for the owner"); the options await an owner decision.
-- **Affected features:** `specs/003-whatsapp-pairing-status` now; feature 004 (history sync) is blocked by the second item below.
+- **Status:** Open. The owner approved enabling `OwnerConfig.PostPairReconnect` for the `pair` command on 2026-11-06. Still to do: a permissioned real-account re-check and a fresh code review of the enabled path. Research done 2026-11-07 ("Research", "Options for the owner"); the owner chose option A, stage 1, on 2026-11-07 (specification §8.11); it is specified as feature 004 in `specs/004-shutdown-drain/`. Stage 2 stays open here.
+- **Affected features:** `specs/003-whatsapp-pairing-status` now; feature 005 (message ingest, history sync; feature 004 before the 2026-11-07 renumbering) is blocked by the second item below.
 - **Owner:** Maintainer `tiger-seo`.
-- **Review trigger:** before feature 004's real-account test, before any release, and on any relevant upstream whatsmeow fix. Keep it next to the E003-RX-01 expiry (start of 2026-12-02 UTC) and review both together.
+- **Review trigger:** before feature 005's (message ingest) real-account test, before any release, and on any relevant upstream whatsmeow fix. Keep it next to the E003-RX-01 expiry (start of 2026-12-02 UTC) and review both together.
 - **Source:** `specs/003-whatsapp-pairing-status/verification.md` ("Real-Account Observation", "T077 Candidate Post-Pair Reconnect Against the Simulator", "T077 Decision (approved)"), roadmap "Follow-up: WhatsApp logout and shutdown drain".
 
 ## Debt
@@ -18,7 +18,7 @@
    Corrected 2026-11-07 from "any node handler that outlives 10 x 30 s" after the source audit below. Not proven: a
    held pinned node handler or `LoggedOut` dispatch across Disconnect and retry, and the full cancel, retire and stop
    matrix with the real client.
-2. **No reusable session.** Any production Connect leaves the run marker unsafe, so every pairing needs a separately authorized offline recovery before the next run. Until this is solved there is no connected session `stdio` or `serve` can reuse, and feature 004's real-account history sync cannot run.
+2. **No reusable session.** Any production Connect leaves the run marker unsafe, so every pairing needs a separately authorized offline recovery before the next run. Until this is solved there is no connected session `stdio` or `serve` can reuse, and feature 005's (message ingest) real-account history sync cannot run.
 3. **Thin evidence.** Simulator and Windows only for the candidate; one real-account pair run (515 about 0.6 s after `PairSuccess`; the link failed with the follow-up denied). No Linux or macOS run of the enabled path.
 4. **A risky path behind a code-level switch.** `PostPairReconnect` must not become permanent by default or by being forgotten.
 
@@ -163,7 +163,7 @@ Refined after the security analysis below: take A in two stages, with C in paral
   - Run the post-pair reconnect on a fresh Client.
   - Block the old socket and HTTP traffic, then the store, in that order.
   - Clear the marker only after the quiet-stop check passes.
-  - Fixes debt 2 (unblocks feature 004's history sync), removes the `PostPairReconnect` switch and the late sends
+  - Fixes debt 2 (unblocks feature 005's history sync), removes the `PostPairReconnect` switch and the late sends
     on the new socket. Adds no new automatic network activity, so it carries the least risk.
 - **Stage 2: bring back 405 and ordinary reconnects (T050, T051, T053, T054, T056).**
   - This is the part that adds exposure: unattended connections, possible abuse signals to WhatsApp, more receive
