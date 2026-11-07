@@ -26,16 +26,20 @@ The design separates three contexts per generation:
   except step 9 (and the forced path when the barrier cannot drain). The stop signal, the work context and the
   watchdogs do not reach it.
 
-The attempt context passed to `ConnectContext` is a child of `gen.lib`. The work context, a watchdog or the stop
-signal may cancel it only while `ConnectContext` has not returned (an `AfterFunc` that is registered **before**
-`ConnectContext` is called, so a work context that is already cancelled aborts the Connect at once, and that is stopped
-when it returns). Every cancellation of the attempt context goes through one helper that calls `MarkRetiring()` first;
-this includes the existing `if !connected { cancel() }` defer in `attempt`, so a startup attempt that ends in a remote
-disconnect, a stop or a timeout after `ConnectContext` returned is counted. Every other former use of the generation
-lifetime moves to the work context: the version refresh, the QR drain, the storage-fault watcher and the post-pair slot
-wait. A
-connect watchdog that fires after `ConnectContext` returned calls `Disconnect()` and does not cancel the handler
-context.
+The attempt context passed to `ConnectContext` is a child of `gen.lib`. Its cancel function is the **attempt abort**:
+the owner records it in the generation under `o.mu` before `ConnectContext` is called, and clears it under `o.mu` when
+`ConnectContext` returns. The stop signal (`BeginStop`), a connect watchdog and retirement abort a Connect that has
+not returned only by calling the recorded abort function, **synchronously and under `o.mu`**, through one helper that
+calls `MarkRetiring()` first. There is no `AfterFunc` (it runs its function in a new goroutine, so the abort would
+come after a scheduling delay and a Connect could start dialling after the stop began). The start of an attempt checks
+that no stop has begun and records the abort in the same critical section of `o.mu`, so a stop either sees the abort
+and calls it or is seen by the attempt and prevents the Connect.
+
+Once `ConnectContext` has returned, nothing cancels the attempt context: the watchdog calls `Disconnect()` and the
+existing `if !connected { cancel() }` defer in `attempt` does not cancel it (the attempt context is released with
+`gen.lib` at step 9). A startup attempt that ends in a remote disconnect, a stop or a timeout after `ConnectContext`
+returned therefore leaves the handler context alone. Every other former use of the generation lifetime moves to the
+work context: the version refresh, the QR drain, the storage-fault watcher and the post-pair slot wait.
 
 Counting backs the separation. `DeviceBarrier.MarkRetiring()` is called at the first of: `BeginStop`, the start of
 retirement, or any cancellation of the attempt context (including a watchdog or stop that aborts a Connect that has not
@@ -134,7 +138,10 @@ The result is a value. It never holds a reference to the dump, the client or the
   none is left), and only then releases the slot. A generation published while the stop was in progress is therefore
   always retired and checked before storage closes and the lock is released.
 - The post-pair path, in this order:
-  1. a 515 after `PairSuccess`, or `PairSuccess` releasing a pending 515;
+  1. a 515 after `PairSuccess`, or `PairSuccess` releasing a pending 515. At the moment the 515 is accepted (in
+     `tryManualReconnect` and `releasePending515`, under `o.mu`), the owner marks the generation as in handover and sets
+     `PhaseConnecting`; a remote `Disconnected` from the pairing socket that arrives afterwards cannot move the owner to
+     `PhaseDisconnected`. The server's close can follow the 515 within milliseconds, before the attempt slot is taken;
   2. take the attempt slot;
   3. `retireGeneration(pairGen, postPairQuietDeadline)`, which ends the pairing window (step 3);
   4. if that check failed, take the incomplete-link path (final, unsafe);
@@ -165,10 +172,11 @@ The result is a value. It never holds a reference to the dump, the client or the
   late call or drop.
 - I7: The allow-list holds exact function names only, and its `ReviewedFor` equals the `go.mod` whatsmeow version.
 - I8: The library context of a connected generation is not cancelled before the fence is closed and the barrier has
-  drained. The stop signal, the work context and the connect watchdog never cancel it once `ConnectContext` has
-  returned.
-- I9: No Connect begins after `BeginStop` (on the startup path because the `AfterFunc` is registered before `ConnectContext`
-  and `net/http` checks the context before dialling; on the post-pair path because of the atomic publish and re-check), and `finishStop` retires every generation that exists after it holds the
+  drained. The stop signal, the work context, the connect watchdog and the `attempt` defer never cancel the attempt
+  context once `ConnectContext` has returned.
+- I9: No Connect begins after `BeginStop` (on every path because the stop check and the recording of the attempt abort
+  share one critical section of `o.mu`, and `BeginStop` calls the abort synchronously; on the post-pair path also
+  because of the atomic publish and re-check), and `finishStop` retires every generation that exists after it holds the
   attempt slot, so the store never closes and the lock is never released while a generation's socket may be live.
 
 ## Test seams

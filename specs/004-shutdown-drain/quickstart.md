@@ -75,3 +75,23 @@ Each step needs the owner's explicit permission at the time. Use a new empty dir
 
 Record each check's result, the timings between `PairSuccess`, the 515 and the fresh connection, the exit codes and
 the phone's linked-device entry. A step that was not run is recorded as not verified.
+
+## 6. Soak run (E003-RX-01 compensating control, condition 4 of the owner's extension)
+
+Simulator only; it needs no account. It shows memory, goroutine and WAL behaviour over a long connected `serve`-shaped
+run. It does not show real receive volume, which stays "not verified" unless the owner separately permits a real-account
+run.
+
+```bash
+WA_SOAK=1 CGO_ENABLED=0 go test ./internal/wa -run TestQuietStopSoak -count=1 -v -timeout 6h
+```
+
+- Duration: 4 hours connected, with `internal/wasim` sending synthetic traffic at a steady rate (receipts, presence,
+  app-state notifications, messages) and a burst every 10 minutes.
+- Samples every 60 s (reuse the owner's monitor samples): heap in use, goroutine count, WAL and database file sizes, and
+  the process resident memory read from the operating system (documented in `verification.md`).
+- Ends with an orderly stop. Expected: `quiet_stop_passed`, the marker clear, and the goroutine count after stop back
+  at the pre-connect baseline.
+- Record in `verification.md` (and in the roll-up T047): start, peak and end of each quantity, the growth slope, and
+  whether the owner sees sustained unexpected growth (monitoring is not a hard cap). A sustained unexpected growth is a
+  resource incident: stop and ask the owner. Run natively on Windows; WSL2 is optional and recorded as WSL2.

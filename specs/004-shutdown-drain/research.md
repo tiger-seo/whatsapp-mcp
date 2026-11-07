@@ -109,9 +109,10 @@ rejected because the close frame would be counted and the fence could not tell i
 - **Three contexts.** The stop signal cancels the owner context (`o.ctx`) through `BeginStop` (`owner.go:460`), and every
   generation lifetime is its child (`owner.go:222`), so the stop signal itself cancelled the library context before
   retirement. The library context (`BackgroundEventCtx` and the parent of the attempt context) is therefore created
-  from `context.WithoutCancel(o.ctx)`; the program's own work (the abort of an unreturned Connect, the QR channel at
-  `pairing.go:174`, the repair pass at `owner.go:922`) uses a separate work context; the attempt context is cancelled by
-  the work context or a watchdog only until `ConnectContext` returns. `BeginStop` calls `MarkRetiring()` first. The
+  as `context.WithCancel(context.WithoutCancel(o.ctx))`; the program's own work (the abort of an unreturned Connect, the QR channel at
+  `pairing.go:174`, the repair pass at `owner.go:922`) uses a separate work context; the attempt context is cancelled only until `ConnectContext` returns,
+  through a recorded abort function called synchronously under `o.mu` (an `AfterFunc` would run in a new goroutine and
+  let a Connect start after the stop began). `BeginStop` calls `MarkRetiring()` first. The
   program's own work (a Connect that has not returned, the repair pass, the pairing window) is
   cancelled at the start of retirement. The library context of a Connect that has returned is cancelled only after
   the fence and the barrier (contract steps 7-9).

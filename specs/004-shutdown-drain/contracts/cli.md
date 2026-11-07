@@ -35,7 +35,7 @@ stderr. Together they are the stop diagnostic of spec User Story 3.
 | Pairing generation failed its check before the fresh connection | 1 | the existing "linking could not be completed safely ..." line, with the reason category added | unsafe |
 | Fresh connection failed, stalled past 30 s or was cancelled | 1 | the existing "linking could not be completed safely ..." line | unsafe |
 | QR final timeout, cancellation, Enter or EOF | 1 | unchanged | unsafe (unresolved pairing) |
-| Linked, check passed inside the bound, then `shutdown timed out` | 1 with `shutdown timed out` | clean |
+| Linked, check passed inside the bound, then `shutdown timed out` | 1 | `shutdown timed out` (from the lifecycle) | clean |
 | Clean saved identity: connect once and stop | 0 when connected and the stop passed; otherwise as feature 003 | `connected. The saved session can be reused.`, or the recovery notice | clean or unsafe |
 | Storage fault or any other stop error | 1 | unchanged | unsafe |
 

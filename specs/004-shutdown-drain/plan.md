@@ -65,12 +65,12 @@ fresh); one per `stdio` or `serve` run.
 | II. One binary | No new module and no CGO. The standard library only. Five targets are built in the gates. | PASS |
 | III. One owner | One generation at a time. The fresh generation opens only after the previous one is retired and checked (invariant I3). The lock and storage close order are unchanged. | PASS by design; tests pending |
 | IV. Clean stdout | New events go to the stderr logger. No dump content at any level. | PASS by design; tests pending |
-| V. Secure defaults | Bounded observation (8 MiB, deadline), fail closed in every case of doubt, no new listener, no new dependency. E003-RX-01 is an **approved temporary deviation** for feature 003's deployment. Whether it covers this feature, which makes long connected runs possible, is the **owner's decision** recorded at T001 (research R10); the plan does not assume it. | Pending the owner's E003-RX-01 decision; other rules PASS by design |
+| V. Secure defaults | Bounded observation (8 MiB, deadline), fail closed in every case of doubt, no new listener, no new dependency. E003-RX-01 is an **approved temporary deviation** for feature 003's deployment. On 2026-11-07 the owner extended it to this feature only (`verification.md`, "E003-RX-01 (implementation start)"): same private, local, single-owner deployment, same pin, same expiry (start of 2026-12-02 UTC, no renewal), an earlier stop on a resource incident or a pin change, and a soak run (T046) as the compensating control. Stop and drain ordering is not covered. | Approved temporary deviation, extended to feature 004 by the owner on 2026-11-07; other rules PASS by design |
 | VI. Tested | Unit tests with a fake observation, simulator tests with the real client, store refusal tests, command tests, and the measurement spike. Every abuse case in the spec has a test. | PASS by design; tests pending |
 | VII. MCP tools | No tools in this feature. | N/A |
 | VIII. Real accounts | Automated tests are synthetic. The quickstart's real-account journey needs the owner's permission for each step. | PASS |
 | IX. Simplicity | Two small files (`fence.go`, `quiet.go`) and changes to the existing retire and post-pair paths. No setting, no flag, no fork. The switch is removed. | PASS |
-| X. Security per feature | The spec has its Security section and finding dispositions. The owner decides at T001 whether E003-RX-01 covers this feature, and the exception is rechecked at code review. Its expiry (start of 2026-12-02 UTC) or a "not covered" answer blocks continuation without a new owner decision. | Pending the owner's decision; PASS otherwise |
+| X. Security per feature | The spec has its Security section and finding dispositions. The owner's extension of E003-RX-01 to this feature is recorded (2026-11-07). The exception is rechecked at code review (T047): code review must happen before the expiry (start of 2026-12-02 UTC), the soak result (T046) is read, and a resource incident or pin change stops continued operation until the owner decides again. | PASS with the recorded exception gate |
 
 No violation needs justification, so Complexity Tracking is empty.
 
@@ -153,7 +153,7 @@ observes. The store change is one counter in `internal/store`. No new package.
 | A false pass | Lost session or key writes; decryption failures later | Fail closed in every case of doubt, broad package match, two clean observations, refusal counts; tests for every fault |
 | The real server dislikes the pause or the new client between `PairSuccess` and reconnect | Linking fails on the real account | Permitted real-account run before the code review; the owner decides on failure |
 | A stop-the-world pause from the dump | A short pause during stop | Only during stops, a few polls, bounded buffer |
-| E003-RX-01 expires before the code review, or the owner says it does not cover this feature | Work stops | Owner decision at T001; recheck at code review; owner decision before 2026-12-02 |
+| E003-RX-01 expires before the code review, or a resource incident occurs in the soak run or a long run | Work stops | The extension of 2026-11-07 has the same expiry; recheck at code review; owner decision before 2026-12-02 |
 | A handler loses a write to a cancelled context | False pass, a lost key or session | The library context is cancelled only after the fence and barrier; every guard or context failure after retirement began is counted (research R4) |
 | The stop passes the check after the 10 s bound | Exit 1 with a clean marker | The check fails with `stop_bound_exceeded` (contract "Stop bound") |
 | The in-process simulator's server goroutines are counted as library work | Pass rate understated | Measured and decided at the gate (research R6) |

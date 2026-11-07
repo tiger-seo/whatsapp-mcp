@@ -24,7 +24,7 @@ Facts collected 2026-11-07T21:53Z from `specs/003-whatsapp-pairing-status/verifi
 3. Earlier trigger: a resource incident (memory or goroutine growth in a long run) or a pin change stops continued
    operation until the owner decides again.
 4. Compensating control: the exception's long-run monitoring is exercised during this feature's verification, with a
-   short soak run recorded in the roll-up (T046). The simulator cannot show real receive volume; that stays "not
+   short soak run run as T046 and recorded in the roll-up (T047). The simulator cannot show real receive volume; that stays "not
    verified".
 5. Not covered: stop and drain ordering. It is what this feature implements, so it is its own acceptance gate.
 
