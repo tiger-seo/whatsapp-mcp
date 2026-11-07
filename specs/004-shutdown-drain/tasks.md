@@ -37,7 +37,7 @@ No commit carries attribution lines.
 
 ## Phase 2: Foundational — pieces, production retirement order and measurement spike
 
-**Purpose**: Build the network fence, the refusal counts, the dropped-event and late-call counts and the observation. Put the production retirement order of `contracts/quiet-stop.md` in place: the two contexts, the fence between Disconnect and the barrier, and the pairing window ended at retirement. Measure that production order on the simulator, then stop at the owner's deadline approval. Nothing in this phase calls `QuietStop` from the owner or clears the marker. The order changes keep feature 003's outcome, so every stop that attempted a production Connect still leaves the marker unsafe until US1. Depends on T001–T003.
+**Purpose**: Build the network fence, the refusal counts, the dropped-event and late-call counts and the observation. Put the production retirement order of `contracts/quiet-stop.md` in place: the three contexts, the fence between Disconnect and the barrier, and the pairing window ended at retirement. Measure that production order on the simulator, then stop at the owner's deadline approval. Nothing in this phase calls `QuietStop` from the owner or clears the marker. The order changes keep feature 003's outcome, so every stop that attempted a production Connect still leaves the marker unsafe until US1. Depends on T001–T003.
 
 **⚠️ CRITICAL**: No user story may wire `QuietStop` into the marker before T019 is ticked.
 
@@ -107,11 +107,13 @@ No commit carries attribution lines.
   - make the test fail when the fence and barrier steps are swapped or the library cancel moves earlier, with negative variants through a test seam that expect the order check to report a violation;
   - the lost-write case, driven through the real stop entry and not by calling `retireGeneration` directly: a pinned handler that has committed a decrypt transaction and is about to store an app-state key or sender key when the stop signal arrives (the owner is started with a context that the test cancels, so `BeginStop` calls `o.cancel()`). The handler's context is not cancelled, it completes the write, the key is in the store afterwards, and the check passes;
   - the same case for the connect watchdog: `ConnectContext` has returned, no connected event arrives, the 30-second watchdog fires (fake time). The watchdog disconnects and does not cancel the handler context, a handler writing in the gap completes, and nothing is lost;
+  - the startup-disconnect case: a startup attempt whose `ConnectContext` returned and whose connection then ends with a remote `Disconnected` before the connected event (`outcomeFailed`) does not cancel the handler context except through the counting helper, and a handler writing in that gap either completes or is counted;
   - the control cases: when the library context is cancelled first (by the owner context or by the watchdog), the same write fails with `context.Canceled`, which is counted from the first cancellation and fails the check with `storage_refused`;
   - a Connect that has not returned is still aborted promptly by the stop signal, the work context and the watchdog, and that cancellation starts the count.
 - [ ] T014 [P] Write the pairing-window case in `internal/wa/pairing_test.go`: retiring a generation with an active or just-succeeded pairing window ends the window's QR channel context at contract step 3, before Disconnect. The window's diagnostics and its unresolved-pairing accounting are unchanged, and no QR emitter goroutine of that window is left at the observation.
 - [ ] T015 In `internal/wa/session.go` make `Retire` follow contract steps 2 and 6–8:
-  - set the retire bit and call `DeviceBarrier.MarkRetiring()` first;
+  - add a separate session entry point that only sets the retire bit and calls `DeviceBarrier.MarkRetiring()`; the owner calls it at contract step 2, and contract steps 3-5 (end the pairing window, cancel `gen.work`, wait for the repair pass) run between it and `Retire`;
+  - `Retire` then runs steps 6-8:
   - then `Disconnect()` (the sequence's own, uncounted);
   - then close the fence;
   - then retire the store barrier.
@@ -119,8 +121,9 @@ No commit carries attribution lines.
   Each step runs in that order and only that order. The existing `Retire` and `finishRetire` remove the event handler first, then disconnect and retire the barrier: insert the fence close between them, and keep the handler until the check ends. Keep the existing context and the 10-second stop bound. Make the session-level part of T013 pass.
 - [ ] T016 In `internal/wa/owner.go` and `internal/wa/pairing.go` separate the three contexts of `contracts/quiet-stop.md`. Today `gen.lifetime` is a child of the owner context (`o.ctx`, near line 222), `BeginStop` cancels it (near line 460), `retireGeneration` calls `gen.cancel()` first (near line 530), `attemptCtx` derives from `gen.lifetime` (near line 710) and is the context the library gives its node handlers, and the connect and pairing watchdogs cancel it (`owner.go` near 713-726, `pairing.go` near 183-193).
   - Create `gen.work` as a child of `o.ctx` for the program's own work, and use it for the abort of an unreturned Connect, the pairing window and QR channel (`GetQRChannel`, near `pairing.go:174`) and the repair pass (`RunRepairs`, near `owner.go:922`).
-  - Create `gen.lib` from `context.WithoutCancel(o.ctx)` and use it as the library's `BackgroundEventCtx` and the parent of the attempt context. Only retirement step 9 (and the forced path when the barrier cannot drain) cancels it.
-  - Make the attempt context a child of `gen.lib` and let `gen.work`, the stop signal and the watchdog cancel it only while `ConnectContext` has not returned (`context.AfterFunc`, stopped when it returns). After it returned, a watchdog calls `Disconnect()` and does not cancel the handler context.
+  - Create `gen.lib` as `context.WithCancel(context.WithoutCancel(o.ctx))` (`WithoutCancel` alone cannot be cancelled at step 9) and use it as the library's `BackgroundEventCtx` and the parent of the attempt context. Only retirement step 9 (and the forced path when the barrier cannot drain) cancels it.
+  - Make the attempt context a child of `gen.lib` and let `gen.work`, the stop signal and the watchdog cancel it only while `ConnectContext` has not returned (`context.AfterFunc`, registered before `ConnectContext` is called and stopped when it returns). Route every cancellation of the attempt context through one helper that calls `MarkRetiring()` first, including the existing `defer ... if !connected { cancel() }` in `attempt` (near line 728-735), which runs on `outcomeFailed`, `outcomeStopped` and `outcomeTimeout`. After it returned, a watchdog calls `Disconnect()` and does not cancel the handler context.
+  - Move the other uses of `gen.lifetime` to `gen.work`: `Versions.Refresh` (`owner.go` near 610, `pairing.go` near 166), `watchStorageFault` (near 252), the post-pair slot wait (near 864), the QR drain goroutine (`pairing.go` near 224). A stop during a pairing window's version refresh must not wait for the HTTP bound while holding the slot.
   - Call `MarkRetiring()` on the generation's barrier before the first of: `BeginStop` cancelling `o.ctx`, the start of retirement, and any cancellation of the attempt context.
   - A stop during a Connect that has not returned must still abort it promptly.
 
@@ -194,12 +197,13 @@ No commit carries attribution lines.
 
 ### Implementation for User Story 1
 
-- [ ] T024 [US1] In `internal/wa/owner.go` change `retireGeneration(gen *genState)` to `retireGeneration(gen *genState, deadline time.Duration)` and follow contract steps 1–12, using the two contexts from T016:
+- [ ] T024 [US1] In `internal/wa/owner.go` change `retireGeneration(gen *genState)` to `retireGeneration(gen *genState, deadline time.Duration)` and follow contract steps 1–12, using the three contexts from T016:
   - after `Retire` returns nil, cancel the library context, then call `Session.QuietStop(ctx, min(deadline, time left in stopBound))` before `FinishRevocation`. A decision after the bound is `stop_bound_exceeded`;
   - the owner starts the `stopBound` timer at `BeginStop`;
   - on a failed result set `o.unsafeStop` and log `quiet_stop_failed` (error; fields `epoch`, `reason`, `library_goroutines`, `network_refused`, `storage_refused`, `calls_refused`, `events_dropped`, `duration_ms`);
   - on a pass log `quiet_stop_passed` (info; `epoch`, `duration_ms`);
   - skip the check for a generation with `accountWork == false`;
+  - give every caller a deadline: `finishStop` and the other non-pairing callers (`owner.go` near 184, 274 and the logout retire near 361) pass `quietStopDeadline` (a logout with durable cleanup can still clear the marker after a passed check, scenario 5); the pairing callers (`pairing.go` near 85, 112, 237 and 419) pass `quietStopDeadline` and their outcome stays unresolved and unsafe; only the post-pair retire passes `postPairQuietDeadline`. Read each call site and list the result in the Handoff section of `specs/004-shutdown-drain/verification.md`;
   - the result lives in the generation (`quiet`, written once).
 
   Never log dump text, function names, keys, QR material or account identifiers.
@@ -242,6 +246,7 @@ No commit carries attribution lines.
   - the fresh client logs in with the saved-identity payload (no registration), the currently selected WhatsApp Web version and the Linux/Chrome identification, asserted on the wasim handshake (FR-004);
   - injected late sends from the pairing generation through the real client after its `Disconnect` and fence (a session announcement, a receipt, a key share, a resent request, a disconnect) never reach the fresh connection (scenario 7, SC-003). They return `ErrNotConnected` inside the library, the simulator counts zero frames from the retired generation on the fresh connection, and any dial or write through the retired generation's media or pre-login clients is refused and counted. Do not prove this by writing to the wrapped connection directly;
   - a late `Disconnect()` from the pairing error tail or the QR emitter reaches only the retired client, and the fresh connection stays up;
+  - a server close of the pairing socket right after the 515, before and during the pairing generation's retirement: the command never sees `PhaseDisconnected` in a normal handover and still links;
   - a stop signal at each point of the post-pair handover (T028's interleavings, on the real client): the drain order holds, the simulator sees no dial from a fresh client after the stop began, and the store closes only after every generation is retired.
 
   The window-ending case is covered by T014.
@@ -259,9 +264,9 @@ No commit carries attribution lines.
 
 - [ ] T032 [US2] In `internal/wa/owner.go` rewrite `runPostPairReconnect` (near line 861) and `tryManualReconnect` (near line 785) per `contracts/quiet-stop.md` "Owner use". On a 515 after `PairSuccess`, or on `PairSuccess` releasing a pending 515 (`releasePending515`):
   1. take the attempt slot;
-  2. run `retireGeneration(pairGen, postPairQuietDeadline)`, which ends the pairing window through T017;
+  2. set `PhaseConnecting` in the same critical section that sets `gen.retiring`, so a remote `Disconnected` from the pairing socket that arrives during the handover cannot move the owner to `PhaseDisconnected` and make `waitSavedConnection(afterPairing=true)` report a failed link, then run `retireGeneration(pairGen, postPairQuietDeadline)`, which ends the pairing window through T017;
   3. if that check failed, take the incomplete-link path;
-  4. otherwise `openGeneration` a new client (`LoadDevice` from the durably saved identity, the currently selected version, Linux/Chrome properties, no registration) and publish it under `o.mu` together with a check that no stop has begun. If one has, discard the unpublished generation without connecting and take the stopped path (the pairing is unresolved, so the marker stays unsafe). Immediately before `ConnectContext`, re-check under `o.mu` that no stop has begun and set `accountWork` in the same critical section (`attempt`, near line 706, makes no such check today);
+  4. otherwise `openGeneration` a new client (`LoadDevice` from the durably saved identity, the currently selected version, Linux/Chrome properties, no registration) and publish it under `o.mu` together with a check that no stop has begun. If one has, discard the unpublished generation without connecting (retire its barrier and stop its diagnostics goroutine, since `OpenSession` already loaded the device) and take the stopped path (the pairing is unresolved, so the marker stays unsafe). Immediately before `ConnectContext`, re-check under `o.mu` that no stop has begun and set `accountWork` in the same critical section (`attempt`, near line 706, makes no such check today);
   5. run exactly one `attemptPostPair` under the 30-second watchdog;
   6. release the slot after that attempt and its teardown drain. `finishStop` (T025) retires a generation published meanwhile.
 

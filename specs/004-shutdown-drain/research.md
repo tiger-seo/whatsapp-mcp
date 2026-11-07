@@ -156,7 +156,7 @@ whether any entry is needed at all.
 ## R6 Deadlines and pass rate: a measurement spike before the production check
 
 **Decision.** The first implementation phase builds the fence, the counts and the observation, and puts the
-production retirement order in place (the two contexts, the fence between Disconnect and the barrier, the pairing
+production retirement order in place (the three contexts, the fence between Disconnect and the barrier, the pairing
 window ended at retirement), without wiring the check into the marker. A test-only measurement on `internal/wasim`
 then measures that production order, not a harness copy of it. It runs at least 50 orderly stops of each
 kind: `pair` with the post-pair reconnect, `stdio` connected, `serve` connected. It records the time until the

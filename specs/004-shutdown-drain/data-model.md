@@ -79,7 +79,7 @@ The existing `finishStop` decision, with one more input:
 clear = guardArmed
         && !unresolved            // no unresolved pairing attempt (FR-003, clarification 2026-11-07)
         && !unsafeStop            // set by a failed check of a generation that attempted Connect, among the existing causes
-        && withinStopBound        // the decision is made before stopBound has passed
+        && (!checked || withinStopBound)  // a generation that attempted Connect was decided before stopBound passed; a run with no production Connect is unaffected (feature 003's safe-clear rules)
         && !health.StorageFault
 then ClearRunGuard, which still enforces low-disk admission
 ```

@@ -123,7 +123,7 @@ observes. The store change is one counter in `internal/store`. No new package.
    feature (research R10). Confirm that §8.11 carries the 2026-11-07 decision.
 2. **Pieces, production retirement order and measurement spike.** Build the fence, the store counts, the late-call
    and dropped-event counts and the observation. Put the production retirement order of `contracts/quiet-stop.md` in
-   place: the two contexts, the fence between Disconnect and the barrier, and the pairing window ended at
+   place: the three contexts, the fence between Disconnect and the barrier, and the pairing window ended at
    retirement. None of this is wired into the marker, so the outcome stays as in feature 003. Then measure that
    production order on the simulator (quickstart §1), retiring the pairing generation at the 515, and record how many
    simulator-server goroutines the package rule counts.

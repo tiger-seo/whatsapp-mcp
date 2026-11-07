@@ -35,6 +35,7 @@ stderr. Together they are the stop diagnostic of spec User Story 3.
 | Pairing generation failed its check before the fresh connection | 1 | the existing "linking could not be completed safely ..." line, with the reason category added | unsafe |
 | Fresh connection failed, stalled past 30 s or was cancelled | 1 | the existing "linking could not be completed safely ..." line | unsafe |
 | QR final timeout, cancellation, Enter or EOF | 1 | unchanged | unsafe (unresolved pairing) |
+| Linked, check passed inside the bound, then `shutdown timed out` | 1 with `shutdown timed out` | clean |
 | Clean saved identity: connect once and stop | 0 when connected and the stop passed; otherwise as feature 003 | `connected. The saved session can be reused.`, or the recovery notice | clean or unsafe |
 | Storage fault or any other stop error | 1 | unchanged | unsafe |
 
@@ -50,6 +51,8 @@ The 515 rules are unchanged:
 | --- | --- | --- |
 | Clean marker, saved identity, connected or failed once, stop passed | 0 | clean; the next start connects with the saved session |
 | Same, stop failed its check | 1 with `run_guard_recovery_required` and the reason | unsafe |
+| Same, the check passed inside the stop bound but the later steps (marker write, store close, lock release) pushed the lifecycle past its 10 s timer | 1 with `shutdown timed out` | clean (safe: the check passed and the stop completed in order) |
+| Same, the decision came after the stop bound | 1 with `shutdown timed out` and `quiet_stop_failed` (`stop_bound_exceeded`) | unsafe |
 | No saved identity (never connects) | as feature 003 | as feature 003 |
 | Unsafe or legacy marker at start | 1, offline recovery required, no account work | unchanged |
 

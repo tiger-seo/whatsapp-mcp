@@ -7,7 +7,7 @@ marker, feature 003's rule that no Connect may follow the retirement of an unpro
 (`specs/003-whatsapp-pairing-status/contracts/connection-owner.md`, proof gate). Every other rule of that contract
 stands.
 
-## Two contexts, not one
+## Three contexts, not one
 
 Today every generation lifetime is a child of the owner context (`o.ctx`, which the lifecycle's stop signal cancels
 through `BeginStop`), and the attempt context derived from the lifetime is also the context the client library gives
@@ -21,13 +21,19 @@ The design separates three contexts per generation:
   has not returned, the pairing window and QR channel, and the repair pass. It is cancelled by the stop signal and at
   the start of retirement, as it must be for a prompt stop. The QR channel and the repair pass use it, never the
   library context;
-- **the library context** (`gen.lib`, created from `context.WithoutCancel(o.ctx)`): it is the library's
+- **the library context** (`gen.lib`, created as `context.WithCancel(context.WithoutCancel(o.ctx))`, because `WithoutCancel` alone has no `Done` channel and could not be cancelled at step 9): it is the library's
   `BackgroundEventCtx` and the parent of the attempt context that the library gives its handlers. Nothing cancels it
   except step 9 (and the forced path when the barrier cannot drain). The stop signal, the work context and the
   watchdogs do not reach it.
 
 The attempt context passed to `ConnectContext` is a child of `gen.lib`. The work context, a watchdog or the stop
-signal may cancel it only while `ConnectContext` has not returned (an `AfterFunc` that is stopped when it returns). A
+signal may cancel it only while `ConnectContext` has not returned (an `AfterFunc` that is registered **before**
+`ConnectContext` is called, so a work context that is already cancelled aborts the Connect at once, and that is stopped
+when it returns). Every cancellation of the attempt context goes through one helper that calls `MarkRetiring()` first;
+this includes the existing `if !connected { cancel() }` defer in `attempt`, so a startup attempt that ends in a remote
+disconnect, a stop or a timeout after `ConnectContext` returned is counted. Every other former use of the generation
+lifetime moves to the work context: the version refresh, the QR drain, the storage-fault watcher and the post-pair slot
+wait. A
 connect watchdog that fires after `ConnectContext` returned calls `Disconnect()` and does not cancel the handler
 context.
 
@@ -134,7 +140,8 @@ The result is a value. It never holds a reference to the dump, the client or the
   4. if that check failed, take the incomplete-link path (final, unsafe);
   5. otherwise open a new generation with `LoadDevice` and publish it under `o.mu` together with a check that no stop
      has begun; if one has, discard the unpublished generation without connecting and take the stopped path (the
-     marker stays unsafe: the pairing is unresolved). Immediately before `ConnectContext`, re-check under `o.mu` that
+     marker stays unsafe: the pairing is unresolved). Discarding it retires its barrier and stops its diagnostics
+     goroutine, because `OpenSession` has already loaded the device. Immediately before `ConnectContext`, re-check under `o.mu` that
      no stop has begun, and set `accountWork` in the same critical section;
   6. run one `attemptPostPair` under the 30-second watchdog;
   7. release the slot after that attempt and its teardown drain, as in feature 003.
@@ -160,7 +167,8 @@ The result is a value. It never holds a reference to the dump, the client or the
 - I8: The library context of a connected generation is not cancelled before the fence is closed and the barrier has
   drained. The stop signal, the work context and the connect watchdog never cancel it once `ConnectContext` has
   returned.
-- I9: No Connect begins after `BeginStop`, and `finishStop` retires every generation that exists after it holds the
+- I9: No Connect begins after `BeginStop` (on the startup path because the `AfterFunc` is registered before `ConnectContext`
+  and `net/http` checks the context before dialling; on the post-pair path because of the atomic publish and re-check), and `finishStop` retires every generation that exists after it holds the
   attempt slot, so the store never closes and the lock is never released while a generation's socket may be live.
 
 ## Test seams
