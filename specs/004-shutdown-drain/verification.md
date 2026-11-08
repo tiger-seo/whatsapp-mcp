@@ -305,9 +305,30 @@ Checks:
 Observation for review: the 515 arrived 0.75 s after `PairSuccess` (feature 003 saw about 0.6 s), and both checks passed
 well inside their deadlines (269 ms and 398 ms against 2 s and 1 s). One run is one sample, not a pass rate.
 
-### Step 2: restart with the saved session
+### Step 2: restart with the saved session (permitted 2026-11-08, run by the assistant)
 
-Not performed; needs the owner's permission.
+Binary from `64ec8bc`, `whatsapp-mcp stdio --data-dir D:/tmp/wa-004a --log-level debug`, stderr to a file.
+
+- **First attempt, 02:37:23 UTC: not a valid run.** stdin was `/dev/null`, so the command stopped about 1 ms after
+  start (`shutting down reason="stdin closed"`) before any dial. No connection was made, no check ran, exit 0. The
+  account was not contacted.
+- **Second attempt, 02:37:34 UTC, stdin held open 20 s: the quiet-stop check FAILED.** The client dialled at 02:37:35.078,
+  authenticated with the saved identity at 02:37:35.722 and confirmed at 02:37:35.979 (no QR, no recovery), then ran its
+  app-state sync. At 02:37:54.660 stdin closed and the stop began. Result at 02:37:54.995 (334 ms):
+  `quiet_stop_failed epoch=1 reason=network_refused library_goroutines=0 network_refused=1 storage_refused=0
+  calls_refused=0 events_dropped=0`, then `run_guard_recovery_required`, stderr line
+  `whatsapp-mcp: stdio: offline recovery required (network_refused)`, exit 1. `status` afterwards reports the unsafe
+  run state: **the marker is unsafe and offline recovery is required before the next connection on this directory.**
+- Expected by the quickstart: `quiet_stop_passed` and a clean marker. **Not met.**
+- What the log shows: the check failed closed as designed (no library goroutine left, no storage, call or event
+  refusal; exactly one refused network operation). At 02:37:54.892, 1 ms before the stop's read pump exited, the
+  library logged `Error sending close to websocket`. The same warning appears in the two passing step 1 checks and in the
+  simulator logs, so it is not new. The cause of the single refusal is **not proven**: the likely source is a close
+  frame written by the library after the fence closed (the fence counts a write after close as a refusal), but the
+  counter does not say whether it was a dial or a write, and no test reproduced it. That reading is an inference.
+- Evidence so far: 2 passes (step 1, both checks) and 1 failure (step 2) on the real account; on the simulator 200 of
+  200 stops passed (T041). One real failure out of three is not a rate.
+- The owner decides how to proceed (see the open question in the hand-off); no code was changed after this run.
 
 ### Step 3: cleanup (unlink on the phone, then recovery or delete)
 
