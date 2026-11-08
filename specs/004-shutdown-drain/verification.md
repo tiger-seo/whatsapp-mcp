@@ -268,7 +268,37 @@ native macOS, native Linux. These are not verified.
 
 ## Soak run
 
-Pending (T046).
+`TestQuietStopSoak` (`internal/wa/quiet_soak_test.go`), native Windows 10, Go 1.27.3, `CGO_ENABLED=0`, `TEMP` on
+`D:\tmp`. A `serve`-shaped connection on the simulator, 10 synthetic events per second (receipt, presence, message
+without payload, chat state), a burst of 2000 events and a `server_sync` notification every 10 minutes, a sample every
+60 s, then an orderly stop. Command: `WA_SOAK=1 WA_SOAK_OUT=D:\tmp\soak-full.csv go test ./internal/wa -run
+TestQuietStopSoak -count=1 -v -timeout 5h`.
+
+### Run 1, 2026-11-08 12:03 to 16:04 UTC: FAILED (exit 1)
+
+241 samples, 190,069 events sent, the connection held for 4 h with no loss.
+
+| Quantity | Start | Peak | End | Slope per hour (all / second half) |
+| --- | --- | --- | --- | --- |
+| heap in use | 3.9 MB | 6.4 MB | 5.5 MB | +39 KB / +83 KB |
+| goroutines (connected) | 16 | 20 | 19 | 0 / 0 |
+| database file | 270 KB | 270 KB | 270 KB | 0 / 0 |
+| WAL file | 20.6 KB | 20.6 KB | 20.6 KB | 0 / 0 |
+| process working set | 23 MB | 73 MB | 38.6 MB | -2.4 MB / +0.1 MB |
+
+The working set sat at 39 to 40 MB with two excursions to about 72 MB (a burst, then back); it did not grow. The stop
+passed its check (`stop passed=true`). Two assertions failed:
+
+1. `marker ""`, wanted `clean`: **a defect in the test.** The marker was read with the setup context, which has a
+   2-minute limit and had expired. Fixed (a fresh context); a 4-minute run then reads `marker=clean`.
+2. Goroutines after the stop: 38 against a baseline of 2 (1 of them the simulator's). **Cause not established.** The
+   connected count was stable (16 to 20) and the check saw no library goroutine, so the extra ones appeared at or
+   after the stop, or were still winding down when the dump was taken immediately after the owner finished. The test
+   now waits up to 10 s and prints the remaining goroutines grouped by function. The 90 s and 4 min smoke runs ended
+   at 5.
+
+The log also holds about 47,000 `No LID found` warnings from the synthetic messages (noise, not a resource effect).
+This run does not satisfy T046. Run 2 follows.
 
 ## Real-account journey
 
