@@ -227,11 +227,44 @@ crash). The `pair`-run interim rule is tested at owner level only.
 
 ## Pass-rate run
 
-Pending (T041).
+2026-11-08, Windows 10, Go 1.27.3, `CGO_ENABLED=0`, `TEMP` on `D:\tmp`. `WA_MEASURE=1 go test ./internal/wa -run
+TestQuietStopPassRate -count=1 -v` exit 0 (`TestQuietStopPassRate` in `quiet_measure_test.go`). It runs the production
+owner, store and adapter against the simulator and counts the owner's own decisions (`Health().QuietPassed` and
+`QuietReason`) with the approved deadlines (1 s ordinary stop, 2 s pairing generation). `stdio` holds the connection
+20 ms before the stop, `serve` 400 ms.
+
+| Kind | Runs | Passed | Rate | Failures | Passed but marker not clean |
+| --- | --- | --- | --- | --- | --- |
+| pair: the pairing generation's check before the fresh connection | 50 | 50 | 100.0% | none | 0 |
+| pair: the stop check after the fresh link | 50 | 50 | 100.0% | none | 0 |
+| stdio: stop check | 50 | 50 | 100.0% | none | 0 |
+| serve: stop check | 50 | 50 | 100.0% | none | 0 |
+
+All are above the 90% bar. Limits: one machine, a quiet run in an otherwise idle process, simulator only. The same
+quiet check failed seven simulator tests once in a parallel `go test ./...` run (see the User story 3 block: a goroutine
+leaked by an earlier test), so the rate in a loaded or contaminated process is lower than this table. The old
+`TestQuietStopMeasurement` pair kind was removed because it waited for the denied reconnect that no longer exists.
 
 ## Platform evidence
 
-Pending (T042, T043).
+2026-11-08, exit codes read from the commands themselves.
+
+| Gate | Result |
+| --- | --- |
+| `gofmt -l .` | no output, exit 0 |
+| `go vet ./...` | exit 0 |
+| `go mod verify` | all modules verified, exit 0 |
+| `git diff main --stat -- go.mod go.sum` | empty: `go.mod` and `go.sum` unchanged |
+| `CGO_ENABLED=0 go test ./... -count=1 -timeout 30m` (Windows, native) | exit 0: cmd 128.5 s, store 208.2 s, wa 33.5 s, wasim 3.0 s |
+| `go build ./cmd/whatsapp-mcp` for windows/amd64, linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 | five exit 0 |
+| `go vet`, `go test` and `go build` of `./internal/wa/testdata/cmd/session-check` | three exit 0 |
+| `govulncheck@v1.9.0 ./...` | "No vulnerabilities found", exit 0 |
+| WSL2 Ubuntu, Go 1.27.3: `CGO_ENABLED=0 go test ./... -count=1 -timeout 10m` | exit 0: cmd 118.2 s, store 179.5 s, wa 33.5 s |
+| WSL2: `go test ./internal/wa/testdata/cmd/session-check` | exit 0 |
+| `git ls-files --eol` | no tracked file shows `w/crlf`; none of the modified or new files does either |
+
+The WSL2 run is WSL2, not native Linux hardware. Not run: CI on Linux, Windows and macOS runners (no push was made),
+native macOS, native Linux. These are not verified.
 
 ## Soak run
 

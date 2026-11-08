@@ -44,18 +44,25 @@ Feature 003 added (owner reviews: design PASS at 8edc293, code PASS at 71edddf a
 
 - `internal/wa`: the connection owner (state, epochs, one attempt at a time, watchdog, pairing windows), the pinned
   whatsmeow session adapter, the version provider, the app-state repair controller (`recovery.go`) and the bounded
-  HTTP client. Every automatic reconnect is denied by default except the one post-pair connection, which `pair` enables
-  (`PostPairReconnect`, approved 2026-11-06; the long-running commands keep it off). Checked in three permitted runs
-  on one real account and phone (2026-11-06 and 2026-11-07, Windows). The 405 budget, startup retries and ordinary
-  reconnect are deferred to the roadmap follow-up "logout and shutdown drain".
+  HTTP client. Every automatic reconnect is denied by default; the one exception is the connection WhatsApp requests
+  right after pairing, which `pair` makes on a fresh client after the pairing client was retired and checked (feature
+  004; the `PostPairReconnect` switch is gone). The 405 budget, startup retries and ordinary reconnect are deferred
+  to the roadmap follow-up "logout and shutdown drain".
 - `internal/wasim`: a simulated WhatsApp server and phone for tests only.
 - `internal/store`: the unsafe-run marker (schema 3), repair markers, the read-only `Inspect` view and offline
-  recovery. After any production Connect the marker stays unsafe until a separately authorized offline recovery
-  (`pair`, interactive terminal).
+  recovery. The marker stays unsafe after a failed quiet-stop check, an unresolved pairing, a storage fault or a kill,
+  until a separately authorized offline recovery (`pair`, interactive terminal).
 - `internal/lock`: also `AcquireExisting`, for `status`.
 - Evidence is Windows, WSL2, Linux/Windows/macOS CI runners and one real account on Windows. Not verified: another
   account or phone, native Linux or macOS runs, native console/PTY recovery, macOS `F_FULLFSYNC`, power loss.
   `OPERATIONS.md` separates implemented from verified.
+
+Feature 004 (shutdown drain, branch `004-shutdown-drain`, not merged) is implemented but not yet reviewed in code mode
+and not run on a real account. It adds the network fence and the quiet-stop check (`internal/wa/fence.go`,
+`quiet.go`: after a stop, the generation's network and storage are blocked and the process is watched for the client
+library's goroutines; a pass clears the marker, any doubt keeps it unsafe and names the category), the fresh-client
+post-pair link in `internal/wa/owner.go`, and the stop lines of `stdio`, `serve` and `pair`. The deadlines (1 s, 2 s)
+and the allow-list (empty) are in `quiet.go`. Evidence and open decisions are in `specs/004-shutdown-drain/verification.md`.
 
 Spike results are in `docs/spikes.md`.
 S1 (§8.5) is done: `sqlstore` works on `modernc.org/sqlite` with the dialect name `"sqlite"`. Nothing is

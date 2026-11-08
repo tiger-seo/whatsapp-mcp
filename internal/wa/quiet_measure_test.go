@@ -192,52 +192,6 @@ func abortLate(o *connectionOwner, gen *genState) bool {
 
 // measurePairRun measures the retirement of the pairing generation after the 515 that follows PairSuccess,
 // through the production retirement path.
-func measurePairRun(t *testing.T) measureSample {
-	t.Helper()
-	var t0 atomic.Int64
-	r := newOwnerRigWith(t, func(cfg *OwnerConfig) {
-		cfg.trace = func(step string) {
-			if step == "lib_cancelled" {
-				t0.Store(time.Now().UnixNano())
-			}
-		}
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	conn := r.pairUntilConfirmed(ctx, true)
-	if err := conn.SendStreamError(ctx, "515"); err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(10 * time.Second)
-	for !r.log.contains("reconnect_denied") && time.Now().Before(deadline) {
-		time.Sleep(2 * time.Millisecond)
-	}
-	r.owner.mu.Lock()
-	gen := r.owner.gen
-	r.owner.mu.Unlock()
-	if gen == nil {
-		t.Fatal("no pairing generation to retire")
-	}
-	stopPoll := make(chan struct{})
-	type polled struct {
-		latency, noSim time.Duration
-		sim            int
-	}
-	pollDone := make(chan polled, 1)
-	go func() {
-		l, n, s := pollLatency(&t0, stopPoll)
-		pollDone <- polled{l, n, s}
-	}()
-	began := time.Now()
-	r.owner.retireGeneration(gen, quietStopDeadline)
-	stopTime := time.Since(began)
-	time.Sleep(150 * time.Millisecond)
-	close(stopPoll)
-	p := <-pollDone
-	res := gen.handle.(*Session).QuietStop(ctx, 5*time.Second)
-	return measureSample{latency: p.latency, latencyNoSim: p.noSim, simAtEnd: p.sim, result: res, stopTime: stopTime, windowA: abortLate(r.owner, gen)}
-}
-
 func percentile(sorted []time.Duration, p float64) time.Duration {
 	if len(sorted) == 0 {
 		return -1
@@ -321,7 +275,6 @@ func TestQuietStopMeasurement(t *testing.T) {
 		name string
 		one  func(*testing.T, int) measureSample
 	}{
-		{"pair (pairing generation retired at the 515)", func(t *testing.T, _ int) measureSample { return measurePairRun(t) }},
 		{"stdio (saved identity, connected, short hold)", func(t *testing.T, _ int) measureSample { return measureSavedRun(t, 20*time.Millisecond) }},
 		{"serve (saved identity, connected, longer hold)", func(t *testing.T, _ int) measureSample { return measureSavedRun(t, 400*time.Millisecond) }},
 	}
@@ -333,5 +286,109 @@ func TestQuietStopMeasurement(t *testing.T) {
 			})
 		}
 		reportKind(t, kind.name, samples)
+	}
+}
+
+// The pass-rate recorder runs the production owner end to end and counts what its own checks decided: the
+// pairing generation's check before the fresh connection (pair), and the stop check (pair, stdio, serve). Set
+// WA_MEASURE=1; WA_MEASURE_RUNS defaults to 50.
+//
+//	CGO_ENABLED=0 go test ./internal/wa -run TestQuietStopPassRate -count=1 -v -timeout 60m
+type decision struct {
+	passed bool
+	reason string
+}
+
+func ownerDecision(o *connectionOwner) decision {
+	h := o.Health()
+	return decision{passed: h.QuietPassed && h.QuietReason == "", reason: h.QuietReason}
+}
+
+func recordPairRun(t *testing.T) (pairing, stop decision, marker string) {
+	t.Helper()
+	r := newOwnerRig(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	conn := r.pairUntilConfirmed(ctx, true)
+	if err := conn.SendStreamError(ctx, "515"); err != nil {
+		t.Fatal(err)
+	}
+	conn2, err := r.srv.Accept(ctx)
+	if err != nil {
+		// The pairing generation's check failed, so no fresh connection was made.
+		return ownerDecision(r.owner), decision{}, ""
+	}
+	if err := conn2.SendSuccess(ctx, r.phone.LID); err != nil {
+		t.Fatal(err)
+	}
+	r.waitConnected(ctx)
+	pairing = ownerDecision(r.owner)
+	r.owner.BeginStop()
+	<-r.owner.Done()
+	stop = ownerDecision(r.owner)
+	state, _, _ := r.st.RunGuard(ctx)
+	return pairing, stop, state
+}
+
+func recordSavedRun(t *testing.T, hold time.Duration) (stop decision, marker string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	o, _, _, st, _, _ := startSavedRunWith(t, ctx, nil)
+	time.Sleep(hold)
+	o.BeginStop()
+	<-o.Done()
+	state, _, _ := st.RunGuard(ctx)
+	return ownerDecision(o), state
+}
+
+func TestQuietStopPassRate(t *testing.T) {
+	if os.Getenv("WA_MEASURE") != "1" {
+		t.Skip("set WA_MEASURE=1 to run the pass-rate recorder")
+	}
+	runs := 50
+	if v, err := strconv.Atoi(os.Getenv("WA_MEASURE_RUNS")); err == nil && v > 0 {
+		runs = v
+	}
+	type tally struct {
+		n, pass int
+		reasons map[string]int
+		unclean int
+	}
+	count := func(tl *tally, d decision, marker string) {
+		tl.n++
+		if d.passed {
+			tl.pass++
+		} else {
+			tl.reasons[d.reason]++
+		}
+		if d.passed && marker != "clean" {
+			tl.unclean++
+		}
+	}
+	pairing, pairStop := &tally{reasons: map[string]int{}}, &tally{reasons: map[string]int{}}
+	stdio, serve := &tally{reasons: map[string]int{}}, &tally{reasons: map[string]int{}}
+	for i := 0; i < runs; i++ {
+		t.Run(fmt.Sprintf("pair/%d", i), func(t *testing.T) {
+			p, s, m := recordPairRun(t)
+			count(pairing, p, "clean")
+			if s != (decision{}) || m != "" {
+				count(pairStop, s, m)
+			}
+		})
+	}
+	for i := 0; i < runs; i++ {
+		t.Run(fmt.Sprintf("stdio/%d", i), func(t *testing.T) { s, m := recordSavedRun(t, 20*time.Millisecond); count(stdio, s, m) })
+	}
+	for i := 0; i < runs; i++ {
+		t.Run(fmt.Sprintf("serve/%d", i), func(t *testing.T) { s, m := recordSavedRun(t, 400*time.Millisecond); count(serve, s, m) })
+	}
+	for _, row := range []struct {
+		name string
+		tl   *tally
+	}{{"pair: pairing generation's check", pairing}, {"pair: stop check", pairStop}, {"stdio: stop check", stdio}, {"serve: stop check", serve}} {
+		rate := 100 * float64(row.tl.pass) / float64(max(row.tl.n, 1))
+		t.Logf("PASSRATE %-34s runs=%d passed=%d rate=%.1f%% failures=%v passed-but-marker-not-clean=%d",
+			row.name, row.tl.n, row.tl.pass, rate, row.tl.reasons, row.tl.unclean)
 	}
 }

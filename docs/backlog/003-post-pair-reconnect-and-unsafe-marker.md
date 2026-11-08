@@ -304,3 +304,14 @@ contradicts the premise.
 ## Closure
 
 Close when the marker clears safely after an orderly stop and the switch is gone, or when the owner records a reviewed decision to accept the current policy permanently. Do not close it by silence.
+
+## Update 2026-11-08: feature 004 delivered debts 1, 2 and 4 (not yet code-reviewed or run on a real account)
+
+Branch `004-shutdown-drain` (specs/004-shutdown-drain/): the stop retires each generation behind a network fence and a
+storage barrier and checks the process for the library's goroutines (`internal/wa/quiet.go`); a pass clears the marker
+(debt 2). The connection requested after pairing now runs on a fresh client after the pairing client passed that check,
+so late sends of the old client cannot reach it (debt 1, for the pinned library and the simulator), and
+`PostPairReconnect` is removed (debt 4). Debt 3 (thin evidence) stays open: simulator and Windows only, no real-account
+run of the new path yet. **Stage 2 stays open**: joining or accounting for the library's goroutines at source, startup
+retries, the 405 budget and ordinary reconnect remain denied. Do not close this item until the code review and the
+permitted real-account journey are recorded.

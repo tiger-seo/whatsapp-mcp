@@ -122,8 +122,8 @@ Every other check below is simulated or local.
 | Command | What it does |
 | --- | --- |
 | `status` | Reports the local snapshot offline. It never connects, never contacts WhatsApp and creates no files. It prints four fields (`connected`, `logged_in`, `pairing_required`, `wa_version`); `connected` is always `false` offline, and `logged_in` means a saved identity exists locally, not that WhatsApp still accepts it. It fails with the holder's PID while another command owns the data directory, and with exit 1 and a warning when the store is marked unsafe or comes from an older schema. |
-| `pair` | Opens one pairing window, draws the current QR code in the terminal and waits. It exits 0 only when the identity was saved and the connection was confirmed. Because that connection leaves the store unsafe, a successful `pair` prints "linked" with a notice that offline recovery is required before the next run. |
-| `stdio`, `serve` | Open the store and the owner. With a clean store and a saved identity they connect once at startup; with an unsafe store they exit 1 and tell you recovery is needed. |
+| `pair` | Opens one pairing window, draws the current QR code in the terminal and waits. It exits 0 only when the identity was saved and the connection was confirmed. After a fresh link whose stop check passed it prints "linked. The saved session can be reused." and the marker is clear; if the stop check failed it prints "linked. Offline recovery is required before the next run" with the failed category. |
+| `stdio`, `serve` | Open the store and the owner. With a clean store and a saved identity they connect once at startup; with an unsafe store they exit 1 and tell you recovery is needed. At an orderly stop they print "stopped. The saved session can be reused." after a passed quiet-stop check, or "offline recovery required (<category>)" and exit 1 after a failed one. |
 
 ### Pairing
 
@@ -132,7 +132,7 @@ Every other check below is simulated or local.
 - The window ends on success, on the final timeout, on `Ctrl+C` or a stop signal, on a
   failure, or on an unsupported flow (a passkey or phone-code request). **Pressing Enter does nothing**, and closed input (EOF) does not end the window: it never
   retries and never starts recovery.
-- After a successful scan the server asks for a restart (stream error 515, seen about 0.6 s after the pair success on a real account). In `pair` only, the owner then makes exactly one follow-up connection to finish the link; the long-running commands never do. If that connection fails or does not happen, `pair` prints "linking could not be completed safely" and exits 1. The phone may show a failure message and list no device (observed once on a real account, see `verification.md`), or it may list a linked device; open Linked devices on the phone and remove any entry by hand before pairing again.
+- After a successful scan the server asks for a restart (stream error 515, seen about 0.6 s after the pair success on a real account). In `pair` only, the owner first retires the pairing client and checks that it left nothing running, and only then makes exactly one follow-up connection on a fresh client from the saved identity; the long-running commands never do. If that check fails, or the connection fails, stalls past 30 seconds or is cancelled, `pair` prints "linking could not be completed safely" and exits 1. The phone may show a failure message and list no device (observed once on a real account, see `verification.md`), or it may list a linked device; open Linked devices on the phone and remove any entry by hand before pairing again.
 - After a final timeout, a failure or a cancel, `pair` exits 1. A device may be linked on the phone (check Linked
   devices), so the store stays unsafe (below). Do not just run `pair` again.
 - The QR code appears only on the terminal that ran `pair`. It is never logged, never stored and never in an
@@ -142,11 +142,22 @@ Every other check below is simulated or local.
 
 ### The unsafe marker
 
-Any attempt to connect to WhatsApp (a startup connect, a pairing window, a failed or cancelled attempt) leaves
-the store marked **unsafe** when the process stops, even after a clean drain. The reason is that the library may
-leave work running that cannot be proven finished. While the marker is unsafe the binary starts no connection and
-no QR window. Automatic reconnects are all denied in this version: there are no startup retries, no 405 retry
-budget; the one exception is the single post-pair connection inside `pair`. A lost connection stays lost: a restart refuses to connect while the marker is unsafe, and you must run offline recovery (below) and pair again.
+Any attempt to connect to WhatsApp (a startup connect, a pairing window, a failed or cancelled attempt) marks the
+store **unsafe** while it runs. At an orderly stop the binary retires each client that attempted a connection: it
+blocks the client's network and storage, then watches the process for the client library's goroutines. If none is
+left, twice, 100 ms apart, within the approved time (1 s for an ordinary stop, 2 s for the pairing client before
+the follow-up connection) and with no refused call, dropped event or late call, the check **passes** and the marker
+is cleared, so the next start reuses the saved session. Any doubt fails the check and the marker stays unsafe; the
+category is printed (`work_running`, `network_refused`, `storage_refused`, `call_refused`, `event_dropped`,
+`stop_bound_exceeded`, `observation_incomplete`, `observation_error`) and the counts are in the
+`quiet_stop_failed` event. A passed check logs `quiet_stop_passed`. The marker also stays unsafe after an unresolved
+pairing, a storage fault, a failed logout cleanup, a kill or a second signal. While the marker is unsafe the binary
+starts no connection and no QR window. Automatic reconnects are all denied: there are no startup retries, no 405
+retry budget; the one exception is the single post-pair connection inside `pair`. A lost connection stays lost,
+and after a failed check you must run offline recovery (below) and pair again.
+
+The check counts library goroutines across the whole process. It is a strong signal, not a proof: it cannot see
+work the library started outside its own packages, and its allow-list is empty.
 
 A store from before this feature (schema 1 or 2) is treated as unsafe, not as clean, because its history is
 unknown. A store whose marker is missing or malformed is refused.
@@ -196,12 +207,17 @@ marker is pending and replayed once afterwards.
 
 The first stop signal starts an orderly drain: windows close, the client disconnects, work finishes, then the
 store closes and the lock is released. A second signal, or a kill, ends the process uncleanly: the store stays
-unsafe and the next start requires recovery. The drain has a timeout; hitting it is a failure, not permission to
+unsafe and the next start requires recovery. The drain has a timeout (10 s, including the quiet-stop check); hitting it is a failure, not permission to
 release the store.
 
 ### What has been checked
 
 - Automated tests pass on Linux, Windows and macOS runners, including process-kill tests of the markers.
+- Feature 004 (quiet stop and the fresh-client post-pair link) is **implemented and tested on the simulator and the
+  store only**. No real account has run it yet: the quiet-stop check, the 1 s and 2 s deadlines (about 100 times the
+  slowest measured simulator check), the clear marker after a stop and the fresh-client link are all unverified
+  against WhatsApp until the permitted real-account journey is recorded in `specs/004-shutdown-drain/verification.md`.
+  The check counts goroutines process-wide, so a goroutine leaked by anything else in the process fails it.
 - **Not checked:** power loss and OS crash; macOS `F_FULLFSYNC` hardware flushes; interactive recovery on a real
   console, Linux terminal or macOS terminal; a kill between pairing and the first save; a second real account or
   phone model (the three runs above used one account and one phone).
