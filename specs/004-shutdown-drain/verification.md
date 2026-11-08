@@ -366,6 +366,26 @@ Binary from `64ec8bc`, `whatsapp-mcp stdio --data-dir D:/tmp/wa-004a --log-level
   re-verified. The state of the real-account journey stays "step 2 failed"; a retry needs the directory recovered
   first and the owner's permission.
 
+### Retry after the fix `3882532` (permitted 2026-11-08, new directory `D:\tmp\wa-004b`)
+
+The failed directory `wa-004a` was deleted by the owner, so the retry started with a new pairing. Binary built from
+`3882532`.
+
+- **Step 1 again** (run by the owner at 03:08 UTC, `pair --log-level debug`): `PairSuccess` 03:08:29.771, 515 at
+  03:08:30.528 (0.76 s), `quiet_stop_passed epoch=1` 281 ms (pairing generation), fresh dial right after, authenticated
+  03:08:31.377, `connection_confirmed` 03:08:33.817 (4.05 s), `quiet_stop_passed epoch=2` 392 ms, `stopped`, final line
+  `pair: linked. The saved session can be reused.` No `quiet_stop_failed`, no `reconnect_denied`. Offline `status`:
+  `logged_in: true`, no unsafe warning.
+- **Step 2 again** (run by the assistant, `stdio --data-dir D:/tmp/wa-004b`, stdin held 20 s, exit 0 read from the
+  command): dial 03:08:54.653, authenticated 03:08:55.224, `connection_confirmed` 03:08:55.877 with no QR and no
+  recovery, stdin closed, `quiet_stop_passed epoch=1 duration_ms=440`, stderr
+  `stdio: stopped. The saved session can be reused.`, `stopped` 03:09:14.954, stdout empty. Offline `status` afterwards:
+  `logged_in: true`, no unsafe warning, so the marker is clean.
+- **Tally on the real account:** the checks passed 4 of 5 times (3 before and 1 after the fix; the one failure was
+  before the fix). The fix is **not proven** by one pass: the refusal it removes appeared once in three stops, so a
+  single clean stop is consistent with the fix but also with chance. More stops would tell; none were run.
+- Phone linked-device entries (`wa-004a` removed, `wa-004b` present): not reported by the owner, so not verified.
+
 ### Step 3: cleanup (unlink on the phone, then recovery or delete)
 
 Not performed; owned by the owner.
