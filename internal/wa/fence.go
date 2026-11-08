@@ -112,7 +112,9 @@ func (f *fence) Close() {
 // RefusedDials is the number of dials attempted after Close.
 func (f *fence) RefusedDials() uint64 { return f.refusedDials.Load() }
 
-// RefusedWrites is the number of writes attempted on a wrapped connection after Close.
+// RefusedWrites is the number of writes attempted on a wrapped connection after Close. It is not part of the
+// quiet-stop check: Close has already closed every tracked connection, so such a write cannot reach the network, and
+// the TLS and HTTP/2 layers make one themselves while they tidy up (a TLS close alert).
 func (f *fence) RefusedWrites() uint64 { return f.refusedWrites.Load() }
 
 // gateTransport refuses a request once the fence is closed and otherwise passes it to a transport this package

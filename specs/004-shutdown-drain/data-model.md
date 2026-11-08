@@ -30,7 +30,7 @@ known) → released. A generation never returns to an earlier state. A new Conne
 | `closed` | the fence is closed | set once, after the library's own Disconnect |
 | `conns` | the wrapped connections dialled by this generation | all closed when the fence closes |
 | `refusedDials` | dials attempted after closing | counted, never performed |
-| `refusedWrites` | writes attempted on a wrapped connection after closing | counted, never sent |
+| `refusedWrites` | writes attempted on a wrapped connection after closing | counted, never sent; not part of the check (the connection is already closed, and TLS and HTTP/2 teardown write on it) |
 
 Reads that fail after closing are not counted (research R3).
 
@@ -49,7 +49,7 @@ work.
 | `Passed` | bool | true only when every condition of FR-002 holds |
 | `Reason` | enum | `passed`, `work_running`, `network_refused`, `storage_refused`, `call_refused`, `event_dropped`, `stop_bound_exceeded`, `observation_incomplete`, `observation_error`, `not_checked` |
 | `LibraryGoroutines` | int | client-library goroutines left at the last observation, after removing allow-listed work |
-| `NetworkRefused` | uint64 | refused dials plus refused writes |
+| `NetworkRefused` | uint64 | refused dials |
 | `StorageRefused` | uint64 | the barrier's count (refusals, context errors, stale leases, guard errors) |
 | `CallsRefused` | uint64 | late calls to the session (see Generation) |
 | `EventsDropped` | uint64 | dropped owner-relevant events (see Generation) |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -231,4 +232,51 @@ func (s *Session) attemptedConnect() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.accountWork
+}
+
+// A write on a connection the fence already closed is refused and counted, but it cannot reach the network (the
+// connection is closed) and the TLS layer makes one while it tears down, so it does not fail the check. A dial does.
+func TestQuietStopIgnoresWritesOnConnectionsTheFenceClosed(t *testing.T) {
+	s := connectedAttempt(t)
+	l := newFenceListener(t)
+	c, err := s.fence.DialContext(context.Background(), "tcp", l.addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := s.Retire(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := c.Write([]byte("late")); err == nil || n != 0 {
+		t.Fatalf("late write = %d, %v; want an error and 0 bytes", n, err)
+	}
+	if s.fence.RefusedWrites() != 1 {
+		t.Fatalf("RefusedWrites = %d, want 1", s.fence.RefusedWrites())
+	}
+	res := s.QuietStop(context.Background(), time.Second)
+	if !res.Passed || res.NetworkRefused != 0 {
+		t.Fatalf("result = %+v, want a pass with no refused network use", res)
+	}
+}
+
+// The real source of such a write: the TLS layer's close alert, sent by the HTTP transport after the fence closed.
+func TestFenceTLSTeardownAfterCloseIsNotADial(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) }))
+	defer srv.Close()
+	f := newFence()
+	c := f.HTTPClient(srv.Client())
+	resp, err := c.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	f.Close()
+	c.CloseIdleConnections()
+	deadline := time.Now().Add(2 * time.Second)
+	for f.RefusedWrites() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if f.RefusedDials() != 0 {
+		t.Fatalf("TLS teardown counted %d refused dials", f.RefusedDials())
+	}
 }

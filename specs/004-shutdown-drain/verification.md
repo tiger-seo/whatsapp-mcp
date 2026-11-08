@@ -355,6 +355,16 @@ Binary from `64ec8bc`, `whatsapp-mcp stdio --data-dir D:/tmp/wa-004a --log-level
   the server ends the stream during a stop. A real server can do that at any time, so a stop that races a server
   disconnect will fail closed. Cause not investigated; same decision applies (the check is strict by design).
 - The scratch instrumentation (a stack dump on each refusal) and the stress tests were removed, not committed.
+- **Owner decision, 2026-11-08: option A.** Writes on connections the fence already closed no longer fail the check
+  (`NetworkRefused` is refused dials only). They are still refused with zero bytes sent and still counted in
+  `RefusedWrites`, which is not part of the check. Changed: `Session.QuietStop`, `fence.go` comment, `data-model.md`,
+  `contracts/quiet-stop.md`. Tests: `TestQuietStopIgnoresWritesOnConnectionsTheFenceClosed` (fails with the old
+  behaviour: `network_refused`, `NetworkRefused:1`; passes now) and `TestFenceTLSTeardownAfterClose...`
+  (characterises the TLS source). Gates after the change: `gofmt`, `go vet ./...` and `go test ./... -count=1` exit 0,
+  no CRLF. The WSL2 run, the pass-rate run and the helper checks of the Platform evidence section were **not repeated**
+  after this change; the pass-rate run is unaffected on the simulator (no TLS), the real-account result is not yet
+  re-verified. The state of the real-account journey stays "step 2 failed"; a retry needs the directory recovered
+  first and the owner's permission.
 
 ### Step 3: cleanup (unlink on the phone, then recovery or delete)
 

@@ -108,7 +108,7 @@ either order is reversed (spec SC-004).
 
 - **Storage count** (step 2): sees refusals, context errors, stale leases and guard errors of this generation after
   retirement began. It is the evidence for a lost write.
-- **Network fence** (step 7): sees dials and writes on the fenced transports after the fence closed. After step 6 the
+- **Network fence** (step 7): fails the check on a dial through the fenced transports after the fence closed. A write on a fenced connection after the close is refused and counted but does not fail the check: every tracked connection is already closed, so the write cannot reach the network, and the TLS and HTTP/2 layers write on it themselves while they tear down (decision of 2026-11-08 after the real-account stop in `verification.md`). After step 6 the
   library's own socket is nil, so a late library send returns `ErrNotConnected` inside the library and never reaches
   the fence. The fence therefore proves isolation (a retired generation cannot reach any network, including the
   media and pre-login clients), not quiet. Evidence that no library sender is still running comes from the

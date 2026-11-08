@@ -437,7 +437,7 @@ func (s *Session) QuietStop(ctx context.Context, deadline time.Duration) QuietSt
 	return decideQuiet(quietInputs{
 		Observation:   reason,
 		Goroutines:    count,
-		Network:       s.fence.RefusedDials() + s.fence.RefusedWrites(),
+		Network:       s.fence.RefusedDials(),
 		Storage:       s.barrier.Refused(),
 		Calls:         s.lateCalls.Load(),
 		Events:        s.droppedEvents.Load(),
