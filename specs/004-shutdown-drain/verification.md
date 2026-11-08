@@ -384,6 +384,15 @@ The failed directory `wa-004a` was deleted by the owner, so the retry started wi
 - **Tally on the real account:** the checks passed 4 of 5 times (3 before and 1 after the fix; the one failure was
   before the fix). The fix is **not proven** by one pass: the refusal it removes appeared once in three stops, so a
   single clean stop is consistent with the fix but also with chance. More stops would tell; none were run.
+- **Five more `stdio` stops on the same saved session** (permitted by the owner 2026-11-08, run by the assistant,
+  same binary `3882532`, 5 s apart, stdin held 2, 5, 10, 15 and 20 s). Each: exit 0, `connection_confirmed` once, no
+  QR, stdout empty, one `quiet_stop_passed`, no `quiet_stop_failed`. Check durations: 372, 327, 285, 331 and 359 ms.
+  Offline `status` afterwards: `logged_in: true`, no unsafe warning (marker clean).
+- **Tally on the real account after the fix:** 7 of 7 checks passed (the step 1 retry's two, the step 2 retry's one and
+  these five). Before the fix: 3 of 4 passed and one failed (`network_refused`). The refusal appeared once in four
+  stops before the fix and in none of seven after it. That is consistent with the fix, not a proof: seven clean stops
+  would also be a 24% chance if the old rate was 1 in 4. The 2 s hold covers a stop early in the app-state sync; a
+  server disconnect during a stop (the `work_running` case from the stress run) was not tried on the real account.
 - Phone linked-device entry: the owner reported on 2026-11-08 that the `wa-004b` device is visible in Linked devices (the `wa-004a` entry was removed earlier by the owner). Not checked by the assistant.
 
 ### Step 3: cleanup (unlink on the phone, then recovery or delete)
