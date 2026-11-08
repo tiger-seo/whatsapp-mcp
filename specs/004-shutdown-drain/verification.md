@@ -168,13 +168,39 @@ Deviations to review:
 - T028–T030 tests were written together with the code, not observed failing first (the owner change was made before the
   tests). They were checked against the behaviour they describe, and the interleaving tests fail if the stop check or
   the retire-before-open order is removed; this was not run as a mutation test.
-- T030 is not done: the new human lines of `contracts/cli.md` (`linked. The saved session can be reused.`, the reason
+- T030 was finished with US3 (see the User story 3 block); the lines below describe the state at the end of US2.
   category on the recovery lines) do not exist yet and belong to T035/T037. Only the switch test was replaced.
 - T032 asks for `accountWork` to be set early in the owner's critical section. `accountWork` is set inside
   `Session.Connect`, and `attempt` already makes the stop check and records the abort in one critical section, so a
   stop in window (b) on the fresh generation finds an unchecked generation; the pairing is unresolved so the marker is
   unsafe anyway. No early set was added.
 - A test seam `afterPostPairPublish` was added to `OwnerConfig` (tests only).
+
+User story 3, 2026-11-08, same environment. The owner records the first failed check's category and whether a check
+passed in `Health` (`QuietReason`, `QuietPassed`); the commands print it (`cmd/whatsapp-mcp/quiet_output.go`).
+
+| Command | Result |
+| --- | --- |
+| `go test ./cmd/whatsapp-mcp -run 'ShellStop\|PairSavedSessionPassed\|PairLinked\|PairDeniedFollowUp' -count=1` | exit 0 |
+| `go test ./internal/wa -run TestQuietCheckLeaksNothing -count=1 -v` | exit 0, 4 subtests (pass, work_running, over-large dump, dump error) |
+| `go vet ./...` | exit 0 |
+| `go test ./... -count=1 -timeout 30m` (second run) | exit 0 (cmd 137.7 s, store 218.2 s, wa 39.0 s) |
+| `go test ./internal/wa -count=1` twice | exit 0 both |
+
+Flake to review: the first `go test ./...` run after adding these tests failed seven simulator tests in `internal/wa`
+(`no reconnect: context deadline exceeded`, `StopError = unsafe run`). The log showed `work_running` with one
+`whatsmeow/socket.(*FrameSocket).readPump` goroutine blocked on `frameComplete` for about three minutes, left by an
+earlier test in the same process. The quiet check counts library goroutines process-wide (research R6), so a leaked
+goroutine from any earlier simulator test fails a later check. It did not reproduce in three further runs (two
+package-only, one full), and the earlier full run of US2 passed. I did not find which test leaks. The pass-rate run
+(T041) should count it; do not treat the package as flake-free.
+
+Scope notes: the human lines are `stdio: offline recovery required (<category>)`, `stdio: stopped. The saved session
+can be reused.` (same for `serve`), and for `pair` `linked.` or `connected. The saved session can be reused.`, the
+recovery notice with the category, and the incomplete-link line with the category in parentheses. The secrecy test
+covers the pass, `work_running`, an over-large dump and a dump error through the real session and owner, planting
+markers in the dump; it does not cover a held handler or every reason (the other reasons come from counters, not from
+text). `status` was not changed.
 
 What the tests show (`owner_quiet_test.go`, `wasim_quiet_test.go`, `run_guard_test.go`, `store_test.go`):
 

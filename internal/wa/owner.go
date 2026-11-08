@@ -614,6 +614,12 @@ func (o *connectionOwner) checkQuiet(gen *genState, deadline time.Duration) {
 	}
 	if !res.Passed {
 		o.unsafeStop = true
+		o.health.QuietPassed = false
+		if o.health.QuietReason == "" {
+			o.health.QuietReason = string(res.Reason)
+		}
+	} else if o.health.QuietReason == "" {
+		o.health.QuietPassed = true
 	}
 	o.mu.Unlock()
 	if res.Passed {

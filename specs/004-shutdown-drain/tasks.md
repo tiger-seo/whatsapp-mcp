@@ -258,7 +258,7 @@ No commit carries attribution lines.
   - a stop signal at each point of the post-pair handover (T028's interleavings, on the real client): the drain order holds, the simulator sees no dial from a fresh client after the stop began, and the store closes only after every generation is retired.
 
   The window-ending case is covered by T014.
-- [ ] T030 [P] [US2] Update `cmd/whatsapp-mcp/pair_test.go`, `pair_retry_test.go` and `run_guard_test.go`. Replace `TestProductionOwnerEnablesPostPairReconnectOnlyForPair`, which tested the switch, with a test that `stdio` and `serve` have no reconnect and no pairing path. Then check the `pair` exit codes and stderr of `contracts/cli.md`:
+- [X] T030 [P] [US2] Update `cmd/whatsapp-mcp/pair_test.go`, `pair_retry_test.go` and `run_guard_test.go`. Replace `TestProductionOwnerEnablesPostPairReconnectOnlyForPair`, which tested the switch, with a test that `stdio` and `serve` have no reconnect and no pairing path. Then check the `pair` exit codes and stderr of `contracts/cli.md`:
   - linked and passed exits 0 with `whatsapp-mcp: pair: linked. The saved session can be reused.` and a clean marker;
   - linked, but the stop failed its check, exits 0 with the existing recovery notice plus the reason category, and an unsafe marker;
   - the pairing generation failing its check before the fresh connection exits 1 with the existing "linking could not be completed safely" line plus the category;
@@ -301,20 +301,20 @@ No commit carries attribution lines.
 
 ### Tests for User Story 3 (write first, observe failing)
 
-- [ ] T035 [P] [US3] Write `cmd/whatsapp-mcp/quiet_output_test.go`. For each reason (`work_running`, `network_refused`, `storage_refused`, `call_refused`, `event_dropped`, `stop_bound_exceeded`, `observation_incomplete`, `observation_error`), a forced failure prints:
+- [X] T035 [P] [US3] Write `cmd/whatsapp-mcp/quiet_output_test.go`. For each reason (`work_running`, `network_refused`, `storage_refused`, `call_refused`, `event_dropped`, `stop_bound_exceeded`, `observation_incomplete`, `observation_error`), a forced failure prints:
   - exactly one human stderr line naming that category and saying, in operator wording, that offline recovery is required;
   - the `quiet_stop_failed` event with the counts, also on stderr (`contracts/cli.md`).
 
   Also check: a pass prints that the session can be reused; stdout in stdio mode stays protocol-only; `status` afterwards reports the marker state as today and stores nothing new (scenarios 1–3).
-- [ ] T036 [P] [US3] Write the secrecy tests in `internal/wa/quiet_secrecy_test.go` (SC-006, SEC-004).
+- [X] T036 [P] [US3] Write the secrecy tests in `internal/wa/quiet_secrecy_test.go` (SC-006, SEC-004).
   - Capture logs at debug, info, warn and error through the production logger bridge while forcing each failure and a pass, plus a held-handler case and an over-large dump.
   - Assert zero occurrences of: dump text, `goroutine ` headers, function names from the dump, argument words, key bytes, QR material, full account identifiers. Use synthetic markers planted in goroutine names and device data.
   - Assert that the result value and every returned error contain none of them either.
 
 ### Implementation for User Story 3
 
-- [ ] T037 [US3] In `cmd/whatsapp-mcp/commands.go` (and `lifecycle.go` if the stop messages live there), add the human lines of `contracts/cli.md` for `pair`, `stdio` and `serve`: `reusable` after a pass, `offline recovery required (<category>)` after a failure. The `pair` lines are exactly those in the contract table. Wire the reason from `QuietStopResult` through the owner's `StopError`/health value without ever carrying dump text. Make T035 and T036 pass.
-- [ ] T038 [US3] Run the output and secrecy suites and record commands, dates, counts and exit codes in `specs/004-shutdown-drain/verification.md`.
+- [X] T037 [US3] In `cmd/whatsapp-mcp/commands.go` (and `lifecycle.go` if the stop messages live there), add the human lines of `contracts/cli.md` for `pair`, `stdio` and `serve`: `reusable` after a pass, `offline recovery required (<category>)` after a failure. The `pair` lines are exactly those in the contract table. Wire the reason from `QuietStopResult` through the owner's `StopError`/health value without ever carrying dump text. Make T035 and T036 pass.
+- [X] T038 [US3] Run the output and secrecy suites and record commands, dates, counts and exit codes in `specs/004-shutdown-drain/verification.md`.
 
 **Checkpoint**: All three stories work and are explained to the operator.
 

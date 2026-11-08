@@ -75,6 +75,10 @@ type Health struct {
 	Ready           bool
 	RecoveryPending bool
 	StorageFault    bool
+	// QuietReason is the category of the first failed quiet-stop check of this run; empty when none failed.
+	QuietReason string
+	// QuietPassed records that at least one generation's quiet-stop check passed and none failed.
+	QuietPassed bool
 }
 
 type Event struct {
