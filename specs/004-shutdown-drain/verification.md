@@ -398,9 +398,10 @@ The failed directory `wa-004a` was deleted by the owner, so the retry started wi
 ### Step 3: cleanup (unlink on the phone, then recovery or delete)
 
 Done 2026-11-08. The owner unlinked the `wa-004b` device on the phone (the `wa-004a` entry had been removed earlier); the
-assistant then deleted `D:	mpwa-004b` (`whatsapp.db` and the lock file). The log files `D:	mpwa-004a-*.log` and
-`wa-004b-*.log` remain on disk, outside the repository; they hold no QR material but contain debug output and were not
-redacted. Whether the phone no longer lists the device after unlinking was not checked by the assistant.
+assistant then deleted `D:/tmp/wa-004b` (`whatsapp.db` and the lock file). The log files `D:/tmp/wa-004b-*.log`
+remain on disk, outside the repository (the `wa-004a` logs are already gone). They are debug output and were not
+redacted, but the QR code is not in them: the library logs the format string, not the code (checked by grep). That the
+phone no longer lists the device after unlinking was not checked by the assistant.
 
 ## Not verified
 
