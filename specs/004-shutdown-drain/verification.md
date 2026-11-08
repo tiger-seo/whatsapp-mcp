@@ -384,7 +384,7 @@ The failed directory `wa-004a` was deleted by the owner, so the retry started wi
 - **Tally on the real account:** the checks passed 4 of 5 times (3 before and 1 after the fix; the one failure was
   before the fix). The fix is **not proven** by one pass: the refusal it removes appeared once in three stops, so a
   single clean stop is consistent with the fix but also with chance. More stops would tell; none were run.
-- Phone linked-device entries (`wa-004a` removed, `wa-004b` present): not reported by the owner, so not verified.
+- Phone linked-device entry: the owner reported on 2026-11-08 that the `wa-004b` device is visible in Linked devices (the `wa-004a` entry was removed earlier by the owner). Not checked by the assistant.
 
 ### Step 3: cleanup (unlink on the phone, then recovery or delete)
 
