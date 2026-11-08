@@ -397,7 +397,10 @@ The failed directory `wa-004a` was deleted by the owner, so the retry started wi
 
 ### Step 3: cleanup (unlink on the phone, then recovery or delete)
 
-Not performed; owned by the owner.
+Done 2026-11-08. The owner unlinked the `wa-004b` device on the phone (the `wa-004a` entry had been removed earlier); the
+assistant then deleted `D:	mpwa-004b` (`whatsapp.db` and the lock file). The log files `D:	mpwa-004a-*.log` and
+`wa-004b-*.log` remain on disk, outside the repository; they hold no QR material but contain debug output and were not
+redacted. Whether the phone no longer lists the device after unlinking was not checked by the assistant.
 
 ## Not verified
 
