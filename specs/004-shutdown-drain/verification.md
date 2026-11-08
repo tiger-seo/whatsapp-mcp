@@ -90,7 +90,23 @@ written after the implementation.
 
 ## E003-RX-01 recheck
 
-Pending (T047).
+T047, 2026-11-08, at commit 409c304, against the owner's extension of 2026-11-07 (`tiger-seo`):
+
+1. **Scope.** Still feature 004 only, in the private, local, single-owner deployment. No listener, no shared deployment
+   and no message ingest were added; `stdio` and `serve` still have no MCP tools.
+2. **Date and pin.** This recheck happens before the start of 2026-12-02 UTC. `git diff main --stat -- go.mod go.sum` is
+   empty and `go.mod` pins `go.mau.fi/whatsmeow v0.0.0-20261027104441-1eec1136a50b`, the pin the exception covers. The
+   owner-judge code review follows this recheck; its row is in "Owner reviews".
+3. **Resource incident.** None. Run 2 of the soak run showed no sustained growth of heap, goroutines, files or working
+   set (see "Soak run"). The real-account journey (T045) was short and showed none either.
+4. **Soak result (T046).** Run 2 passed (exit 0): heap 4.1 to 5.4 MB, goroutines 16 to 17 while connected, database and
+   WAL files unchanged, working set 30.6 to 22.6 MB; the stop check passed and the marker was clean. Run 1 failed on a
+   test defect and an unexplained leftover-goroutine count that did not reproduce. **Deviation to decide:** the machine
+   slept for about 17 minutes, so the effective load was about 3 h 43 min, not the 4 h of T046. The owner may accept
+   that or ask for another run.
+
+Accepted risks and limits: simulator traffic only (no real receive volume), native Windows only for the soak run,
+run 1's 38 leftover goroutines unexplained.
 
 ## Measurement and deadline approval
 
@@ -466,7 +482,14 @@ phone no longer lists the device after unlinking was not checked by the assistan
 
 ## Not verified
 
-Another account or phone, native Linux or macOS runs, power loss, real-account receive volume.
+- Another account or phone (one account, one phone only).
+- Native Linux and macOS runs, and the CI runners (no push yet); WSL2 is not native Linux.
+- Power loss, and macOS `F_FULLFSYNC`.
+- Real-account receive volume (the soak run used the simulator).
+- The soak run under WSL2 or any platform other than native Windows.
+- A server disconnect during a stop on the real account (the `work_running` case).
+- The cause of run 1's 38 leftover goroutines.
+- That the phone stopped listing the unlinked device (not checked by the assistant).
 
 ## Owner reviews
 
