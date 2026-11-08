@@ -300,6 +300,37 @@ passed its check (`stop passed=true`). Two assertions failed:
 The log also holds about 47,000 `No LID found` warnings from the synthetic messages (noise, not a resource effect).
 This run does not satisfy T046. Run 2 follows.
 
+### Run 2, 2026-11-08 16:11 to 20:12 UTC: PASSED (exit 0, 14,400 s)
+
+Same command with the output in `D:\tmp\soak-full2.csv`, after the two fixes above. 225 samples, 176,621 events sent.
+
+| Quantity | Start | Peak | End | Slope per hour (all / second half) |
+| --- | --- | --- | --- | --- |
+| heap in use | 4.1 MB | 6.8 MB | 5.4 MB | +101 KB / +39 KB |
+| goroutines (connected) | 16 | 20 | 17 | 0 / 0 |
+| database file | 270 KB | 270 KB | 270 KB | 0 / 0 |
+| WAL file | 20.6 KB | 20.6 KB | 20.6 KB | 0 / 0 |
+| process working set | 30.6 MB | 74.4 MB | 22.6 MB | -7.4 MB / +0.5 MB |
+
+The final stop passed its check (`stop passed=true`), the marker read `clean`, and the goroutines after the stop were 5
+against a baseline of 2 (1 the simulator's), inside the allowance of 6 above the baseline. The working set rose to
+about 72 MB in the first minutes and again in the first run's pattern, then settled between 22 and 40 MB; it did not
+grow.
+
+Caveats:
+
+- **The machine slept for about 17 minutes.** Between the samples at 11,760 s and 12,794 s (1,034 s instead of 60 s)
+  only 167 events were sent instead of about 10,000, and the sample count is 225 instead of 241. The owner confirmed that
+  the system went to sleep. The connection survived it. The effective load time is about 3 h 43 min, not 4 h.
+- **Run 1's 38 leftover goroutines did not reproduce.** Run 2 ended at 5. The cause of run 1's count was not
+  established; it may have been goroutines still winding down when the dump was taken (run 2 waits up to 10 s), or a
+  side effect of the expired setup context in run 1. Treated as unexplained, not as resolved.
+- About 44,000 `No LID found` warnings came from the synthetic messages (noise).
+- The simulator cannot show real receive volume: real-account receive volume stays "not verified". Native Windows
+  only; the soak was not run under WSL2.
+- No resource incident under the owner's extension of E003-RX-01: no sustained growth of heap, goroutines, files or
+  working set.
+
 ## Real-account journey
 
 Performed with the owner's permission, step by step (T045). Binary built from `64ec8bc`
