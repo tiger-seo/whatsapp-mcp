@@ -391,7 +391,7 @@ The failed directory `wa-004a` was deleted by the owner, so the retry started wi
 - **Tally on the real account after the fix:** 7 of 7 checks passed (the step 1 retry's two, the step 2 retry's one and
   these five). Before the fix: 3 of 4 passed and one failed (`network_refused`). The refusal appeared once in four
   stops before the fix and in none of seven after it. That is consistent with the fix, not a proof: seven clean stops
-  would also be a 24% chance if the old rate was 1 in 4. The 2 s hold covers a stop early in the app-state sync; a
+  would also happen about 13% of the time (0.75^7) if the old rate was 1 failure in 4. The 2 s hold covers a stop early in the app-state sync; a
   server disconnect during a stop (the `work_running` case from the stress run) was not tried on the real account.
 - Phone linked-device entry: the owner reported on 2026-11-08 that the `wa-004b` device is visible in Linked devices (the `wa-004a` entry was removed earlier by the owner). Not checked by the assistant.
 
