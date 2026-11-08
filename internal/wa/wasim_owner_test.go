@@ -37,6 +37,7 @@ func newOwnerRig(t *testing.T) *ownerRig {
 func newOwnerRigWith(t *testing.T, adjust func(*OwnerConfig)) *ownerRig {
 	t.Helper()
 	r := &ownerRig{t: t, dir: waDataDir(t)}
+	leftover := libraryGoroutinesNow()
 	var err error
 	if r.st, err = store.Open(context.Background(), r.dir, nil); err != nil {
 		t.Fatal(err)
@@ -55,7 +56,12 @@ func newOwnerRigWith(t *testing.T, adjust func(*OwnerConfig)) *ownerRig {
 		Sessions: func(cfg SessionConfig) (SessionHandle, error) {
 			cfg.PreLoginHTTP = r.srv.Client()
 			cfg.WebsocketHTTP = r.srv.Client()
-			return OpenSession(cfg)
+			s, err := OpenSession(cfg)
+			if err != nil {
+				return nil, err
+			}
+			s.observer = observerIgnoring(leftover)
+			return s, nil
 		},
 	}
 	if adjust != nil {
