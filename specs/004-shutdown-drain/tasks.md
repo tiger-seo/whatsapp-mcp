@@ -337,7 +337,7 @@ No commit carries attribution lines.
   Confirm `go.mod` and `go.sum` are unchanged (SEC-007) with `git diff main -- go.mod go.sum`. Keep `TEMP` and `TMP` on `D:\tmp`; C: is nearly full.
 - [X] T043 Run the whole suite under WSL2 as in `AGENTS.md` (`wsl -d Ubuntu --cd /mnt/d/projects-mou/whatsapp-mcp-next --exec env CGO_ENABLED=0 go test ./... -count=1 -timeout 10m`), plus the helper's test, and record it as WSL2, not native Linux. Push the branch for CI only if the user asks, and record the CI result per OS when it exists; anything not run is "not verified".
 - [X] T044 Check LF endings with `git ls-files --eol` and confirm no tracked file shows `w/crlf` after the scripted and tool edits.
-- [ ] T045 **Permitted real-account journey (SC-007), only after US2 and only with the owner's explicit permission for each step** (quickstart §5).
+- [X] T045 **Permitted real-account journey (SC-007), only after US2 and only with the owner's explicit permission for each step** (quickstart §5).
   - Steps: `pair` into a new empty directory (for example `D:\tmp\wa-004a`) with `--log-level debug`; a normal stop; a restart with the saved session through `stdio` or the `session-check -action connect` helper, without recovery; the owner's cleanup (unlink on the phone, then offline recovery or delete).
   - Record redacted results: each check's pass or fail, the timings between `PairSuccess`, the 515 and the fresh connection, exit codes, and the phone's linked-device entry. A step not performed is recorded as not verified.
   - If the fresh-client reconnect does not complete the link, stop and ask the owner for the decision named in the spec's Assumptions: fix it, keep the same-client reconnect with the marker unsafe, or stop the feature.
