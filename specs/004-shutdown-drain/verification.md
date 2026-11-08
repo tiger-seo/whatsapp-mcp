@@ -330,6 +330,32 @@ Binary from `64ec8bc`, `whatsapp-mcp stdio --data-dir D:/tmp/wa-004a --log-level
   200 stops passed (T041). One real failure out of three is not a rate.
 - The owner decides how to proceed (see the open question in the hand-off); no code was changed after this run.
 
+### Investigation of the step 2 failure (2026-11-08, simulator and unit tests; no account contact)
+
+- **Mechanism found, cause in the real run inferred.** A test that sends one HTTPS request through a fenced client,
+  closes the fence and then lets the transport tidy up shows `refusedWrites` rising a moment later. The stack is
+  `net/http.(*persistConn).readLoop` → `crypto/tls.(*Conn).Close` → `closeNotify` → `fenceConn.Write`: the TLS layer
+  writes its close alert on a connection the fence has already closed, and `fenceConn.Write` counts that as a refused
+  write. The count arrives asynchronously, so a check that has already looked can pass and a check that looks a few
+  milliseconds later fails. The loopback simulator uses no TLS, so it could not show this and none of the 200 simulated
+  stops did. The real run used TLS (and probably HTTP/2) connections; one refused write matches. That this was the
+  source of the single refusal on 2026-11-08 02:37:54 is **inferred, not observed**: the production binary did not
+  record what was refused.
+- **Why it is not a network escape.** The fence closes every tracked raw connection before it counts anything, so a
+  write through `fenceConn` after the close cannot reach the network. The count is a "late activity" signal, and TLS
+  and HTTP/2 teardown produce it by design of those libraries.
+- **Decision needed from the owner (changes the check's rules, so not done):** stop counting writes on connections the
+  fence already closed (dials after close, gate refusals and every other source stay counted), or keep the strict rule
+  and accept that a real-account stop can fail on harmless TLS teardown. TLS 1.3 alerts are encrypted, so they cannot
+  be recognised by content. Counting only dials would also need the T005 unit test and the contract
+  (`contracts/quiet-stop.md`, reason `network_refused`) to change.
+- **A second failure mode, found by the stress run.** 60 simulated stops with a server stream error (`503`) sent at the
+  same moment as `BeginStop`: 50 of 60 failed the check with `work_running` (one library goroutine); with no server
+  action 0 of 60 failed, and with a server connection close at that moment 0 of 60 failed. The library starts work when
+  the server ends the stream during a stop. A real server can do that at any time, so a stop that races a server
+  disconnect will fail closed. Cause not investigated; same decision applies (the check is strict by design).
+- The scratch instrumentation (a stack dump on each refusal) and the stress tests were removed, not committed.
+
 ### Step 3: cleanup (unlink on the phone, then recovery or delete)
 
 Not performed; owned by the owner.
