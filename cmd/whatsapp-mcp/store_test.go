@@ -353,13 +353,13 @@ func TestShellSavedSessionStartupExhaustion(t *testing.T) {
 			}
 			// The shell stays alive, disconnected, without pairing.
 			signals <- os.Interrupt
-			// A production Connect was attempted, so the run stays unsafe: a graceful stop exits
-			// unsuccessfully and demands offline recovery.
-			if code := pr.waitExit(t, 20*time.Second); code != exitError {
-				t.Fatalf("exit code = %d, want %d after an attempted Connect\nstderr:\n%s", code, exitError, pr.diagnostics())
+			// A production Connect was attempted and refused, and the stop left nothing running: the quiet-stop
+			// check passes, so a graceful stop exits successfully and the session can be reused.
+			if code := pr.waitExit(t, 20*time.Second); code != exitOK {
+				t.Fatalf("exit code = %d, want %d after a quiet stop\nstderr:\n%s", code, exitOK, pr.diagnostics())
 			}
-			if !strings.Contains(pr.diagnostics(), "run_guard_recovery_required") {
-				t.Errorf("no offline-recovery diagnostic after an attempted Connect:\n%s", pr.diagnostics())
+			if strings.Contains(pr.diagnostics(), "run_guard_recovery_required") || !strings.Contains(pr.diagnostics(), "quiet_stop_passed") {
+				t.Errorf("a quiet stop must pass the check and demand no recovery:\n%s", pr.diagnostics())
 			}
 			// Reopen and verify that the saved identity row remains present.
 			db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(dbPath(dir))+"?mode=ro")
@@ -407,11 +407,11 @@ func TestShellSavedSessionAttemptTimeoutAndCancellation(t *testing.T) {
 			}
 			// Stop while the five-second retry wait is pending; no second attempt may start.
 			signals <- os.Interrupt
-			if code := pr.waitExit(t, 20*time.Second); code != exitError {
-				t.Fatalf("exit code = %d, want %d after an attempted Connect\nstderr:\n%s", code, exitError, pr.diagnostics())
+			if code := pr.waitExit(t, 20*time.Second); code != exitOK {
+				t.Fatalf("exit code = %d, want %d after a quiet stop\nstderr:\n%s", code, exitOK, pr.diagnostics())
 			}
-			if !strings.Contains(pr.diagnostics(), "run_guard_recovery_required") {
-				t.Errorf("no offline-recovery diagnostic after an attempted Connect:\n%s", pr.diagnostics())
+			if strings.Contains(pr.diagnostics(), "run_guard_recovery_required") || !strings.Contains(pr.diagnostics(), "quiet_stop_passed") {
+				t.Errorf("a quiet stop must pass the check and demand no recovery:\n%s", pr.diagnostics())
 			}
 			if got := dials.Load(); got != 1 {
 				t.Errorf("connect dials after cancellation = %d, want 1", got)

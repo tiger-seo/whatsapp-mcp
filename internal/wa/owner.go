@@ -18,6 +18,12 @@ const (
 	connectWatchdog = 30 * time.Second
 )
 
+// barrierDrainBound is how long retirement waits for the store barrier to drain before it takes the forced path.
+const barrierDrainBound = 10 * time.Second
+
+// defaultStopBound is the lifecycle's shutdown timeout.
+const defaultStopBound = 10 * time.Second
+
 // Owner errors distinguish the outcomes callers must tell apart.
 var (
 	ErrStopping      = errors.New("the owner is stopping")
@@ -40,10 +46,18 @@ type OwnerConfig struct {
 	// by default, so a failed or timed-out first attempt ends disconnected with a diagnostic for
 	// both the shells and the pair command.
 	ShellStartupBudget bool
-	// PostPairReconnect enables the one owner-initiated reconnect that completes a fresh pairing
-	// after the server's 515. It is off until the path has its safety proof and owner review; with
-	// it off the 515 is refused and linking ends unfinished. It is a code-level switch, not a setting.
-	PostPairReconnect bool
+	// StopBound is the whole orderly stop, from BeginStop to the decision to clear the marker. The command passes
+	// the shutdown timeout it already uses (10 s); zero means that value. It is not a setting.
+	StopBound time.Duration
+
+	// drainBound replaces barrierDrainBound; tests only.
+	drainBound time.Duration
+	// trace, when set, receives the name of each retirement step as it happens; tests only.
+	trace func(step string)
+	// afterConnect runs right after a Connect returned, before the owner clears the recorded abort; tests only.
+	afterConnect func()
+	// afterPostPairPublish runs once the fresh post-pair generation is published, before its Connect; tests only.
+	afterPostPairPublish func()
 }
 
 // Owner owns the one WhatsApp connection: state, epochs, attempts, watchdogs and pairing windows.
@@ -87,6 +101,8 @@ type connectionOwner struct {
 	unresolved bool
 	unsafeStop bool
 	stopErr    error
+	// stopAt is the end of the stop bound; set by BeginStop.
+	stopAt time.Time
 
 	phase  Phase
 	health Health
@@ -96,12 +112,28 @@ type connectionOwner struct {
 	subNext  uint64
 }
 
-// genState is one client generation with its epoch and lifetime.
+// genState is one client generation with its epoch and its contexts.
+//
+// work is the program's own work: the pairing window's QR channel, the repair pass, version refresh. It is a
+// child of the owner context, so the stop signal reaches it, and retirement cancels it early. lib is the context
+// the client library gives its detached handlers and the parent of every Connect attempt; it is not a child of
+// the owner context's cancellation, and only the last step of retirement cancels it, after the generation's
+// network and storage are blocked. A handler that is still writing keys when a stop begins can therefore finish.
 type genState struct {
 	epoch      uint64
 	handle     SessionHandle
-	lifetime   context.Context
-	cancel     context.CancelFunc
+	work       context.Context
+	workCancel context.CancelFunc
+	lib        context.Context
+	libCancel  context.CancelFunc
+	// abort is the recorded abort of a Connect that has not returned; it is set and cleared under
+	// connectionOwner.mu. abortFired records that it was called, and abortLate that a Connect which returned
+	// without error still had it called (the handlers' context was cancelled with a live socket).
+	abort      context.CancelCauseFunc // guarded by connectionOwner.mu
+	abortFired bool                    // guarded by connectionOwner.mu
+	abortLate  bool                    // guarded by connectionOwner.mu
+	// quiet is this generation's quiet-stop result, written once by retirement.
+	quiet      *QuietStopResult // guarded by connectionOwner.mu
 	retireOnce sync.Once
 	retiring   bool // guarded by connectionOwner.mu
 	timingOut  bool // guarded by connectionOwner.mu
@@ -112,7 +144,10 @@ type genState struct {
 	// at connecting with no attempt running.
 	refused515 bool // guarded by connectionOwner.mu
 	pending515 *time.Timer
-	reconnects int // post-pair reconnects started for this generation
+	reconnects int // post-pair handovers started (or refused) for this generation
+	// handover records that the server's restart request was accepted: the pairing socket is about to be replaced
+	// by a fresh client, so its remote close must not end the link.
+	handover bool // guarded by connectionOwner.mu
 	// repairDone is non-nil once this generation's repair pass was started; it closes when the pass ends.
 	repairDone chan struct{} // guarded by connectionOwner.mu
 }
@@ -181,7 +216,7 @@ func (o *connectionOwner) Start(ctx context.Context) error {
 	o.mu.Lock()
 	if o.stopping {
 		o.mu.Unlock()
-		o.retireGeneration(gen)
+		o.retireGeneration(gen, quietStopDeadline)
 		return ErrStopping
 	}
 	o.gen = gen
@@ -219,13 +254,17 @@ func (o *connectionOwner) openGeneration() (*genState, error) {
 	o.mu.Lock()
 	o.epoch++
 	epoch := o.epoch
-	lifetime, cancel := context.WithCancel(o.ctx)
+	work, workCancel := context.WithCancel(o.ctx)
+	// WithoutCancel alone has no Done channel and could not be cancelled at the last step of retirement.
+	lib, libCancel := context.WithCancel(context.WithoutCancel(o.ctx))
 	cfg := SessionConfig{
 		Store:      o.cfg.Store,
 		Log:        o.cfg.Log,
 		Versions:   o.cfg.Versions,
 		Epoch:      epoch,
-		Lifetime:   lifetime,
+		Lifetime:   work,
+		Library:    lib,
+		trace:      o.cfg.trace,
 		Dispatch:   o.dispatch,
 		RepairSlot: o.repairSlot,
 	}
@@ -236,10 +275,11 @@ func (o *connectionOwner) openGeneration() (*genState, error) {
 	}
 	handle, err := factory(cfg)
 	if err != nil {
-		cancel()
+		workCancel()
+		libCancel()
 		return nil, err
 	}
-	return &genState{epoch: epoch, handle: handle, lifetime: lifetime, cancel: cancel}, nil
+	return &genState{epoch: epoch, handle: handle, work: work, workCancel: workCancel, lib: lib, libCancel: libCancel}, nil
 }
 
 // watchStorageFault reports a guarded-write fault and stops any running sequence.
@@ -249,7 +289,7 @@ func (o *connectionOwner) watchStorageFault(gen *genState) {
 		case <-gen.handle.StorageFaulted():
 			o.storageFault(gen)
 		case <-o.ctx.Done():
-		case <-gen.lifetime.Done():
+		case <-gen.work.Done():
 		}
 	}()
 }
@@ -271,7 +311,7 @@ func (o *connectionOwner) storageFault(gen *genState) {
 	}
 	o.publishLocked()
 	o.mu.Unlock()
-	go o.retireGeneration(gen)
+	go o.retireGeneration(gen, quietStopDeadline)
 }
 
 // dispatch admits one upstream event of the current generation; stale epochs are denied.
@@ -305,7 +345,7 @@ func (o *connectionOwner) dispatch(epoch uint64, ev SessionEvent) {
 		o.log.Debug("connection confirmed", "event", "connection_confirmed")
 	case SessionDisconnected:
 		o.connected = false
-		if o.phase != PhasePairing {
+		if o.phase != PhasePairing && !gen.handover {
 			o.phase = PhaseDisconnected
 		}
 	case SessionPairSuccess:
@@ -358,7 +398,7 @@ func (o *connectionOwner) dispatch(epoch uint64, ev SessionEvent) {
 		o.log.Info("logged out by the server", "event", "logged_out", "epoch", epoch)
 		// Retirement runs outside event-handler locks; the shared store stays open.
 		o.cancelPending515(gen, true)
-		go o.retireGeneration(gen)
+		go o.retireGeneration(gen, quietStopDeadline)
 	case SessionPairError:
 		o.cancelPending515(gen, true)
 	case SessionPairSuccess:
@@ -449,11 +489,18 @@ func (o *connectionOwner) BeginStop() {
 	o.stopOnce.Do(func() {
 		o.mu.Lock()
 		o.stopping = true
+		o.stopAt = time.Now().Add(o.stopBound())
 		o.connected = false
 		o.phase = PhaseStopping
 		if w := o.pairing; w != nil && w.result == PairingActive {
 			w.result = PairingCancelled
 			w.clearCodeLocked()
+		}
+		// The refusal count starts, and a Connect that has not returned is aborted, before anything is
+		// cancelled. Neither reaches the library context of a connection that is already up.
+		if gen := o.gen; gen != nil {
+			o.markRetiringLocked(gen)
+			o.abortAttemptLocked(gen)
 		}
 		o.publishLocked()
 		o.mu.Unlock()
@@ -484,15 +531,13 @@ func (o *connectionOwner) finishStop() {
 	// or retired that generation before capturing the owner state.
 	o.windowMu.Lock()
 	o.windowMu.Unlock()
-	o.mu.Lock()
-	gen := o.gen
-	o.mu.Unlock()
-	if gen != nil {
-		o.retireGeneration(gen)
-	}
+	o.retireCurrent()
 	// Connect may outlive cancellation and device admission. Do not signal completion until the
 	// attempt itself returns, even if the device barrier has already drained.
 	o.slot <- struct{}{}
+	// A generation published while the stop was in progress is retired and checked too, before the slot is
+	// released: the store never closes and the lock is never released while a socket may be live.
+	o.retireCurrent()
 	<-o.slot
 	o.mu.Lock()
 	clear := o.guardArmed && !o.unresolved && !o.unsafeStop && !o.health.StorageFault
@@ -520,32 +565,147 @@ func (o *connectionOwner) finishStop() {
 	close(o.done)
 }
 
-// retireGeneration cancels, disconnects and drains one generation. It is idempotent and never
-// closes the shared store.
-func (o *connectionOwner) retireGeneration(gen *genState) {
+func (o *connectionOwner) traceStep(step string) {
+	if o.cfg.trace != nil {
+		o.cfg.trace(step)
+	}
+}
+
+func (o *connectionOwner) stopBound() time.Duration {
+	if o.cfg.StopBound > 0 {
+		return o.cfg.StopBound
+	}
+	return defaultStopBound
+}
+
+func (o *connectionOwner) drainBound() time.Duration {
+	if o.cfg.drainBound > 0 {
+		return o.cfg.drainBound
+	}
+	return barrierDrainBound
+}
+
+// checkQuiet runs the generation's quiet-stop check after it drained and records the result. A failed check keeps
+// the marker unsafe for the whole run. A generation that never attempted Connect is not checked. The check is
+// capped by the time left in the stop bound.
+func (o *connectionOwner) checkQuiet(gen *genState, deadline time.Duration) {
+	checker, ok := gen.handle.(interface {
+		QuietStop(context.Context, time.Duration) QuietStopResult
+	})
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	o.mu.Lock()
+	stopAt := o.stopAt
+	o.mu.Unlock()
+	if !stopAt.IsZero() {
+		cancel()
+		ctx, cancel = context.WithDeadline(context.Background(), stopAt)
+	}
+	defer cancel()
+	res := checker.QuietStop(ctx, deadline)
+	o.traceStep("quiet_decided")
+	o.mu.Lock()
+	gen.quiet = &res
+	if res.Reason == QuietNotChecked {
+		o.mu.Unlock()
+		return
+	}
+	if !res.Passed {
+		o.unsafeStop = true
+	}
+	o.mu.Unlock()
+	if res.Passed {
+		o.log.Info("quiet stop passed", "event", "quiet_stop_passed", "epoch", gen.epoch, "duration_ms", res.Duration.Milliseconds())
+		return
+	}
+	o.log.Error("quiet stop failed; offline recovery is required", "event", "quiet_stop_failed", "epoch", gen.epoch,
+		"reason", string(res.Reason), "library_goroutines", res.LibraryGoroutines, "network_refused", res.NetworkRefused,
+		"storage_refused", res.StorageRefused, "calls_refused", res.CallsRefused, "events_dropped", res.EventsDropped,
+		"duration_ms", res.Duration.Milliseconds())
+}
+
+// markRetiringLocked starts the generation's storage refusal count. It takes no lock of its own (an atomic
+// store), so it may run under o.mu; no path takes o.mu while holding a barrier lock.
+func (o *connectionOwner) markRetiringLocked(gen *genState) {
+	if m, ok := gen.handle.(interface{ MarkRetiring() }); ok {
+		m.MarkRetiring()
+	}
+}
+
+// abortAttemptLocked aborts a Connect that has not returned, synchronously, through the recorded abort. The
+// refusal count starts first. It is the only way the stop signal, a watchdog or retirement reaches an attempt
+// context; there is no AfterFunc, which would run late in another goroutine. Call it with o.mu held.
+func (o *connectionOwner) abortAttemptLocked(gen *genState) {
+	if gen.abort == nil {
+		return
+	}
+	o.markRetiringLocked(gen)
+	gen.abortFired = true
+	gen.abort(errAttemptAborted)
+}
+
+// retireCurrent retires whatever generation exists, repeating until none is left.
+func (o *connectionOwner) retireCurrent() {
+	for {
+		o.mu.Lock()
+		gen := o.gen
+		o.mu.Unlock()
+		if gen == nil {
+			return
+		}
+		o.retireGeneration(gen, quietStopDeadline)
+	}
+}
+
+// retireGeneration retires one generation in the contract order: mark it retiring and set the session's retire
+// bit, end the pairing window, abort an unreturned Connect and cancel the work context, wait for the repair
+// pass, then let the session disconnect, close its network fence and drain the store barrier, and only then
+// cancel the library context. It is idempotent and never closes the shared store.
+func (o *connectionOwner) retireGeneration(gen *genState, deadline time.Duration) {
 	gen.retireOnce.Do(func() {
 		o.mu.Lock()
 		gen.retiring = true
+		o.markRetiringLocked(gen)
 		o.mu.Unlock()
-		gen.cancel()
-		gen.handle.Disconnect()
+		if b, ok := gen.handle.(interface{ BeginRetire() }); ok {
+			b.BeginRetire()
+		}
+		o.endPairingWindow(gen)
 		o.mu.Lock()
+		o.abortAttemptLocked(gen)
 		repairDone := gen.repairDone
 		o.mu.Unlock()
+		gen.workCancel()
+		o.traceStep("work_cancelled")
 		if repairDone != nil {
 			<-repairDone
 		}
-		if err := gen.handle.Retire(context.Background()); err != nil {
+		// The barrier waits for admitted calls, which a pinned handler may still be finishing. A drain that does
+		// not finish inside its bound is the forced path: the library context is released so those calls fail,
+		// and the stop is unsafe.
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), o.drainBound())
+		err := gen.handle.Retire(drainCtx)
+		drainCancel()
+		if err != nil {
 			o.log.Warn("generation drain did not quiesce", "event", "owner_drain_failed")
 			o.mu.Lock()
 			o.unsafeStop = true
 			o.mu.Unlock()
+			// Storage is not blocked yet; releasing the handlers' context is the only way left to end them.
+			gen.libCancel()
+			o.traceStep("lib_cancelled")
+			if errors.Is(err, context.DeadlineExceeded) {
+				_ = gen.handle.Retire(context.Background())
+			}
+		} else {
+			// Storage is blocked now, so a handler released by this cancel can only be refused and counted.
+			gen.libCancel()
+			o.traceStep("lib_cancelled")
 		}
-		if upstream, ok := gen.handle.(interface{ UpstreamDrainUnproven() bool }); ok && upstream.UpstreamDrainUnproven() {
-			o.mu.Lock()
-			o.unsafeStop = true
-			o.mu.Unlock()
-			o.log.Error("upstream handlers may outlive retirement; offline recovery is required", "event", "upstream_drain_unproven")
+		if err == nil {
+			o.checkQuiet(gen, deadline)
 		}
 		// The watcher can exit on cancellation before a previously admitted write
 		// reports its fault. Retirement has drained those writes, so inspect the
@@ -607,7 +767,7 @@ func (k attemptOutcome) terminal() bool {
 // a failed or timed-out attempt is final, because retries are denied by default. The identity is
 // retained and the owner stays disconnected without pairing.
 func (o *connectionOwner) runStartupSequence(gen *genState) {
-	if err := o.cfg.Versions.Refresh(gen.lifetime); err != nil {
+	if err := o.cfg.Versions.Refresh(gen.work); err != nil {
 		o.log.Warn("version discovery failed; keeping the last usable version", "event", "version_refresh_failed", "reason", versionFailureReason(err))
 	}
 	o.mu.Lock()
@@ -704,10 +864,17 @@ const (
 )
 
 func (o *connectionOwner) attempt(gen *genState, mode attemptMode) attemptOutcome {
+	// The stop check and the recording of the abort share one critical section, so a stop either sees the
+	// abort and calls it, or is seen here and prevents the Connect.
 	o.mu.Lock()
 	gen.timingOut = false
+	if o.stopping || gen.retiring {
+		o.mu.Unlock()
+		return outcomeStopped
+	}
+	attemptCtx, abort := context.WithCancelCause(gen.lib)
+	gen.abort, gen.abortFired = abort, false
 	o.mu.Unlock()
-	attemptCtx, cancel := context.WithCancel(gen.lifetime)
 	fired := make(chan struct{})
 	finished := make(chan struct{})
 	timer := time.AfterFunc(connectWatchdog, func() {
@@ -716,11 +883,13 @@ func (o *connectionOwner) attempt(gen *genState, mode attemptMode) attemptOutcom
 		active := o.gen == gen && !gen.retiring && !o.connected && !o.stopping && !o.health.StorageFault && o.phase != PhaseLoggedOut
 		if active {
 			gen.timingOut = true
+			// Only a Connect that has not returned is aborted. After it returned the handlers' context is
+			// left alone and the watchdog just disconnects.
+			o.abortAttemptLocked(gen)
 		}
 		o.mu.Unlock()
 		if active {
 			o.log.Warn("connection attempt timed out", "event", "connect_timeout")
-			cancel()
 			gen.handle.Disconnect()
 			close(fired)
 		}
@@ -730,12 +899,20 @@ func (o *connectionOwner) attempt(gen *genState, mode attemptMode) attemptOutcom
 		if !timer.Stop() {
 			<-finished
 		}
-		if !connected {
-			cancel()
-		}
+		_ = connected
 	}()
 
-	if err := gen.handle.Connect(attemptCtx); err != nil {
+	err := gen.handle.Connect(attemptCtx)
+	if o.cfg.afterConnect != nil {
+		o.cfg.afterConnect()
+	}
+	o.mu.Lock()
+	if err == nil && gen.abortFired {
+		gen.abortLate = true
+	}
+	gen.abort = nil
+	o.mu.Unlock()
+	if err != nil {
 		return outcomeFailed
 	}
 	for {
@@ -774,29 +951,14 @@ func (o *connectionOwner) attempt(gen *genState, mode attemptMode) attemptOutcom
 	}
 }
 
-// tryManualReconnect handles the post-login 515. Unless the candidate path is enabled it refuses:
-// another production Connect while detached upstream work of the earlier one cannot be excluded.
-// The owner then stays disconnected, keeps the unsafe marker and reports that linking was not
-// completed safely.
-//
-// With the candidate enabled the 515 is only a request. It waits (bounded) for PairSuccess, which
-// proves the pinned pairing work reached its durable save and event dispatch, and any failure or
-// stop refuses it.
+// tryManualReconnect handles the post-login 515. The 515 is only a request. It waits (bounded) for PairSuccess,
+// which proves the pinned pairing work reached its durable save and event dispatch, and any failure or stop
+// refuses it. Once accepted, the pairing generation is retired and checked and a fresh client makes the one
+// connection that completes the link.
 func (o *connectionOwner) tryManualReconnect(gen *genState) {
 	o.mu.Lock()
 	if o.stopping || o.gen != gen || gen.retiring || o.phase == PhaseLoggedOut || o.health.StorageFault {
 		o.mu.Unlock()
-		return
-	}
-	if !o.cfg.PostPairReconnect {
-		gen.refused515 = true
-		o.connected = false
-		if o.phase != PhaseStopping {
-			o.phase = PhaseDisconnected
-		}
-		o.publishLocked()
-		o.mu.Unlock()
-		o.denyReconnect("login_515")
 		return
 	}
 	if gen.reconnects > 0 || gen.pending515 != nil && !gen.paired {
@@ -804,9 +966,9 @@ func (o *connectionOwner) tryManualReconnect(gen *genState) {
 		return
 	}
 	if gen.paired {
-		gen.reconnects++
+		o.beginHandoverLocked(gen)
 		o.mu.Unlock()
-		go o.runPostPairReconnect(gen)
+		go o.runPostPairHandover(gen)
 		return
 	}
 	gen.pending515 = time.AfterFunc(connectWatchdog, func() { o.cancelPending515(gen, true) })
@@ -850,40 +1012,99 @@ func (o *connectionOwner) releasePending515(gen *genState) {
 		return
 	}
 	timer.Stop()
-	gen.reconnects++
+	o.beginHandoverLocked(gen)
 	o.mu.Unlock()
-	go o.runPostPairReconnect(gen)
+	go o.runPostPairHandover(gen)
 }
 
-// runPostPairReconnect makes the single owner-initiated Connect that completes a pairing: it takes
-// the attempt slot, drops the paired socket and connects once under the attempt watchdog. A failure
-// is final.
-func (o *connectionOwner) runPostPairReconnect(gen *genState) {
-	select {
-	case o.slot <- struct{}{}:
-	case <-gen.lifetime.Done():
-		return
-	}
-	defer func() { <-o.slot }()
-	o.mu.Lock()
-	if o.stopping || o.gen != gen || gen.retiring || o.phase == PhaseLoggedOut || o.health.StorageFault || o.outdated {
-		o.mu.Unlock()
-		return
-	}
+// beginHandoverLocked accepts the server's restart request for a paired generation. The owner is connecting from
+// this moment, before the attempt slot is taken: the server's close of the pairing socket can follow the request
+// within milliseconds, and it must not read as a failed link. Call it with o.mu held.
+func (o *connectionOwner) beginHandoverLocked(gen *genState) {
+	gen.reconnects++
+	gen.handover = true
 	o.connected = false
 	o.phase = PhaseConnecting
 	o.publishLocked()
-	o.mu.Unlock()
-	gen.handle.Disconnect()
+}
+
+// runPostPairHandover completes a pairing on a fresh client. It takes the attempt slot, retires and checks the
+// pairing generation (which ends its pairing window), and only after that check passed opens a new generation
+// from the saved identity and makes the one connection under the attempt watchdog. A failed check, a failed
+// open, a failure, a stall and a cancellation are final: no second attempt follows. The slot is held across the
+// whole path, so `finishStop` retires whatever generation was published meanwhile.
+func (o *connectionOwner) runPostPairHandover(pairGen *genState) {
+	select {
+	case o.slot <- struct{}{}:
+	case <-pairGen.work.Done():
+		return
+	}
+	defer func() { <-o.slot }()
+	if o.postPairHalted(pairGen) {
+		return
+	}
+	o.retireGeneration(pairGen, postPairQuietDeadline)
 	o.mu.Lock()
-	if o.stopping || o.gen != gen || gen.retiring || o.phase == PhaseLoggedOut || o.health.StorageFault || o.outdated {
-		o.mu.Unlock()
-		return
+	failed := o.unsafeStop || o.health.StorageFault || pairGen.loggedOut || o.phase == PhaseLoggedOut
+	if res := pairGen.quiet; res != nil && !res.Passed {
+		failed = true
 	}
+	stopped := o.stopping
 	o.mu.Unlock()
-	if outcome := o.attempt(gen, attemptPostPair); outcome == outcomeConnected {
+	if stopped {
 		return
 	}
+	if failed {
+		o.failPostPair()
+		return
+	}
+	fresh, err := o.openGeneration()
+	if err != nil {
+		o.failPostPair()
+		return
+	}
+	// Publication and the stop check share one critical section: a stop that began first finds no generation
+	// to wait for, so this one is discarded without ever connecting.
+	o.mu.Lock()
+	if o.stopping {
+		o.mu.Unlock()
+		o.retireGeneration(fresh, quietStopDeadline)
+		return
+	}
+	o.gen = fresh
+	o.connected = false
+	o.phase = PhaseConnecting
+	o.identity = fresh.handle.HasIdentity()
+	o.publishLocked()
+	o.mu.Unlock()
+	o.watchStorageFault(fresh)
+	if o.cfg.afterPostPairPublish != nil {
+		o.cfg.afterPostPairPublish()
+	}
+	if !fresh.handle.HasIdentity() {
+		o.failPostPair()
+		return
+	}
+	if outcome := o.attempt(fresh, attemptPostPair); outcome == outcomeConnected {
+		return
+	}
+	if !o.stoppedOrTerminal() {
+		o.denyReconnect("login_515")
+	}
+	o.setPhaseIf(PhaseDisconnected, PhaseConnecting)
+}
+
+// postPairHalted reports whether the paired generation can no longer hand over: a stop, a retirement, a logout,
+// a storage fault or a 405 landed while the handover waited for the slot.
+func (o *connectionOwner) postPairHalted(gen *genState) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.stopping || o.gen != gen || gen.retiring || o.phase == PhaseLoggedOut || o.health.StorageFault || o.outdated
+}
+
+// failPostPair is the incomplete-link path: the pairing stays unresolved, so the marker stays unsafe, and the
+// command reports that linking could not be completed safely.
+func (o *connectionOwner) failPostPair() {
 	if !o.stoppedOrTerminal() {
 		o.denyReconnect("login_515")
 	}
@@ -919,14 +1140,14 @@ func (o *connectionOwner) startRepair(gen *genState) {
 	o.mu.Unlock()
 	go func() {
 		defer close(done)
-		err := runner.RunRepairs(gen.lifetime)
+		err := runner.RunRepairs(gen.work)
 		o.mu.Lock()
 		if o.gen == gen {
 			o.health.RecoveryPending = gen.handle.RecoveryPending()
 			o.publishLocked()
 		}
 		o.mu.Unlock()
-		if err != nil && gen.lifetime.Err() == nil {
+		if err != nil && gen.work.Err() == nil {
 			o.log.Warn("app-state repair is incomplete; the marker is kept", "event", "repair_incomplete")
 		}
 	}()

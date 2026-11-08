@@ -89,7 +89,7 @@ func (r *ownerRig) runGuardState() string {
 }
 
 func TestSimulatorDeviceRemovedAfterConnected(t *testing.T) {
-	r := newOwnerRig(t, true)
+	r := newOwnerRig(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	r.seedChat()
@@ -109,8 +109,8 @@ func TestSimulatorDeviceRemovedAfterConnected(t *testing.T) {
 	if r.chatCount() != 1 {
 		t.Errorf("chat sentinel lost: %d chats", r.chatCount())
 	}
-	if state := r.runGuardState(); state != "unsafe" {
-		t.Errorf("marker = %q; a Connect was attempted, so it must stay unsafe", state)
+	if state := r.runGuardState(); state != "clean" {
+		t.Errorf("marker = %q; the fresh link resolved the pairing, the stop passed its checks and the revocation cleanup finished, so it is clean", state)
 	}
 	if got := r.srv.Dials(); got != dials {
 		t.Errorf("dials = %d, want %d; removal must not trigger a Connect", got, dials)
@@ -121,7 +121,7 @@ func TestSimulatorDeviceRemovedAfterConnected(t *testing.T) {
 }
 
 func TestSimulatorDeviceRemovedDuringPostPairConnect(t *testing.T) {
-	r := newOwnerRig(t, true)
+	r := newOwnerRig(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	r.seedChat()
@@ -159,7 +159,7 @@ func TestSimulatorDeviceRemovedDuringPostPairConnect(t *testing.T) {
 // The 515 is pending on a held Save when the server removes the device: the request is dropped,
 // the late Save is drained by retirement, and the revocation cleanup removes the identity it wrote.
 func TestSimulatorDeviceRemovedWhilePostPairRequestPending(t *testing.T) {
-	r := newOwnerRig(t, true)
+	r := newOwnerRig(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	r.seedChat()
@@ -242,7 +242,7 @@ func TestSimulatorDeviceRemovedWhilePostPairRequestPending(t *testing.T) {
 }
 
 func TestSimulatorDeviceRemovedCleanupFailureKeepsIdentityAndBlocksWork(t *testing.T) {
-	r := newOwnerRig(t, true)
+	r := newOwnerRig(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	r.seedChat()
@@ -281,7 +281,7 @@ func TestSimulatorDeviceRemovedCleanupFailureKeepsIdentityAndBlocksWork(t *testi
 // A stop racing the removal must never leave a clean marker beside a device that the server
 // removed, whichever side wins.
 func TestSimulatorDeviceRemovedRacingStop(t *testing.T) {
-	r := newOwnerRig(t, true)
+	r := newOwnerRig(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	r.seedChat()

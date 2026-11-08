@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -82,6 +83,22 @@ type deviceSession struct {
 	repairs     [5]*RepairTicket
 	writeFault  bool
 	faultCh     chan struct{}
+
+	// retiring is set before the generation's own work is cancelled; from then on every guarded call that is
+	// turned away is counted in refused. Both are memory only.
+	retiring atomic.Bool
+	refused  atomic.Uint64
+}
+
+// refuse counts a guarded call that failed for a reason from the guard or the context once retirement has
+// begun, and returns err unchanged. A result the database itself returns is not a refusal.
+func (sess *deviceSession) refuse(err error) error {
+	if err != nil && sess.retiring.Load() &&
+		(errors.Is(err, ErrRetired) || errors.Is(err, ErrStaleLease) || errors.Is(err, ErrNotQuiescent) ||
+			errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		sess.refused.Add(1)
+	}
+	return err
 }
 
 // newDeviceSession installs the stable guards on the device before any client sees it. Every interface field
@@ -185,6 +202,7 @@ func (sess *deviceSession) latchWriteFault(result error) {
 // a write checks the disk guard, and the validation runs before the delegate's SQL. Bulk work is rejected
 // inside a transaction, where it would be incompatible.
 func (sess *deviceSession) run(ctx context.Context, op string, write, bulk bool, validate func() error, fn func(context.Context) error) (result error) {
+	defer func() { sess.refuse(result) }()
 	defer func() {
 		if write {
 			sess.latchWriteFault(result)
@@ -299,6 +317,7 @@ type DeviceBarrier struct {
 // Retire rejects new guarded access on this generation and waits for the admitted work to drain. When ctx ends
 // first it returns ErrNotQuiescent; Done is closed only by a true drain. Retire is idempotent.
 func (b *DeviceBarrier) Retire(ctx context.Context) error {
+	b.sess.retiring.Store(true)
 	sess := b.sess
 	sess.mu.Lock()
 	first := !sess.holdDone
@@ -419,6 +438,7 @@ type deviceContainer struct {
 func (d *deviceContainer) PutDevice(ctx context.Context, dev *wastore.Device) (result error) {
 	sess := d.sess
 	defer func() { sess.latchWriteFault(result) }()
+	defer func() { sess.refuse(result) }()
 	if dev == nil || dev != sess.dev {
 		return invalid("device", "does not belong to this session")
 	}
@@ -532,8 +552,9 @@ func (d *deviceContainer) PutDevice(ctx context.Context, dev *wastore.Device) (r
 // DeleteDevice answers the client's delete request with a typed deferred retirement. The live fields are never
 // reset here, the row is not deleted, and repeated requests coalesce into one pending removal that the
 // owner-controlled confirmed cleanup performs after the drain.
-func (d *deviceContainer) DeleteDevice(ctx context.Context, dev *wastore.Device) error {
+func (d *deviceContainer) DeleteDevice(ctx context.Context, dev *wastore.Device) (result error) {
 	sess := d.sess
+	defer func() { sess.refuse(result) }()
 	if dev == nil || dev != sess.dev {
 		return invalid("device", "does not belong to this session")
 	}

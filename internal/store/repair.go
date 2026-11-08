@@ -125,7 +125,7 @@ func (sess *deviceSession) protected(ctx context.Context, name, op string, write
 		retired, ready := sess.retired, sess.ready
 		sess.mu.Unlock()
 		if retired {
-			return ErrRetired
+			return sess.refuse(ErrRetired)
 		}
 		if !ready {
 			return ErrNotReady
@@ -192,6 +192,15 @@ func (b *DeviceBarrier) StorageFault() bool {
 	return b.sess.writeFault
 }
 
+// MarkRetiring starts the count of refused guarded calls. The owner calls it before it cancels any of the
+// generation's own work, so a write that fails because of that cancellation is counted too. It does not retire
+// the generation; Retire does. It is idempotent.
+func (b *DeviceBarrier) MarkRetiring() { b.sess.retiring.Store(true) }
+
+// Refused returns how many guarded calls were turned away since MarkRetiring (or Retire): a retired
+// generation, an expired lease, or a cancelled or expired context. It is zero before that and never falls.
+func (b *DeviceBarrier) Refused() uint64 { return b.sess.refused.Load() }
+
 // StorageFaulted closes once when a guarded write requires an owner restart.
 func (b *DeviceBarrier) StorageFaulted() <-chan struct{} { return b.sess.faultCh }
 
@@ -225,7 +234,7 @@ func (sess *deviceSession) freshRecoveryState(ctx context.Context) (bool, error)
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 	if sess.retired {
-		return false, ErrRetired
+		return false, sess.refuse(ErrRetired)
 	}
 	if !sess.ready && !sess.bound {
 		return true, nil

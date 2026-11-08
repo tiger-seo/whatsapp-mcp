@@ -73,13 +73,13 @@ func TestSessionAttemptLatchCoversEveryOutcome(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer s.Retire(context.Background())
-		if s.UpstreamDrainUnproven() {
+		if s.attemptedConnect() {
 			t.Fatal("latch set before any Connect")
 		}
 		if err := s.Connect(lifetime); err == nil {
 			t.Fatal("connect succeeded")
 		}
-		if !s.UpstreamDrainUnproven() {
+		if !s.attemptedConnect() {
 			t.Error("a failed attempt did not retain the latch")
 		}
 	})
@@ -99,7 +99,7 @@ func TestSessionAttemptLatchCoversEveryOutcome(t *testing.T) {
 		done := make(chan error, 1)
 		go func() { done <- s.Connect(attemptCtx) }()
 		deadline := time.Now().Add(5 * time.Second)
-		for !s.UpstreamDrainUnproven() {
+		for !s.attemptedConnect() {
 			if time.Now().After(deadline) {
 				t.Fatal("latch not set while the call was in flight")
 			}
@@ -114,7 +114,7 @@ func TestSessionAttemptLatchCoversEveryOutcome(t *testing.T) {
 		if err := <-done; err == nil {
 			t.Error("cancelled connect succeeded")
 		}
-		if !s.UpstreamDrainUnproven() {
+		if !s.attemptedConnect() {
 			t.Error("a cancelled attempt cleared the latch")
 		}
 	})
@@ -136,7 +136,7 @@ func TestSessionAttemptLatchCoversEveryOutcome(t *testing.T) {
 		if err := s.Connect(lifetime); !errors.Is(err, ErrSessionRetired) {
 			t.Fatalf("connect after retirement = %v, want ErrSessionRetired", err)
 		}
-		if s.UpstreamDrainUnproven() {
+		if s.attemptedConnect() {
 			t.Error("a rejection before the boundary set the latch")
 		}
 		if network.count() != 0 {

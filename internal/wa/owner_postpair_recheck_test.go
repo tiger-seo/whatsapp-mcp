@@ -2,128 +2,63 @@ package wa
 
 import (
 	"context"
-	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 )
 
-// The post-pair reconnect rechecks the owner's state twice before it Connects: after it wins the
-// attempt slot, and again after it drops the paired socket. These tests pin both rechecks. A
-// logout, a 405, a storage fault or a stop that lands in either window must leave the identity
-// alone: no further Connect on the real account.
+// The post-pair handover rechecks the owner's state before it retires the pairing generation, and it reads the
+// result after that retirement. A logout, a 405, a storage fault or a stop that lands in either window must leave
+// the identity alone: no fresh client may connect on the real account.
 
-// hookSession runs a callback inside Disconnect, after the fake has counted it. The reconnect calls
-// Disconnect between its two rechecks and holds no owner lock there, so the callback can dispatch
-// an event at exactly that point.
-type hookSession struct {
-	*fakeSession
-	afterDisconnect func()
-}
-
-func (h *hookSession) Disconnect() {
-	h.fakeSession.Disconnect()
-	if h.afterDisconnect != nil {
-		h.afterDisconnect()
-	}
-}
-
-// newHookedPostPairOwner returns a post-pair owner whose sessions run afterDisconnect inside Disconnect.
-func newHookedPostPairOwner(t *testing.T, afterDisconnect func(ot *ownerTest)) *ownerTest {
-	t.Helper()
-	ot := newPostPairOwner(t, func(int64, context.Context) error { return nil })
-	ot.o.cfg.Sessions = func(cfg SessionConfig) (SessionHandle, error) {
-		ot.sess.cfg = cfg
-		var fired atomic.Bool
-		return &hookSession{fakeSession: ot.sess, afterDisconnect: func() {
-			if fired.CompareAndSwap(false, true) {
-				afterDisconnect(ot)
-			}
-		}}, nil
-	}
-	return ot
-}
-
-// Second recheck: the event arrives while the paired socket is being dropped.
-func TestPostPairReconnectRecheckAfterDisconnect(t *testing.T) {
-	for name, event := range map[string]func(ot *ownerTest){
-		"logout":   func(ot *ownerTest) { ot.sess.send(SessionLoggedOut) },
-		"outdated": func(ot *ownerTest) { ot.sess.send(SessionClientOutdated) },
-	} {
-		t.Run(name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				ot := newHookedPostPairOwner(t, event)
-				startPostPair(t, ot)
-				ot.sess.send(SessionPairSuccess)
-				ot.sess.send(SessionManualLoginReconnect)
-				synctest.Sleep(time.Minute)
-				if got := ot.sess.disconnectN.Load(); got < 1 {
-					t.Errorf("disconnects = %d: the reconnect did not reach its second recheck", got)
-				}
-				if got := ot.sess.connectN.Load(); got != 0 {
-					t.Errorf("connects = %d, want 0 after %s during the reconnect", got, name)
-				}
-				stopInBubble(t, ot)
-			})
-		})
-	}
-}
-
-// Second recheck, stop: BeginStop can only run off the reconnect's goroutine, so it is started from
-// the hook and given a moment to take effect before Disconnect returns.
-func TestPostPairReconnectRecheckStopDuringDisconnect(t *testing.T) {
+// Recheck after retirement: a logout confirmed by the server while the pairing generation is retired.
+func TestPostPairHandoverLogoutDuringRetirementOpensNothing(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		ot := newHookedPostPairOwner(t, func(ot *ownerTest) {
-			go ot.o.BeginStop()
-			time.Sleep(time.Second)
-		})
-		startPostPair(t, ot)
-		ot.sess.send(SessionPairSuccess)
-		ot.sess.send(SessionManualLoginReconnect)
+		r := newPostPairRig(t, func(int64, context.Context) error { return nil })
+		r.onRetire = func(idx int) {
+			if idx == 0 {
+				r.gen(0).send(SessionLoggedOut)
+			}
+		}
+		r.start(t)
+		r.paired()
 		synctest.Sleep(time.Minute)
-		if got := ot.sess.disconnectN.Load(); got < 1 {
-			t.Errorf("disconnects = %d: the reconnect did not reach its second recheck", got)
+		if r.count() != 1 {
+			t.Errorf("generations = %d, want 1 after a logout during the handover", r.count())
 		}
-		if got := ot.sess.connectN.Load(); got != 0 {
-			t.Errorf("connects = %d, want 0 after a stop during the reconnect", got)
-		}
-		<-ot.o.Done()
+		stopInBubble(t, r.ownerTest)
 	})
 }
 
-// First recheck: the reconnect is queued behind the attempt slot while a 405 or a storage fault
-// lands. A 405 does not cancel the generation's lifetime, so the reconnect wins the slot once it is
-// released and must stop at the first recheck. A storage fault retires the generation, which
-// cancels its lifetime, so the queued reconnect gives up its wait for the slot instead; the
-// subtest pins that no Connect and no further Disconnect follow either way.
-func TestPostPairReconnectRecheckAfterSlot(t *testing.T) {
-	for name, event := range map[string]func(ot *ownerTest){
-		"outdated": func(ot *ownerTest) { ot.sess.send(SessionClientOutdated) },
-		"storage fault": func(ot *ownerTest) {
-			close(ot.sess.faultCh)
-		},
+// Recheck after the slot: the handover is queued behind the attempt slot while a 405 or a storage fault lands.
+// A 405 does not cancel the generation's lifetime, so the handover wins the slot once it is released and must stop
+// at the recheck. A storage fault retires the generation, which cancels its lifetime, so the queued handover
+// gives up its wait for the slot instead. Either way nothing is retired by the handover and nothing opens.
+func TestPostPairHandoverRecheckAfterSlot(t *testing.T) {
+	for name, event := range map[string]func(r *postPairRig){
+		"outdated":      func(r *postPairRig) { r.gen(0).send(SessionClientOutdated) },
+		"storage fault": func(r *postPairRig) { close(r.faultCh) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				ot := newPostPairOwner(t, func(int64, context.Context) error { return nil })
-				ot.sess.faultCh = make(chan struct{})
-				startPostPair(t, ot)
-				ot.o.slot <- struct{}{} // another attempt holds the slot
-				ot.sess.send(SessionPairSuccess)
-				ot.sess.send(SessionManualLoginReconnect)
+				r := newPostPairRig(t, func(int64, context.Context) error { return nil })
+				r.faultCh = make(chan struct{})
+				r.start(t)
+				r.o.slot <- struct{}{} // another attempt holds the slot
+				r.paired()
 				synctest.Wait()
-				event(ot)
+				event(r)
 				synctest.Wait()
-				disconnects := ot.sess.disconnectN.Load()
-				<-ot.o.slot // the other attempt finishes
+				retired := r.gen(0).retiredN.Load()
+				<-r.o.slot // the other attempt finishes
 				synctest.Sleep(time.Minute)
-				if got := ot.sess.connectN.Load(); got != 0 {
-					t.Errorf("connects = %d, want 0 after %s while queued", got, name)
+				if r.count() != 1 {
+					t.Errorf("generations = %d, want 1 after %s while queued", r.count(), name)
 				}
-				if got := ot.sess.disconnectN.Load(); got != disconnects {
-					t.Errorf("the queued reconnect dropped the socket after %s (%d disconnects, was %d)", name, got, disconnects)
+				if got := r.gen(0).retiredN.Load(); got != retired {
+					t.Errorf("the queued handover retired the pairing generation after %s", name)
 				}
-				stopInBubble(t, ot)
+				stopInBubble(t, r.ownerTest)
 			})
 		})
 	}

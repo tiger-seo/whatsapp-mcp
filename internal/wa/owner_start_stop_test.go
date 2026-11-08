@@ -24,7 +24,7 @@ func TestOwnerStopWaitsForPairingGenerationConstruction(t *testing.T) {
 		if err := ot.o.Start(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		ot.o.retireGeneration(ot.o.gen)
+		ot.o.retireGeneration(ot.o.gen, quietStopDeadline)
 		result := make(chan error, 1)
 		go func() {
 			_, err := ot.o.RequestPairing(context.Background())

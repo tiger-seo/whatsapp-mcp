@@ -171,9 +171,9 @@ func productionOwner(deps ownerDeps) (*ownerHandle, error) {
 	return &ownerHandle{owner: owner, refreshDone: refreshDone}, nil
 }
 
-// productionOwnerConfig is the owner configuration of the shipped binary. The post-pair reconnect
-// (owner decision 2026-11-06, see the post-pair reconnect decision in the feature verification.md) is enabled for the pair command
-// only: the long-running shells never start a pairing window, so a 515 there stays refused.
+// productionOwnerConfig is the owner configuration of the shipped binary. The link that WhatsApp requests right
+// after pairing runs on a fresh client inside the owner; no setting or switch controls it, and the long-running
+// shells never start a pairing window.
 func productionOwnerConfig(deps ownerDeps, provider *wa.VersionProvider, sessions wa.SessionFactory) wa.OwnerConfig {
 	return wa.OwnerConfig{
 		Log:                deps.log,
@@ -181,7 +181,7 @@ func productionOwnerConfig(deps ownerDeps, provider *wa.VersionProvider, session
 		Versions:           provider,
 		Sessions:           sessions,
 		ShellStartupBudget: deps.shell,
-		PostPairReconnect:  !deps.shell,
+		StopBound:          shutdownTimeout,
 	}
 }
 
