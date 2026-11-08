@@ -272,7 +272,46 @@ Pending (T046).
 
 ## Real-account journey
 
-Not performed. Needs the owner's permission for each step (T045).
+Performed with the owner's permission, step by step (T045). Binary built from `64ec8bc`
+(`go build ./cmd/whatsapp-mcp`, windows/amd64). Windows 10, one account, one phone, new empty directory
+`D:\tmp\wa-004a`. Account identifiers are not recorded here.
+
+### Step 1: `pair --log-level debug` (permitted 2026-11-08, run by the owner at 02:33 UTC)
+
+Command: `whatsapp-mcp pair --data-dir D:/tmp/wa-004a --log-level debug 2> D:/tmp/wa-004a-pair.log`. The owner scanned
+the code on the phone. Result: exit status not read by the assistant (the owner ran it; the last stderr line is the
+success line), final line `whatsapp-mcp: pair: linked. The saved session can be reused.`
+
+| Moment (UTC, 2026-11-08) | Event | Since `PairSuccess` |
+| --- | --- | --- |
+| 02:33:51.957 | `pairing_requested` | |
+| 02:34:10.323 | `PairSuccess` (`pairing_ended outcome=succeeded`) | 0 |
+| 02:34:11.070 | server's 515 | 0.75 s |
+| 02:34:11.339 | `quiet_stop_passed epoch=1`, `duration_ms=269` (pairing generation) | 1.02 s |
+| 02:34:11.340 | fresh client dials | 1.02 s |
+| 02:34:11.916 | authenticated with the saved identity (no registration) | 1.59 s |
+| 02:34:14.604 | `connection_confirmed` (after the fresh client's prekey upload) | 4.28 s |
+| 02:34:15.004 | `quiet_stop_passed epoch=2`, `duration_ms=398` (stop) | 4.68 s |
+| 02:34:15.014 | `stopped` | 4.69 s |
+
+Checks:
+
+- two `quiet_stop_passed` events, no `quiet_stop_failed`, no `run_guard_recovery_required`, no `reconnect_denied`;
+- one dial for the fresh connection, no second post-pair connection, no `version_refresh_failed`;
+- `status --data-dir D:/tmp/wa-004a` (offline, run by the assistant, exit 0): `logged_in: true`, `connected: false`,
+  `pairing_required: false`, no unsafe warning, so the marker is clean;
+- the phone's linked-device entry: not yet reported by the owner (to be recorded).
+
+Observation for review: the 515 arrived 0.75 s after `PairSuccess` (feature 003 saw about 0.6 s), and both checks passed
+well inside their deadlines (269 ms and 398 ms against 2 s and 1 s). One run is one sample, not a pass rate.
+
+### Step 2: restart with the saved session
+
+Not performed; needs the owner's permission.
+
+### Step 3: cleanup (unlink on the phone, then recovery or delete)
+
+Not performed; owned by the owner.
 
 ## Not verified
 
