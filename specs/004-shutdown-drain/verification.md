@@ -658,6 +658,20 @@ Binary built from `a68aea4` (new pin, proxy fix, refused-read rule), windows/amd
 - Tally on the new pin with the new rule: 7 of 7 checks passed (two in step 1, five in step 2), including one stop
   during the initial app-state sync. One account and one phone; seven clean stops are consistent with the fix, not a
   proof of a rate.
+- **Cleanup:** the owner unlinked the `wa-004d` device on the phone (reported 2026-11-10); the assistant deleted
+  `D:\tmp\wa-004d`. The logs `D:\tmp\wa-004d-*.log` remain outside the repository.
+
+### Gates before the third code review
+
+2026-11-09 22:06 UTC at `2a6306c` (Windows 10, Go 1.27.3, `CGO_ENABLED=0`, `TEMP` on `D:\tmp`), each exit code read from
+the command: `gofmt -l .` no output, exit 0; `go vet ./...` exit 0; `go mod verify` exit 0; `go test ./... -count=1
+-timeout 30m` exit 0 (cmd 127.5 s, store 208.6 s, wa 39.9 s, wasim 4.0 s); the five cross-builds exit 0; `go vet`,
+`go test` and `go build` of the helper exit 0; `govulncheck@v1.9.0 ./...` "No vulnerabilities found", exit 0;
+`git ls-files --eol` no `w/crlf`; `go.mod`/`go.sum` differ from `main` only in the whatsmeow pin. WSL2 was not rerun
+after the proxy fix and the refused-read rule; CI has not run (no push).
+
+The owner asked for the third code review on 2026-11-10 without a separate design review of the changes made since the
+design PASS (fence rule, pin, refused-read rule).
 
 ### Step 3: cleanup (unlink on the phone, then recovery or delete)
 
