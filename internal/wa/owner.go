@@ -128,7 +128,9 @@ type genState struct {
 	libCancel  context.CancelFunc
 	// abort is the recorded abort of a Connect that has not returned; it is set and cleared under
 	// connectionOwner.mu. abortFired records that it was called, and abortLate that a Connect which returned
-	// without error still had it called (the handlers' context was cancelled with a live socket).
+	// without error still had it called (the handlers' context was cancelled with a live socket). abortLate does
+	// not decide the check: a write refused because of it is counted by the storage barrier and fails the check
+	// there. It is kept so the measurement can report how often this happens.
 	abort      context.CancelCauseFunc // guarded by connectionOwner.mu
 	abortFired bool                    // guarded by connectionOwner.mu
 	abortLate  bool                    // guarded by connectionOwner.mu

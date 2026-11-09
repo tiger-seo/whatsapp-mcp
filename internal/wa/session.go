@@ -404,7 +404,8 @@ func (s *Session) handleEvent(raw any) {
 
 // countDropped counts an event that would have reached the owner and was dropped after the retire bit. A
 // disconnect is expected after retirement (the server closes after the 515, and the library's own Disconnect
-// emits none); receipts, presence and the like carry no owner state.
+// emits none); receipts, presence and the like carry no owner state. StreamReplaced is not counted because the
+// session maps it to a disconnect: it is the server ending this connection, not work started by this process.
 func (s *Session) countDropped(raw any) {
 	switch raw.(type) {
 	case *events.Connected, *events.PairSuccess, *events.PairError, *events.LoggedOut,
