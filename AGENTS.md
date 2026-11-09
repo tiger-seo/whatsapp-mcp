@@ -57,29 +57,16 @@ Feature 003 added (owner reviews: design PASS at 8edc293, code PASS at 71edddf a
   account or phone, native Linux or macOS runs, native console/PTY recovery, macOS `F_FULLFSYNC`, power loss.
   `OPERATIONS.md` separates implemented from verified.
 
-Feature 004 (shutdown drain, branch `004-shutdown-drain`, not merged) is implemented, ran on one real account and is
-blocked at code review. It adds the network fence and the quiet-stop check (`internal/wa/fence.go`, `quiet.go`: after a
-stop, the generation's network and storage are blocked and the process is watched for the client library's goroutines;
-a pass clears the marker, any doubt keeps it unsafe and names the category), the fresh-client post-pair link in
-`internal/wa/owner.go`, and the stop lines of `stdio`, `serve` and `pair`. The deadlines (1 s, 2 s) and the allow-list
-(empty) are in `quiet.go`. Evidence is in `specs/004-shutdown-drain/verification.md`:
+Feature 004 (shutdown drain, branch `004-shutdown-drain`, not merged) is implemented and was run on one real account.
+Its code review is **BLOCK** (4d65199) and T047 is open; the cause is a defect in the client library, with a fix in a
+fork (see the feature's "Current state"). It adds the network fence and the quiet-stop check (`internal/wa/fence.go`,
+`quiet.go`), the fresh-client post-pair link in `internal/wa/owner.go`, and the stop lines of `stdio`, `serve` and
+`pair`. The deadlines (1 s, 2 s) and the allow-list (empty) are in `quiet.go`. Evidence is in
+`specs/004-shutdown-drain/verification.md`. E003-RX-01 expires at the start of 2026-12-02 UTC.
 
-- Done: T001-T046, including the real-account journey (7 of 7 stop checks passed after the fence fix) and a passing
-  four-hour simulator soak run (about 3 h 43 min under load because the machine slept; the owner has not yet accepted
-  that deviation or the unexplained 38 goroutines of the first run).
-- Code review (owner-judge, commit 4d65199): **BLOCK**, recorded at c53658f. T047 stays open until a passing review.
-- Cause found: the pinned whatsmeow (and its newest `main`) can leave `FrameSocket.readPump` blocked forever on
-  `fs.Frames <- data` when a frame arrives after the frame consumer has stopped. The stop check then reports
-  `work_running` and the marker stays unsafe. A fix is on the fork `tiger-seo/whatsmeow`, branch
-  `fix-framesocket-read-pump-leak` (local clone `D:\projects-mou\whatsmeow`); no upstream pull request is open yet, and
-  using the fork in `go.mod` is not decided (it changes the pin, so E003-RX-01 is reassessed). With the fork applied
-  to the pin, ten runs of `internal/wa` passed; without it two simulator tests still fail about half the time.
-- Test fixes made (0efc222): simulator rigs ignore library goroutines left by earlier tests, and the racing-stop test
-  accepts the three correct outcomes.
-- Open before a new review: the decision on the library fix (fork, allow-list or none); `spec.md` FR-002(b) and
-  section 8.11 to match the fence fix 3882532; `OPERATIONS.md` on the `work_running` cause; stale text about "no real
-  account yet" in `OPERATIONS.md` and the backlog files; the owner's acceptance of the soak deviation.
-- E003-RX-01 expires at the start of 2026-12-02 UTC; the code review must pass before then.
+The current state of the feature being worked on can be recorded in a "## Current state" section of that feature's
+`specs/NNN-*/tasks.md` (the resume point for a fresh session: what is done, what is open, what waits for the owner).
+Keep this file's summary short and put the detail there.
 
 Spike results are in `docs/spikes.md`.
 S1 (§8.5) is done: `sqlstore` works on `modernc.org/sqlite` with the dialect name `"sqlite"`. Nothing is

@@ -18,6 +18,31 @@
 
 No commit carries attribution lines.
 
+## Current state (handoff, 2026-11-09)
+
+Branch `004-shutdown-drain`, not merged, no pull request. This block is the resume point for a fresh session; `verification.md` holds commands, evidence and the Owner reviews table. Checkbox count: 46 checked, 1 unchecked (T047).
+
+**Done:** T001-T046, including the real-account journey (T045: 7 of 7 stop checks passed after the fence fix 3882532) and the four-hour simulator soak run (T046, run 2 passed; about 3 h 43 min under load because the machine slept).
+
+**T047 is open.** The roll-up is written (E003-RX-01 recheck and "Not verified" in `verification.md`). The owner-judge **code** review of 4d65199 returned **BLOCK**, recorded at c53658f. T047 closes only with a passing code review.
+
+**Findings of that review and where they stand**
+
+| Finding | State |
+| --- | --- |
+| High: `internal/wa` tests failed in about 40% of package runs | Cause 1, a library defect: in the pinned whatsmeow (and in its `main` of 2026-11-07) `FrameSocket.frameComplete` sends `fs.Frames <- data` with no way out, so a frame arriving after the frame consumer stopped leaves `readPump` blocked forever; the stop check then reports `work_running` and the goroutine also fails every later simulator test in the process. Fix written and tested in the fork `tiger-seo/whatsmeow`, branch `fix-framesocket-read-pump-leak` (local clone `D:\projects-mou\whatsmeow`, commit dce60de). With the fix applied to the pin, 10 of 10 runs of `internal/wa` passed. No upstream pull request is open, because the `owner-review-gate` hook blocks `gh pr create` while the code review is BLOCK. Cause 2, a wrong test expectation in `TestSimulatorDeviceRemovedRacingStop`: fixed in 0efc222, together with a rig that ignores library goroutines left by earlier tests. Without the fork two simulator tests still fail about half the time (`TestSimulatorRemoteDisconnectAndReceiptDoNotFailTheCheck`, `TestSimulatorConnectedStopClearsTheMarkerAndTheNextStartReusesTheSession`). |
+| Medium: spec says the check fails on any refused write; fence fix 3882532 (option A) allows it | Open. `spec.md` FR-002(b), user story 2 scenario 7, the abuse case and `docs/specification.md` §8.11 need updating, and the owner confirms the rule. |
+| Medium: `work_running` cause not in `OPERATIONS.md` | Open. Now known (the `readPump` block above). |
+| Low: stale "no real account yet" text in `OPERATIONS.md` and the local backlog files | Open. |
+| Low: `abortLate` is read only by tests; `TestFenceTLSTeardownAfterCloseIsNotADial` does not assert `RefusedWrites() > 0`; `StreamReplaced` after retirement is not counted | Open, minor. |
+
+**Decisions waiting for the owner**
+1. How the library defect is handled: use the fork in `go.mod` (a `replace`; it changes the pin, so E003-RX-01 is reassessed and the decision "option A, no fork" above needs an amendment, because that decision was about the larger `WaitIdle` fork), wait for an upstream merge, or allow-list `socket.(*FrameSocket).readPump` (needs evidence and a review against the pin). The owner asked on 2026-11-09 to try the fork route and send the fix upstream; the `go.mod` change is not made.
+2. Confirm the fence rule of 3882532 in the specification.
+3. Accept or reject the soak deviation (3 h 43 min instead of 4 h) and the 38 unexplained goroutines of run 1 in the E003-RX-01 record.
+
+**Next steps:** when the owner decides 1, apply it and open the upstream pull request (the gate allows `gh pr create` only after a passing code review, so the owner opens it or lifts the gate for that call); update `spec.md`, §8.11, `OPERATIONS.md` and the stale text; fix the minor findings; rerun the gates; commit; run owner-judge in code mode again; add the row. The code review must pass before the start of 2026-12-02 UTC (E003-RX-01 expiry).
+
 ## Format: `[ID] [P?] [Story] Description`
 
 - Every task has a checkbox, a sequential ID and repository-relative file paths.
