@@ -26,11 +26,11 @@ This section is ignored by the review-gate hook: editing it does not make a revi
 
 **Done:** T001-T046, including the real-account journey (T045: 7 of 7 stop checks passed after the fence fix 3882532) and the four-hour simulator soak run (T046, run 2 passed; about 3 h 43 min under load because the machine slept).
 
-**Library defect decided (owner, 2026-11-09): pin upstream `f1b7985`.** Upstream closed tulir/whatsmeow#1335 unmerged and fixed it in its own commit `f1b7985` (same code as the fork, without the test). `go.mod` now pins `go.mau.fi/whatsmeow v0.0.0-20261109152745-f1b798561919` (no fork, no `replace`); the gates pass and `internal/wa` passed 10 of 10 runs (verification.md "Pin change to upstream f1b7985"). Not committed yet. The fork is no longer needed.
+**Library defect decided (owner, 2026-11-09): pin upstream `f1b7985`.** Upstream closed tulir/whatsmeow#1335 unmerged and fixed it in its own commit `f1b7985` (same code as the fork, without the test). `go.mod` now pins `go.mau.fi/whatsmeow v0.0.0-20261109152745-f1b798561919` (no fork, no `replace`); the gates pass and `internal/wa` passed 10 of 10 runs (verification.md "Pin change to upstream f1b7985"), committed at 693c1ec. The fork is no longer needed.
 
-**T047 is open.** The roll-up is written (E003-RX-01 recheck and "Not verified" in `verification.md`). The owner-judge **code** review of 4d65199 returned **BLOCK**, recorded at c53658f. T047 closes only with a passing code review.
+**T047 is open.** The roll-up is written and updated for the new pin. The first code review (4d65199) returned **BLOCK**; its findings are handled (table below). The second code review (2d0c0b0) returned **BLOCK**, recorded at 75bc97c, on one medium finding: the media and app-state HTTP client is built from `fence.RoundTripper(nil)`, which clones `http.DefaultTransport`, so it follows `HTTPS_PROXY` and allows gzip, while `main` used a transport with `Proxy: nil` and `DisableCompression: true` (a tested feature 003 control). Its test checks only the old constructor. Lows of that review: stale Current state text (fixed), the `OPERATIONS.md` sentence that read as CI evidence for the new pin (fixed), and the design changes since the design PASS without a new design-review row (owner's call). T047 closes only with a passing code review.
 
-**Findings of that review and where they stand**
+**Findings of the first review and where they stand**
 
 | Finding | State |
 | --- | --- |
@@ -46,7 +46,7 @@ This section is ignored by the review-gate hook: editing it does not make a revi
 3. Done 2026-11-09: the owner accepted the soak run as it stands (3 h 43 min, run 1's 38 goroutines, old pin); it is not repeated. The pass-rate run was repeated on the new pin (200 of 200). Still open: the WSL2 rerun (stopped for low memory) and whether to do a short real-account check on the new pin (needs permission).
 4. Done 2026-11-09: window (a) keeps the current rule (the owner agreed): `abortLate` is measured, not decisive; a write it breaks still fails the check through the storage count. `contracts/quiet-stop.md` is unchanged.
 
-**Next steps:** commit the pin change; after decisions 1-3, update `spec.md`, `plan.md`, §8.11, `OPERATIONS.md` (including the `readPump` cause of `work_running`) and the stale text; fix the minor findings; repeat the evidence the owner asks for; rerun the gates; commit; run owner-judge in code mode again; add the row. The code review must pass before the start of 2026-12-02 UTC (E003-RX-01 expiry).
+**Next steps:** fix the proxy regression (build the fenced media client on the direct bounded transport and test `s.mediaClient` itself), or the owner changes feature 003's rule instead; the owner decides whether this code review covers the spec changes since the design PASS or a design-review row is added; rerun the gates; commit; run owner-judge in code mode again; add the row; then push, CI, pull request and merge. The code review must pass before the start of 2026-12-02 UTC (E003-RX-01 expiry).
 
 ## Format: `[ID] [P?] [Story] Description`
 
