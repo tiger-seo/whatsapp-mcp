@@ -321,8 +321,20 @@ using the fork.
 | `govulncheck@v1.9.0 ./...` | "No vulnerabilities found", exit 0 |
 | `git ls-files --eol` | no `w/crlf` |
 
-Not repeated on the new pin: the WSL2 run, the pass-rate run (T041), the soak run (T046) and the real-account journey
-(T045). Those results belong to the old pin. The owner reassessed E003-RX-01 for the new pin on 2026-11-09 (section
+Pass-rate run on the new pin, 2026-11-09 19:03 UTC at `a3fb844`, Windows, same command as "Pass-rate run"
+(`WA_MEASURE=1 go test ./internal/wa -run TestQuietStopPassRate -count=1 -v`): exit 0, 50 of 50 passed for each of the
+four kinds (pairing generation's check, `pair` stop check, `stdio`, `serve`), no failures, no passed check with a marker
+left unclean.
+
+After the review fixes (`a340199`, `cbb8093`): `go vet ./internal/wa` and `go test ./internal/wa -count=1` exit 0;
+`TestFenceTLSTeardownAfterCloseIsNotADial` and `TestQuietStopIgnoresWritesOnConnectionsTheFenceClosed` at `-count=20`
+exit 0.
+
+WSL2 on the new pin: not done. The first attempt failed to start (`go` is not on the PATH under `wsl --exec`; the
+toolchain is `~/sdk/go1.27.3`). The second was stopped by Claude Code during the test run because Windows ran low on
+memory; it recorded no result.
+
+Not repeated on the new pin: the WSL2 run, the soak run (T046) and the real-account journey (T045). Those results belong to the old pin. The owner reassessed E003-RX-01 for the new pin on 2026-11-09 (section
 "E003-RX-01 (implementation start)").
 
 ## Soak run
