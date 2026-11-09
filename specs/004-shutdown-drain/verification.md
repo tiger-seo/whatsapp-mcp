@@ -34,6 +34,15 @@ reference was renumbered. The substance of the decision is unchanged.
 
 This is a feature-level extension recorded by the owner. It does not close F09 and does not amend the constitution.
 
+**Owner decision, 2026-11-09 (`tiger-seo`):** E003-RX-01, as extended to feature 004 on 2026-11-07, covers the new pin
+`go.mau.fi/whatsmeow v0.0.0-20261109152745-f1b798561919` (commit `f1b7985`). The 20 commits since `1eec1136a50b` add
+no receive-resource bounds, so F09 and the exception's scope are unchanged; the `readPump` fix removes one goroutine
+leak and is not a bound. Same scope (feature 004, private, local, single-owner), same expiry (start of 2026-12-02 UTC,
+no renewal), same triggers and compensating controls. The automatic-reconnect paths added upstream stay off
+(`EnableAutoReconnect = false`).
+
+Whether the soak run (T046, run on the old pin) counts for the new pin or is repeated is not decided yet.
+
 ## Handoff
 
 ### Design review round 6 (PASS at ea9234b): notes for implementation
@@ -313,8 +322,8 @@ using the fork.
 | `git ls-files --eol` | no `w/crlf` |
 
 Not repeated on the new pin: the WSL2 run, the pass-rate run (T041), the soak run (T046) and the real-account journey
-(T045). Those results belong to the old pin. Under the owner's extension, the pin change stops continued operation
-until the owner reassesses E003-RX-01 for the new pin; that decision is not recorded here yet.
+(T045). Those results belong to the old pin. The owner reassessed E003-RX-01 for the new pin on 2026-11-09 (section
+"E003-RX-01 (implementation start)").
 
 ## Soak run
 

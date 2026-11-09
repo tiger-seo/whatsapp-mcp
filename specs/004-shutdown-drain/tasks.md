@@ -41,7 +41,7 @@ This section is ignored by the review-gate hook: editing it does not make a revi
 | Low: `abortLate` is read only by tests; `TestFenceTLSTeardownAfterCloseIsNotADial` does not assert `RefusedWrites() > 0`; `StreamReplaced` after retirement is not counted | Open, minor. |
 
 **Decisions waiting for the owner**
-1. Reassess E003-RX-01 for the new pin `v0.0.0-20261109152745-f1b798561919` (the pin change stops continued operation until the owner decides; `spec.md` names a pin past `2fc844f` as needing its own reassessment). Scope and expiry to confirm.
+1. Done 2026-11-09: the owner extended E003-RX-01 to the new pin, same scope, expiry and controls (`verification.md`, section "E003-RX-01 (implementation start)").
 2. Confirm the fence rule of 3882532 in the specification, and amend SEC-007, the F15 row of `spec.md` and `plan.md` ("no change to the pinned client library version", "Unchanged") for the new pin.
 3. Accept or reject the soak deviation (3 h 43 min instead of 4 h) and the 38 unexplained goroutines of run 1 in the E003-RX-01 record, and decide which old-pin evidence to repeat on the new pin (WSL2 run, pass-rate run, soak run, a short real-account check).
 
