@@ -315,3 +315,11 @@ so late sends of the old client cannot reach it (debt 1, for the pinned library 
 run of the new path yet. **Stage 2 stays open**: joining or accounting for the library's goroutines at source, startup
 retries, the 405 budget and ordinary reconnect remain denied. Do not close this item until the code review and the
 permitted real-account journey are recorded.
+
+## Update 2026-11-09: real-account journey done, code review open
+
+The permitted real-account journey ran on 2026-11-08 (one account, one phone, Windows): the fresh-client link
+completed twice, and restarts reused the saved session; after the fence fix `3882532` seven of seven stop checks
+passed (`specs/004-shutdown-drain/verification.md`, "Real-account journey"). Debt 3 is narrower but not closed: one
+account, one phone, and the current library pin (`f1b7985`, 2026-11-09) has not run on a real account. The feature 004
+code review is still open, so this item stays open.
