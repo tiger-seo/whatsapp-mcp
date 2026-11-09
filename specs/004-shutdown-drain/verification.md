@@ -616,7 +616,9 @@ Binary built from `8ba2550` (the proxy fix on the new pin), windows/amd64. One a
   lease or another guard error, and every refused write, still count. Implemented in `b6c6d2d`; the documents
   (`spec.md`, `contracts/quiet-stop.md`, `data-model.md`, `OPERATIONS.md`, §8.11) follow.
   - Audit of the guard's `write` flag: every call marked as a read is a getter (`Get*`, `HasSession`,
-    `IsTrustedIdentity`, `UploadedPreKeyCount`); the getters that can create rows (`GetOrGenPreKeys`, `GenOnePreKey`)
+    `IsTrustedIdentity`, `UploadedPreKeyCount`) or one of two barrier calls that are also reads and never reached after
+    retirement (`ConfigureRecovery`, which sets in-memory recovery state before any client exists, and
+    `PendingRepairs`; added after the third code review); the getters that can create rows (`GetOrGenPreKeys`, `GenOnePreKey`)
     are marked as writes; the nested path in `protected` is reached only by reads.
   - Store tests: `TestRefusedKeepsReadsAfterRetireApart` (two refused reads leave `Refused` at 0 and `RefusedReads` at
     2; a refused write raises `Refused`) and `TestRefusedCountsReadsFailingOnTheirContext` (a cancelled read still
@@ -691,8 +693,12 @@ phone no longer lists the device after unlinking was not checked by the assistan
 - A server disconnect during a stop on the real account (the `work_running` case).
 - The cause of run 1's 38 leftover goroutines.
 - That the phone stopped listing the unlinked device (not checked by the assistant).
-- The new pin `f1b7985` on a real account (the journey used the old pin), and the soak run on the new pin.
-- CI on the three runners for the new pin (no push yet).
+- The soak run on the new pin (the owner accepted the old-pin run). The new pin did run on the real account
+  (`wa-004c`, `wa-004d`, sections above).
+- That the eight refused calls of the failed real stop on 2026-11-09 were reads (the production log does not record
+  them; the simulator reproduction shows reads only).
+- CI on the three runners for the new pin, the proxy fix and the refused-read rule (no push yet); WSL2 not rerun
+  after `8ba2550` and `b6c6d2d`.
 
 ## Owner reviews
 
@@ -706,3 +712,4 @@ phone no longer lists the device after unlinking was not checked by the assistan
 | design | 2026-11-08 | ea9234b | PASS | |
 | code | 2026-11-08 | 4d65199 | BLOCK | |
 | code | 2026-11-09 | 2d0c0b0 | BLOCK | |
+| code | 2026-11-10 | c65f8c5 | PASS | |
