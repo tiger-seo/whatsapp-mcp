@@ -42,6 +42,10 @@ context: `ErrRetired`, a context error, a stale lease or another guard error. A 
 (for example "not found") is not counted. It is monotonic, and is read only after `Retire` has drained the admitted
 work.
 
+A read turned away with `ErrRetired` (after `Retire`, so after the network fence closed) is not in `Refused()`; it is
+counted in `DeviceBarrier.RefusedReads() uint64`, which the check does not use. A read that fails on its context, a
+stale lease or another guard error stays in `Refused()`. Whether a call is a read is the guard's own `write` flag.
+
 ## QuietStopResult
 
 | Field | Type | Meaning |

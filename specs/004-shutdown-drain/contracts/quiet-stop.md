@@ -107,7 +107,10 @@ either order is reversed (spec SC-004).
 ## What each count can and cannot see
 
 - **Storage count** (step 2): sees refusals, context errors, stale leases and guard errors of this generation after
-  retirement began. It is the evidence for a lost write.
+  retirement began. It is the evidence for a lost write. A read refused only because the barrier has retired (step 8)
+  is counted apart (`RefusedReads`) and does not fail the check: it changes nothing, the network was closed at step 7,
+  and a write it leads to is refused and counted (decision of 2026-11-09 after the real-account stop in
+  `verification.md`).
 - **Network fence** (step 7): fails the check on a dial through the fenced transports after the fence closed. A write on a fenced connection after the close is refused and counted but does not fail the check: every tracked connection is already closed, so the write cannot reach the network, and the TLS and HTTP/2 layers write on it themselves while they tear down (decision of 2026-11-08 after the real-account stop in `verification.md`). After step 6 the
   library's own socket is nil, so a late library send returns `ErrNotConnected` inside the library and never reaches
   the fence. The fence therefore proves isolation (a retired generation cannot reach any network, including the
