@@ -168,6 +168,9 @@ What the categories mean in practice:
 - `network_refused`: the retired client tried to open a new connection after its network was blocked. A write on a
   connection that the block already closed (for example the TLS close alert during teardown) is refused and sends
   nothing, but does not fail the check.
+- `storage_refused`: the retired client's storage call was turned away or cancelled after the stop began. A read
+  turned away after the storage block closed (for example the library's queued app-state fetches when a stop lands
+  during a sync) changes nothing and does not fail the check.
 
 A store from before this feature (schema 1 or 2) is treated as unsafe, not as clean, because its history is
 unknown. A store whose marker is missing or malformed is refused.
