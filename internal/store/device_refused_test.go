@@ -66,6 +66,7 @@ func TestRefusedCountsEveryRetiredSiteExactlyOnce(t *testing.T) {
 	if err := barrier.Retire(ctx); err != nil {
 		t.Fatalf("Retire: %v", err)
 	}
+	// Each refused call is counted once: a write in Refused, a read in RefusedReads.
 	var want uint64
 	expect := func(name string, err error) {
 		t.Helper()
@@ -74,8 +75,8 @@ func TestRefusedCountsEveryRetiredSiteExactlyOnce(t *testing.T) {
 			return
 		}
 		want++
-		if got := barrier.Refused(); got != want {
-			t.Errorf("Refused after %s = %d, want %d", name, got, want)
+		if got := barrier.Refused() + barrier.RefusedReads(); got != want {
+			t.Errorf("Refused+RefusedReads after %s = %d, want %d", name, got, want)
 		}
 	}
 	armFreshDevice(dev, types.NewJID(testOwnPhone, types.DefaultUserServer))
@@ -93,6 +94,48 @@ func TestRefusedCountsEveryRetiredSiteExactlyOnce(t *testing.T) {
 	_, err = barrier.PendingRepairs(ctx)
 	expect("PendingRepairs", err)
 	expect("ConfigureRecovery", barrier.ConfigureRecovery(ctx))
+}
+
+// A read turned away because the barrier has retired cannot change the store, and by then the generation's
+// network is already closed, so it is kept out of Refused (the quiet check's storage condition). A write turned
+// away the same way is still counted there.
+func TestRefusedKeepsReadsAfterRetireApart(t *testing.T) {
+	_, dev, barrier := loadedDevice(t, newDataDir(t))
+	ctx := context.Background()
+	barrier.MarkRetiring()
+	if err := barrier.Retire(ctx); err != nil {
+		t.Fatalf("Retire: %v", err)
+	}
+	if _, _, err := dev.AppState.GetAppStateVersion(ctx, "regular"); !errors.Is(err, ErrRetired) {
+		t.Fatalf("GetAppStateVersion after retire: %v, want ErrRetired", err)
+	}
+	if _, err := dev.Sessions.GetSession(ctx, sessionPN); !errors.Is(err, ErrRetired) {
+		t.Fatalf("GetSession after retire: %v, want ErrRetired", err)
+	}
+	if r, rr := barrier.Refused(), barrier.RefusedReads(); r != 0 || rr != 2 {
+		t.Fatalf("after two refused reads: Refused=%d RefusedReads=%d, want 0 and 2", r, rr)
+	}
+	if err := dev.AppState.PutAppStateVersion(ctx, "regular", 1, [128]byte{}); !errors.Is(err, ErrRetired) {
+		t.Fatalf("PutAppStateVersion after retire: %v, want ErrRetired", err)
+	}
+	if r, rr := barrier.Refused(), barrier.RefusedReads(); r != 1 || rr != 2 {
+		t.Fatalf("after a refused write: Refused=%d RefusedReads=%d, want 1 and 2", r, rr)
+	}
+}
+
+// A read that fails on its context after retirement began is still counted: it can happen before the network
+// is closed, and the library may act on the failure.
+func TestRefusedCountsReadsFailingOnTheirContext(t *testing.T) {
+	_, dev, barrier := loadedDevice(t, newDataDir(t))
+	barrier.MarkRetiring()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := dev.Sessions.GetSession(ctx, sessionPN); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled read: %v, want context.Canceled", err)
+	}
+	if r, rr := barrier.Refused(), barrier.RefusedReads(); r != 1 || rr != 0 {
+		t.Fatalf("after a cancelled read: Refused=%d RefusedReads=%d, want 1 and 0", r, rr)
+	}
 }
 
 func TestRefusedCountsStaleLease(t *testing.T) {

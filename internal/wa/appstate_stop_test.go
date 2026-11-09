@@ -73,29 +73,45 @@ func (r *recordingAppState) PutAppStateMutationMACs(ctx context.Context, name st
 	return err
 }
 
-// Reproduces the real-account stop of 2026-11-09 that failed with storage_refused: the library's app-state fetches
-// queue on its own lock behind one request the server has not answered, and the stop arrives. The test records
-// which store calls are refused and the check's decision. Diagnostic: run with WA_APPSTATE_STOP=1.
+// A stop that arrives while the library's app-state fetches are queued on its own lock behind a request the
+// server has not answered (as on the real account on 2026-11-09): the queued fetches read the stored version after
+// the barrier retired. Those reads are refused and kept apart, so the check passes and the marker is clean; no
+// write is refused. WA_APPSTATE_STOP_RUNS repeats it.
 func TestSimulatorStopDuringQueuedAppStateFetches(t *testing.T) {
-	if os.Getenv("WA_APPSTATE_STOP") == "" {
-		t.Skip("diagnostic; set WA_APPSTATE_STOP=1")
-	}
 	runs, _ := strconv.Atoi(os.Getenv("WA_APPSTATE_STOP_RUNS"))
 	if runs <= 0 {
-		runs = 10
+		runs = 1
 	}
 	outcomes := map[string]int{}
 	for i := 0; i < runs; i++ {
-		reason, lines := stopDuringQueuedFetches(t)
-		outcomes[reason]++
-		if i == 0 || reason != "passed" {
-			t.Logf("run %d: %s\n  %s", i+1, reason, strings.Join(lines, "\n  "))
+		r := stopDuringQueuedFetches(t)
+		outcomes[r.reason]++
+		detail := strings.Join(r.lines, "\n  ")
+		if r.reason != "passed" || r.marker != "clean" {
+			t.Errorf("run %d: check %s, marker %q; want passed and clean\n  %s", i+1, r.reason, r.marker, detail)
+		}
+		if r.refusedReads == 0 {
+			t.Errorf("run %d: no read was refused after the barrier; the stop did not land while fetches were queued\n  %s", i+1, detail)
+		}
+		for _, l := range r.lines {
+			if strings.HasPrefix(l, "store ") && !strings.HasPrefix(l, "store Get") {
+				t.Errorf("run %d: a write was refused: %s", i+1, l)
+			}
 		}
 	}
-	t.Logf("outcomes over %d runs: %v", runs, outcomes)
+	if runs > 1 {
+		t.Logf("outcomes over %d runs: %v", runs, outcomes)
+	}
 }
 
-func stopDuringQueuedFetches(t *testing.T) (string, []string) {
+type queuedFetchStop struct {
+	reason       string
+	marker       string
+	refusedReads uint64
+	lines        []string
+}
+
+func stopDuringQueuedFetches(t *testing.T) queuedFetchStop {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -124,6 +140,7 @@ func stopDuringQueuedFetches(t *testing.T) (string, []string) {
 
 	log := &appStopLog{}
 	logger, mem := newMemLog()
+	var sess *Session
 	o := NewOwner(OwnerConfig{
 		Log: logger, Store: st, Versions: bundledProvider(ctx), ShellStartupBudget: true,
 		trace: func(step string) { log.add("step " + step) },
@@ -133,6 +150,7 @@ func stopDuringQueuedFetches(t *testing.T) (string, []string) {
 			s, err := OpenSession(cfg)
 			if err == nil {
 				s.dev.AppState = &recordingAppState{AppStateStore: s.dev.AppState, log: log}
+				sess = s
 			}
 			return s, err
 		},
@@ -181,15 +199,20 @@ func stopDuringQueuedFetches(t *testing.T) (string, []string) {
 	o.BeginStop()
 	<-o.Done()
 	h := o.Health()
-	reason := "passed"
+	res := queuedFetchStop{reason: "passed", refusedReads: sess.barrier.RefusedReads()}
 	if !h.QuietPassed {
-		reason = h.QuietReason
+		res.reason = h.QuietReason
 	}
-	lines := log.snapshot()
+	state, _, err := st.RunGuard(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.marker = state
+	res.lines = log.snapshot()
 	for _, l := range mem.lines {
 		if s := fmt.Sprint(l); strings.Contains(s, "quiet_stop") {
-			lines = append(lines, "owner "+s)
+			res.lines = append(res.lines, "owner "+s)
 		}
 	}
-	return reason, lines
+	return res
 }

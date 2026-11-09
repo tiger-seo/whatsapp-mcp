@@ -85,9 +85,11 @@ type deviceSession struct {
 	faultCh     chan struct{}
 
 	// retiring is set before the generation's own work is cancelled; from then on every guarded call that is
-	// turned away is counted in refused. Both are memory only.
-	retiring atomic.Bool
-	refused  atomic.Uint64
+	// turned away is counted in refused, except a read turned away because the barrier has retired, which is
+	// counted in refusedReads. All are memory only.
+	retiring     atomic.Bool
+	refused      atomic.Uint64
+	refusedReads atomic.Uint64
 }
 
 // refuse counts a guarded call that failed for a reason from the guard or the context once retirement has
@@ -99,6 +101,18 @@ func (sess *deviceSession) refuse(err error) error {
 		sess.refused.Add(1)
 	}
 	return err
+}
+
+// refuseRead is refuse for a call that only reads. A read turned away with ErrRetired changed nothing, and the
+// barrier retires only after the generation's network is closed, so nothing the caller does with the failure can
+// reach the server; any write it leads to is itself refused and counted. It goes to refusedReads instead.
+// Every other refusal of a read, such as a cancelled context before the network closed, is counted as usual.
+func (sess *deviceSession) refuseRead(err error) error {
+	if err != nil && sess.retiring.Load() && errors.Is(err, ErrRetired) {
+		sess.refusedReads.Add(1)
+		return err
+	}
+	return sess.refuse(err)
 }
 
 // newDeviceSession installs the stable guards on the device before any client sees it. Every interface field
@@ -202,7 +216,13 @@ func (sess *deviceSession) latchWriteFault(result error) {
 // a write checks the disk guard, and the validation runs before the delegate's SQL. Bulk work is rejected
 // inside a transaction, where it would be incompatible.
 func (sess *deviceSession) run(ctx context.Context, op string, write, bulk bool, validate func() error, fn func(context.Context) error) (result error) {
-	defer func() { sess.refuse(result) }()
+	defer func() {
+		if write {
+			sess.refuse(result)
+		} else {
+			sess.refuseRead(result)
+		}
+	}()
 	defer func() {
 		if write {
 			sess.latchWriteFault(result)
