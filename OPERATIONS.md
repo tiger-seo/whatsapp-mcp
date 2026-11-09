@@ -230,9 +230,12 @@ release the store.
   2026-11-08 it ran on the same real account and phone on Windows: two `pair` links on a fresh client and restarts
   that reused the saved session. Before the fence rule above was changed, one stop of four failed with
   `network_refused` (a TLS close alert); after it, seven of seven checks passed. Seven passes are consistent with the
-  fix, not a proof. These runs used the previous library version; the current pin (`f1b7985`) has passed the automated
-  tests on native Windows and under WSL2 only (not yet on the CI runners) and has not run on a real account. The 1 s and 2 s deadlines are about 100 times the slowest measured
-  simulator check; real checks took 270 to 440 ms. A server disconnect during a stop was not tried on a real account.
+  fix, not a proof. Those runs used the previous library version. On 2026-11-09 and 2026-11-10 the current pin
+  (`f1b7985`) ran on the same account and phone: one `stdio` stop during the initial app-state sync failed with
+  `storage_refused` (refused reads, see `storage_refused` above); after the refused-read rule, seven of seven checks
+  passed, including a stop 0.34 s after connecting during that sync. The current code has passed the automated tests
+  on native Windows only (not yet on the CI runners or WSL2). The 1 s and 2 s deadlines are about 100 times the
+  slowest measured simulator check; real checks took 230 to 480 ms. A server disconnect during a stop was not tried on a real account.
   The check counts goroutines process-wide, so a goroutine leaked by anything else in the process fails it.
   Evidence: `specs/004-shutdown-drain/verification.md`.
 - **Not checked:** power loss and OS crash; macOS `F_FULLFSYNC` hardware flushes; interactive recovery on a real
