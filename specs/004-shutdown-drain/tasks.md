@@ -26,6 +26,8 @@ This section is ignored by the review-gate hook: editing it does not make a revi
 
 **Done:** T001-T046, including the real-account journey (T045: 7 of 7 stop checks passed after the fence fix 3882532) and the four-hour simulator soak run (T046, run 2 passed; about 3 h 43 min under load because the machine slept).
 
+**On hold (owner, 2026-11-09):** the fork of the client library is an experiment. While it runs, fixing the findings of the code review stays undecided: no change to `go.mod`, no allow-list entry and no further fixes for those findings until the owner decides how the library defect is handled. The experiment is the fork branch, its tests and the upstream pull request, to see how long and how hard it is to get the fix accepted.
+
 **T047 is open.** The roll-up is written (E003-RX-01 recheck and "Not verified" in `verification.md`). The owner-judge **code** review of 4d65199 returned **BLOCK**, recorded at c53658f. T047 closes only with a passing code review.
 
 **Findings of that review and where they stand**
@@ -39,7 +41,7 @@ This section is ignored by the review-gate hook: editing it does not make a revi
 | Low: `abortLate` is read only by tests; `TestFenceTLSTeardownAfterCloseIsNotADial` does not assert `RefusedWrites() > 0`; `StreamReplaced` after retirement is not counted | Open, minor. |
 
 **Decisions waiting for the owner**
-1. How the library defect is handled: use the fork in `go.mod` (a `replace`; it changes the pin, so E003-RX-01 is reassessed and the decision "option A, no fork" above needs an amendment, because that decision was about the larger `WaitIdle` fork), wait for an upstream merge, or allow-list `socket.(*FrameSocket).readPump` (needs evidence and a review against the pin). The owner asked on 2026-11-09 to try the fork route and send the fix upstream; the `go.mod` change is not made.
+1. How the library defect is handled: use the fork in `go.mod` (a `replace`; it changes the pin, so E003-RX-01 is reassessed and the decision "option A, no fork" above needs an amendment, because that decision was about the larger `WaitIdle` fork), wait for an upstream merge, or allow-list `socket.(*FrameSocket).readPump` (needs evidence and a review against the pin). The owner is trying the fork route as an experiment and sending the fix upstream; the `go.mod` change is not made and the other findings wait for this decision.
 2. Confirm the fence rule of 3882532 in the specification.
 3. Accept or reject the soak deviation (3 h 43 min instead of 4 h) and the 38 unexplained goroutines of run 1 in the E003-RX-01 record.
 
