@@ -117,6 +117,16 @@ T047, 2026-11-08, at commit 409c304, against the owner's extension of 2026-11-07
 Accepted risks and limits: simulator traffic only (no real receive volume), native Windows only for the soak run,
 run 1's 38 leftover goroutines unexplained.
 
+Update at the second code review, 2026-11-09, at `3591f17`:
+
+1. **Scope.** Unchanged: feature 004 only, private, local, single-owner; no listener, no ingest, no MCP tools.
+2. **Date and pin.** Before the start of 2026-12-02 UTC. The pin is now `go.mau.fi/whatsmeow
+   v0.0.0-20261109152745-f1b798561919` (upstream `f1b7985`); the owner reassessed the exception for it on 2026-11-09
+   (section "E003-RX-01 (implementation start)"). No other module changed.
+3. **Resource incident.** None. `internal/wa` passed 10 of 10 repeated runs on the new pin, where the old pin's
+   `readPump` leak failed about 40% of runs.
+4. **Soak result.** Accepted by the owner as it stands (below), not repeated on the new pin.
+
 **Owner decision, 2026-11-09 (`tiger-seo`): the soak run is accepted** as the compensating control of E003-RX-01 for
 feature 004, as it stands: run 2's effective load of about 3 h 43 min instead of 4 h (the machine slept), run 1's 38
 unexplained leftover goroutines, and the fact that it ran on the old pin `1eec1136a50b`, not on `f1b7985`. It is not
@@ -352,6 +362,13 @@ WSL2 on the new pin, 2026-11-09, run by the owner in a WSL2 terminal at `480cd21
 
 So every package and the helper passed under WSL2, in two invocations. WSL2 is not native Linux.
 
+Final Windows gates before the code review, 2026-11-09 21:09 UTC at `3591f17` (Windows 10, Go 1.27.3,
+`CGO_ENABLED=0`, `TEMP` on `D:\tmp`), each exit code read from the command: `gofmt -l .` no output, exit 0;
+`go vet ./...` exit 0; `go mod verify` exit 0; `go test ./... -count=1 -timeout 30m` exit 0 (cmd 130.3 s, store
+257.9 s, wa 36.1 s, wasim 5.6 s); the five cross-builds exit 0; `go vet`, `go test` and `go build` of the helper exit
+0; `govulncheck@v1.9.0 ./...` "No vulnerabilities found", exit 0; `git ls-files --eol` no `w/crlf`.
+`git diff main --stat -- go.mod go.sum` shows only the whatsmeow pin line and its two `go.sum` lines.
+
 Not repeated on the new pin: the soak run (T046, accepted by the owner as it stands) and the real-account journey
 (T045; the new pin is not verified on a real account). Those results belong to the old pin. The owner reassessed E003-RX-01 for the new pin on 2026-11-09 (section
 "E003-RX-01 (implementation start)").
@@ -564,6 +581,8 @@ phone no longer lists the device after unlinking was not checked by the assistan
 - A server disconnect during a stop on the real account (the `work_running` case).
 - The cause of run 1's 38 leftover goroutines.
 - That the phone stopped listing the unlinked device (not checked by the assistant).
+- The new pin `f1b7985` on a real account (the journey used the old pin), and the soak run on the new pin.
+- CI on the three runners for the new pin (no push yet).
 
 ## Owner reviews
 
