@@ -33,3 +33,11 @@ feature; expiry unchanged at the start of 2026-12-02 UTC; pin `go.mau.fi/whatsme
 Feature 004 makes repeated long connected runs possible, so its compensating control is a 4-hour soak test on the
 simulator (`TestQuietStopSoak`, T046) and a recheck at code review. Record: `specs/004-shutdown-drain/verification.md`,
 section "E003-RX-01 (implementation start)". The soak run and the code-review recheck are still to be done.
+
+## Update 2026-11-09: new pin
+
+The soak run (T046) was done on 2026-11-08 on the old pin. The pin then moved to upstream `f1b7985`
+(`go.mau.fi/whatsmeow v0.0.0-20261109152745-f1b798561919`), which fixes a `FrameSocket.readPump` goroutine leak. The
+owner extended the exception to the new pin on 2026-11-09 with the same scope, expiry and controls: the 20 upstream
+commits add no receive-resource bounds, so this item stays open unchanged. Record:
+`specs/004-shutdown-drain/verification.md`, section "E003-RX-01 (implementation start)".
