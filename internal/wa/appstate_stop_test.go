@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -104,6 +105,19 @@ func TestSimulatorStopDuringQueuedAppStateFetches(t *testing.T) {
 	}
 }
 
+// queuedAppStateFetches counts goroutines blocked on a mutex inside the library's app-state fetch, which takes its
+// appStateSyncLock first. The library offers no hook for this, so the test reads the goroutine dump.
+func queuedAppStateFetches() int {
+	buf := make([]byte, 4<<20)
+	n := 0
+	for _, g := range strings.Split(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
+		if strings.Contains(g, "sync.(*Mutex).Lock") && strings.Contains(g, "whatsmeow.(*Client).fetchAppState(") {
+			n++
+		}
+	}
+	return n
+}
+
 type queuedFetchStop struct {
 	reason       string
 	marker       string
@@ -194,7 +208,9 @@ func stopDuringQueuedFetches(t *testing.T) queuedFetchStop {
 	case <-ctx.Done():
 		t.Fatal("no app-state request reached the server")
 	}
-	time.Sleep(200 * time.Millisecond) // let the other fetches queue on the library's lock
+	// One fetch holds the library's lock while its request waits; the other four notifications' fetches must be
+	// queued on that lock before the stop begins.
+	waitFor(t, func() bool { return queuedAppStateFetches() >= 4 })
 	log.add("stop begins")
 	o.BeginStop()
 	<-o.Done()
