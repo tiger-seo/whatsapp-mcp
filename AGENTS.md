@@ -58,8 +58,9 @@ Feature 003 added (owner reviews: design PASS at 8edc293, code PASS at 71edddf a
   `OPERATIONS.md` separates implemented from verified.
 
 Feature 004 (shutdown drain, branch `004-shutdown-drain`, not merged) is implemented and was run on one real account.
-The whatsmeow pin moved to upstream `f1b7985` (owner, 2026-11-09) for a read-loop fix. The second code review is
-**BLOCK** (2d0c0b0, a proxy regression in the media HTTP client) and T047 is open (see the feature's "Current state"). It adds the network fence and the quiet-stop check (`internal/wa/fence.go`,
+The whatsmeow pin moved to upstream `f1b7985` (owner, 2026-11-09) for a read-loop fix, and a read refused after the
+storage barrier no longer fails the quiet-stop check (owner, 2026-11-09). The third code review is **PASS** (c65f8c5,
+2026-11-10) and every task is done; push, CI, pull request and merge are next (see the feature's "Current state"). It adds the network fence and the quiet-stop check (`internal/wa/fence.go`,
 `quiet.go`), the fresh-client post-pair link in `internal/wa/owner.go`, and the stop lines of `stdio`, `serve` and
 `pair`. The deadlines (1 s, 2 s) and the allow-list (empty) are in `quiet.go`. Evidence is in
 `specs/004-shutdown-drain/verification.md`. E003-RX-01 expires at the start of 2026-12-02 UTC.
