@@ -336,8 +336,9 @@ After the review fixes (`a340199`, `cbb8093`): `go vet ./internal/wa` and `go te
 exit 0.
 
 WSL2 on the new pin: not done. The first attempt failed to start (`go` is not on the PATH under `wsl --exec`; the
-toolchain is `~/sdk/go1.27.3`). The second was stopped by Claude Code during the test run because Windows ran low on
-memory; it recorded no result.
+toolchain is `~/sdk/go1.27.3`). The second, and a third at `ec2a0b7` with `-p 1` (2026-11-09 19:47 UTC), were stopped
+by Claude Code during the test run because Windows ran low on memory (about 2.6 GB of 16 GB free); neither recorded a
+result for any package.
 
 Not repeated on the new pin: the WSL2 run, the soak run (T046) and the real-account journey (T045). Those results belong to the old pin. The owner reassessed E003-RX-01 for the new pin on 2026-11-09 (section
 "E003-RX-01 (implementation start)").
