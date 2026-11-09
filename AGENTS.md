@@ -1,127 +1,157 @@
-# whatsapp-mcp
+# whatsapp-mcp Agent Knowledge
 
-A WhatsApp MCP server in a single Go binary. It needs no Docker, no PostgreSQL and no C compiler. The
-WhatsApp client is whatsmeow.
+## Architecture Overview
 
-## Start here
+A WhatsApp MCP server in one Go binary, `whatsapp-mcp` (`cmd/whatsapp-mcp`). No Docker, no PostgreSQL, no C
+compiler. The WhatsApp client is whatsmeow, pinned in `go.mod`. One Go module; code lives in `internal/...`.
 
-`docs/` (the specification, the spike results and the roadmap) is kept locally and is not in the repository.
-Without it, ask the user for the specification before planning; don't guess the behaviour from the code.
+**Packages:** `cmd/whatsapp-mcp` (commands, flags, logger, shutdown lifecycle), `internal/config` (layered settings;
+a new setting is one descriptor in `setting.go` plus one `Config` field), `internal/store` (the one SQLite file
+`whatsapp.db`: whatsmeow device schema, message schema, the unsafe-run marker, repair markers, offline recovery),
+`internal/wa` (the connection owner, the pinned session adapter, the network fence and the quiet-stop check),
+`internal/wasim` (a simulated WhatsApp server and phone, tests only), `internal/lock`, `internal/private`,
+`internal/buildinfo`, `internal/walog` (the whatsmeow log bridge).
 
-- `docs/specification.md` is the source of truth. Read §8 before planning or writing code.
-  - §1–§7 describe existing behaviour. Use them as the reference for behaviour that must be kept.
-  - §6 lists known defects in that behaviour. This project avoids them by design.
-  - §8.10 records decisions D1–D18. They are settled, so don't reopen them unless the user asks.
+**Commands:** `version`; `status` (offline snapshot, never connects); `pair` (QR window, offline recovery); `stdio` and
+`serve` (connect a saved session; no MCP tools yet). `OPERATIONS.md` is the operator guide and keeps implemented and
+verified apart.
 
-## Current state
+## Specification Sources (Speckit)
 
-Features 001 (binary skeleton, pull request #1), 002 (SQLite storage, pull request #5) and 003 (WhatsApp
-connection, pairing and status, pull request #9) are implemented, verified and merged into `main`. The code:
+### `docs/specification.md` (local, not in the repository): source of truth
+`docs/` except `docs/backlog/` is kept locally. Without it, ask the user for the specification before planning; do not
+infer behaviour from the code. §1–§7 describe the earlier implementation (behaviour to keep), §6 its defects (avoided
+by design), §8 this project; §8.10 holds decisions D1–D18 (settled: do not reopen unless the user asks) and §8.11 the
+feature security decisions. `docs/roadmap.md` orders the features; `docs/spikes.md` holds the spike results.
 
-- `cmd/whatsapp-mcp`: the commands, flag parsing, the logger and the shutdown lifecycle. `version`, `status` (offline
-  local snapshot) and `pair` (QR window, offline recovery) work; `stdio` and `serve` open the store and the owner but
-  have no MCP tools yet.
-- `internal/config`: layered settings and the data directory. Every setting is one descriptor in the
-  registry in `internal/config/setting.go`; a new setting is one descriptor plus one `Config` field.
-- `internal/lock`: the single-instance lock on the data directory.
-- `internal/buildinfo`: version, commit and build date.
-- `internal/store` (feature 002): the one SQLite file `whatsapp.db` with the whatsmeow device schema and the message
-  schema (embedded migrations), the approved limits, the write side (`StoreMessages`, `UpdateChats`, `MergeLID`), the
-  read side (the chat, contact and message queries in `queries.go` and `contacts.go`) and the lifecycle (`Open`,
-  `Close`, `Device`). `stdio`, `serve` and `pair` open it after the lock. `OPERATIONS.md` is the operator guide. A
-  LID sender whose name is only on the phone-number chat has no sender name until `MergeLID` runs (owner decision in
-  `specs/002-sqlite-storage/verification.md`). The store tests write several GB of temporary databases, so `TEMP`
-  needs room; two heavy tests (a 500 MiB listing and a 400,000-message memory check) run only with
-  `WA_HEAVY_TESTS=1`.
-- `internal/private`: also `CheckFile` and file identities, for the database and its sidecars.
-- `.github/workflows/ci.yml`: one `check` job (gofmt, go vet, five cross-builds) and `go test` on Linux, Windows and
-  macOS for every push and pull request (the Windows job keeps its temporary directory on the `D:` drive, which is
-  about 12 times faster than the runner's default). A nightly `heavy` job on Linux runs the heavy store tests when
-  `main` has changed; it can also be started by hand.
+### `specs/NNN-*/`: feature specs
+Every feature so far: 001 binary skeleton, 002 SQLite storage, 003 connection, pairing and status (all merged), 004
+shutdown drain (pull request #11). Each has `spec.md`, `plan.md`, `tasks.md`, contracts and a `verification.md` with
+the evidence and the Owner reviews table. Nothing is archived yet (`.specify/archive/` does not exist).
 
-Feature 003 added (owner reviews: design PASS at 8edc293, code PASS at 71edddf and ecd18b1; accepted risks in
-`specs/003-whatsapp-pairing-status/verification.md`):
+### `.specify/memory/constitution.md`: principles
+Read it before planning or implementing. It sets the review workflow below.
 
-- `internal/wa`: the connection owner (state, epochs, one attempt at a time, watchdog, pairing windows), the pinned
-  whatsmeow session adapter, the version provider, the app-state repair controller (`recovery.go`) and the bounded
-  HTTP client. Every automatic reconnect is denied by default; the one exception is the connection WhatsApp requests
-  right after pairing, which `pair` makes on a fresh client after the pairing client was retired and checked (feature
-  004; the `PostPairReconnect` switch is gone). The 405 budget, startup retries and ordinary reconnect are deferred
-  to the roadmap follow-up "logout and shutdown drain".
-- `internal/wasim`: a simulated WhatsApp server and phone for tests only.
-- `internal/store`: the unsafe-run marker (schema 3), repair markers, the read-only `Inspect` view and offline
-  recovery. The marker stays unsafe after a failed quiet-stop check, an unresolved pairing, a storage fault or a kill,
-  until a separately authorized offline recovery (`pair`, interactive terminal).
-- `internal/lock`: also `AcquireExisting`, for `status`.
-- Evidence is Windows, WSL2, Linux/Windows/macOS CI runners and one real account on Windows. Not verified: another
-  account or phone, native Linux or macOS runs, native console/PTY recovery, macOS `F_FULLFSYNC`, power loss.
-  `OPERATIONS.md` separates implemented from verified.
+> **Lookup order:** `specs/` → `.specify/memory/` → `.specify/archive/` → `docs/specification.md`. Never assume
+> behaviour — read the spec.
 
-Feature 004 (shutdown drain, branch `004-shutdown-drain`, not merged) is implemented and was run on one real account.
-The whatsmeow pin moved to upstream `f1b7985` (owner, 2026-11-09) for a read-loop fix, and a read refused after the
-storage barrier no longer fails the quiet-stop check (owner, 2026-11-09). The third code review is **PASS** (c65f8c5,
-2026-11-10) and every task is done; push, CI, pull request and merge are next (see the feature's "Current state"). It adds the network fence and the quiet-stop check (`internal/wa/fence.go`,
-`quiet.go`), the fresh-client post-pair link in `internal/wa/owner.go`, and the stop lines of `stdio`, `serve` and
-`pair`. The deadlines (1 s, 2 s) and the allow-list (empty) are in `quiet.go`. Evidence is in
-`specs/004-shutdown-drain/verification.md`. E003-RX-01 expires at the start of 2026-12-02 UTC.
+## Backlog (`docs/backlog/`)
+Deferred work and proposals, one file per item, named after the feature that raised it. `docs/backlog/INDEX.md` lists
+every item with its status and review trigger; keep it in sync.
 
-The current state of the feature being worked on can be recorded in a "## Current state" section of that feature's
-`specs/NNN-*/tasks.md` (the resume point for a fresh session: what is done, what is open, what waits for the owner).
-Keep this file's summary short and put the detail there. The review-gate hook ignores this section (in `AGENTS.md`,
-`CLAUDE.md` and the feature's `tasks.md`; the heading may carry a suffix such as "(handoff, 2026-11-09)", and the
-section runs to the next `##` heading), so editing it never makes a review stale and needs no new owner-judge review.
-Anything outside the section does count.
+## Owner Reviews
 
-Spike results are in `docs/spikes.md`.
-S1 (§8.5) is done: `sqlstore` works on `modernc.org/sqlite` with the dialect name `"sqlite"`. Nothing is
-imported from an earlier deployment (D16), so the I3 spike is closed and there is no `import` command.
+Every feature passes two reviews by the `owner-judge` agent (`.claude/agents/owner-judge.md`):
 
-The work is split into Spec Kit features in `docs/roadmap.md`, to be implemented one at a time in its order.
-
-## Owner reviews
-
-Every feature passes two reviews by the `owner-judge` agent (`.claude/agents/owner-judge.md`); the
-constitution's Development Workflow sets the rule.
-
-1. After `/speckit-tasks`, commit the feature directory and run owner-judge in **design** mode.
+1. After `/speckit-tasks`, commit the feature directory and run it in **design** mode.
 2. After implementation, commit the work and its `verification.md` evidence and run it in **code** mode.
 
-Add the row the agent ends with to the "Owner reviews" table in `specs/NNN-*/verification.md` and commit it:
+Add the row it ends with to the "Owner reviews" table in `specs/NNN-*/verification.md` and commit it:
 
 ```
-## Owner reviews
-
 | Stage | Date | Commit | Verdict | Owner decision |
 | --- | --- | --- | --- | --- |
 | design | 2026-10-28 | 8c54a83 | PASS | |
 ```
 
-The last row of a stage counts. `BLOCK` means fix and review again; `CONCERNS` needs the user's decision in
-the last column.
+- The last row of a stage counts. `BLOCK`: fix and review again. `CONCERNS`: the user decides in the last column.
+- After 3 `BLOCK` rounds of one stage only the user may park findings: list them in the feature's `tasks.md` under
+  `## Parked findings` (review, commit, finding, blocked task), commit that alone, and write `Parked at <commit>:
+  <titles>` in the last column. High-severity findings about data loss, security or a real account cannot be parked.
+- `.claude/hooks/owner-review-gate.sh` refuses `/speckit-implement` without a current design PASS and `gh pr create`
+  / `gh pr merge` without a current code PASS. A review is stale once a file it covered changes after its commit.
+  Exempt: `verification.md`, ticking `[X]` in `tasks.md`, and the `## Current state` sections of `AGENTS.md`,
+  `CLAUDE.md` and the feature's `tasks.md` (heading may carry a suffix; the section runs to the next `##`). So
+  documentation fixes on a branch under review belong in those places or wait for a new review. The hook needs
+  `bash` and `jq`.
 
-After 3 `BLOCK` rounds of one stage the user may park the last round's findings (constitution, Development
-Workflow). Only the user decides this. List each parked finding in the feature's `tasks.md` under
-`## Parked findings`, with the review, its commit, the finding and the task or phase it blocks, and mark those
-tasks blocked. Commit that change on its own, then put `Parked at <that commit>: <finding titles>` in the
-review's last column. A parked finding is resolved and reviewed before the task it blocks starts, and before the
-code review at the latest. High-severity findings about data loss, security or a real WhatsApp account cannot be
-parked. `.claude/hooks/owner-review-gate.sh` (wired in `.claude/settings.json`) refuses
-`/speckit-implement` without a passing design review and `gh pr create` / `gh pr merge` without a passing
-code review, and treats a review as stale once anything it covered changed after the recorded commit (after
-the parking commit, for a parked `BLOCK`).
-Changing `verification.md` never makes a review stale, and neither does ticking tasks `[X]` in `tasks.md` when
-nothing else in it changed. On a branch without a feature directory the hook
-asks for confirmation instead; put the verdict in the pull request. The hook needs `bash` and `jq`.
+## Current state
 
-## Conventions
+Features 001–003 are merged. Feature 004 (shutdown drain) passed its code review (8eb8c07) and is pull request #11,
+waiting for CI. The resume point of a feature in progress is the `## Current state` section of its `tasks.md`.
+E003-RX-01, the receive-resource exception, expires at the start of 2026-12-02 UTC.
 
-- Ubuntu WSL2 is available for Linux tests from this Windows workspace. From PowerShell, run for example
-  `wsl -d Ubuntu --cd /mnt/d/projects-mou/whatsapp-mcp-next --exec env CGO_ENABLED=0 go test ./... -count=1 -timeout 10m`.
-  Use a Linux Go toolchain compatible with `go.mod` and Linux temporary storage with enough free space for the
-  store tests. Record WSL2 results as such; they do not establish native Linux hardware or CI results.
-- One Go module at the root; the binary is `whatsapp-mcp` (`cmd/whatsapp-mcp`); code goes in `internal/...`
-  (§8.3 A4).
-- Always `CGO_ENABLED=0`. Never add a dependency that needs CGO.
-- In stdio mode, stdout carries the MCP protocol, so logs go to stderr.
-- Requirement IDs (G1, M2, D3, …) are for planning documents. Don't cite them in code comments.
-- Never act on a real WhatsApp account (pairing, sending) without the user's permission for that step.
+## Commands
+
+Always `CGO_ENABLED=0`. Record every result in the feature's `verification.md` with the command, date, counts and the
+exit code read from the command itself (a pipe through `tail` or `grep` hides a failure).
+
+```
+gofmt -l .                                              # must print nothing
+go vet ./...
+go mod verify
+go test ./... -count=1 -timeout 30m                     # store tests write several GB to TEMP
+for t in windows/amd64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do GOOS=${t%/*} GOARCH=${t#*/} go build -o /dev/null ./cmd/whatsapp-mcp; done
+go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+go vet ./internal/wa/testdata/cmd/session-check         # the helper is under testdata, so ./... skips it; also test and build it
+```
+
+On demand only (each guarded by an environment variable):
+
+| Variable | What it runs |
+| --- | --- |
+| `WA_HEAVY_TESTS=1` | the 500 MiB listing and the 400,000-message memory check in `internal/store` (nightly CI job) |
+| `WA_MEASURE=1` | `TestQuietStopMeasurement` and `TestQuietStopPassRate` (50 stops per kind) |
+| `WA_SOAK=1` | `TestQuietStopSoak`, four hours on the simulator (`WA_SOAK_OUT` for the CSV) |
+| `WA_APPSTATE_STOP_RUNS=N` | repeats `TestSimulatorStopDuringQueuedAppStateFetches` |
+
+CI (`.github/workflows/ci.yml`) runs gofmt, vet, the five builds and `go test` on Linux, Windows and macOS for every
+push and pull request.
+
+## File Operations
+
+The repository stores LF. A script that edits files on Windows must read with `newline=''` and write with
+`newline='\n'`; afterwards `git ls-files --eol` must show no `w/crlf`. Do not cite requirement IDs (FR-, SC-, D3, …) in
+code comments.
+
+## Real WhatsApp Account
+
+Never pair, connect or send on a real account without the user's permission for that step. A permitted run uses a new
+empty data directory under `D:\tmp` and the binary built from a named commit; the user scans the QR code; the cleanup is
+the user unlinking the device on the phone, then deleting the directory. Record redacted results in
+`verification.md`; a step not run is "not verified". Automated tests use `internal/wasim` only.
+
+## Known Issues & Gotchas
+
+### ⚠️ The Quiet-Stop Check Sees Every Goroutine in the Process
+**Symptom:** a simulator test fails with `work_running` although its own client stopped cleanly.
+**Cause:** the check counts whatsmeow, libsignal and websocket goroutines process-wide. A goroutine leaked by an
+earlier test in the same package fails every later check.
+**Rule:** find the leaking test, not the failing one. Test rigs that open several clients ignore goroutines that
+existed before the rig started. The old `readPump` leak was a library defect, fixed by the pin `f1b7985`.
+
+### ⚠️ The whatsmeow Log Bridge Logs Format Strings, Not Arguments
+**Symptom:** a debug log shows `Failed to do initial fetch of app state %s: %v` with no name and no error.
+**Cause:** `internal/walog` drops the library's arguments so no key, JID or message text reaches the log.
+**Rule:** do not expect the cause of a library error in a real-account log. Reproduce it on `internal/wasim` with a
+recording wrapper (see `internal/wa/appstate_stop_test.go`), then decide.
+
+### ⚠️ The Stop Order Is a Safety Invariant
+**Symptom:** a change to retirement looks harmless and the order test fails, or worse, a write is lost.
+**Cause:** the quiet-stop rules depend on the order work cancel → `Disconnect` → network fence → storage barrier →
+library context (`contracts/quiet-stop.md` in `specs/004-shutdown-drain/`). A write after the fence closed sends
+nothing, and a read refused after the barrier changes nothing and cannot reach the network, so neither fails the
+check; both arguments hold only in that order.
+**Rule:** never swap the fence and the barrier or cancel the library context earlier. A new store method must set the
+guard's `write` flag correctly: a write marked as a read escapes the check.
+
+### ⚠️ A whatsmeow Pin Change Is an Owner Decision
+**Symptom:** a library bump looks like routine maintenance.
+**Cause:** E003-RX-01 is tied to the exact pin; the quiet check's allow-list entries record the version they were
+reviewed for (`quiet_test.go` compares them with `go.mod`); new upstream reconnect paths must stay behind
+`EnableAutoReconnect = false`; `appstate_stop_test.go` matches function names in a goroutine dump.
+**Rule:** ask the owner first, reassess E003-RX-01, read the upstream diff for reconnect and storage changes, and
+rerun the full gates and the pass-rate run.
+
+### ⚠️ WSL2 Runs Need Three Workarounds
+**Symptom:** `env: 'go': No such file or directory`, or `error obtaining VCS status: exit status 128` in
+`cmd/whatsapp-mcp` and `internal/wasim`, or store tests filling `/tmp`.
+**Cause:** the Linux toolchain is in `~/sdk/go1.27.3/bin`, not on the `--exec` PATH; git in WSL refuses a repository
+on `/mnt/d` owned by another user; `/tmp` is a small tmpfs.
+**Rule:** `wsl -d Ubuntu --cd /mnt/d/projects-mou/whatsapp-mcp-next --exec bash -lc 'export
+PATH=$HOME/sdk/go1.27.3/bin:$PATH TMPDIR=/var/tmp CGO_ENABLED=0; go test -p 1 ./... -count=1 -timeout 20m'`, with
+the repository in git's `safe.directory` inside WSL. The VM can take up to half the RAM; with little free memory the
+run is killed. Record results as WSL2, not native Linux.
+
+### ⚠️ stdout Is the MCP Protocol in `stdio` Mode
+**Rule:** logs and human messages go to stderr; a test asserts stdout stays empty after a stop.
