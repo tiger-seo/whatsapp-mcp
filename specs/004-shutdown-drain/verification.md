@@ -627,7 +627,37 @@ Binary built from `8ba2550` (the proxy fix on the new pin), windows/amd64. One a
     `RefusedReads` returning 0) it failed with `storage_refused=4` and an unsafe marker; with the change it passes, 10
     of 10 with `WA_APPSTATE_STOP_RUNS=10` (exit 0).
   - `go test ./internal/wa -count=1` exit 0 (35.4 s); `go test ./internal/store -count=1` exit 0 (196.0 s).
-  - Not verified: the new rule on a real account.
+  - Real-account check of the new rule: see the next block.
+
+### Check of the refused-read rule (permitted 2026-11-09/10, new directory `D:\tmp\wa-004d`)
+
+Binary built from `a68aea4` (new pin, proxy fix, refused-read rule), windows/amd64. One account, one phone.
+
+- **Step 1, `pair --log-level debug`** (run by the owner, reported success): pairing succeeded 22:03:33.203 UTC; 515 at
+  22:03:33.869 (0.67 s); `quiet_stop_passed epoch=1` 246 ms; fresh client authenticated 22:03:34.649 with the saved
+  identity; `connection_confirmed` 22:03:37.273 (4.07 s); `quiet_stop_passed epoch=2` 399 ms; final line `pair: linked.
+  The saved session can be reused.` No failed check, recovery request or error line. Offline `status`: exit 0,
+  `logged_in: true`, no unsafe warning.
+- **Step 2, five `stdio` stops** (permitted by the owner, run by the assistant; stdin held 2, 2, 3, 5 and 10 s, 5 s
+  apart; the script would have stopped at the first non-zero exit). Each: exit 0 read from the command, one dial, no
+  QR, stdout empty, one `quiet_stop_passed`, no `quiet_stop_failed`.
+
+  | Run | Hold | Stop after `connection_confirmed` | Check |
+  | --- | --- | --- | --- |
+  | 1 | 2 s | 0.34 s | passed, 472 ms |
+  | 2 | 2 s | 0.60 s | passed, 301 ms |
+  | 3 | 3 s | 1.47 s | passed, 335 ms |
+  | 4 | 5 s | 3.20 s | passed, 455 ms |
+  | 5 | 10 s | 8.29 s | passed, 451 ms |
+
+  Run 1 landed in the app-state sync: at the stop's `Disconnect` (22:04:20.887) the library logged five failed initial
+  app-state fetches and five failed syncs after notifications within 2 ms, the same pattern as the failed stop of
+  2026-11-09, and the check passed. That the refused calls were reads kept apart by the new rule is inferred from the
+  pattern and the simulator reproduction; the production log does not count `RefusedReads`. Offline `status`
+  afterwards: exit 0, `logged_in: true`, no unsafe warning (marker clean).
+- Tally on the new pin with the new rule: 7 of 7 checks passed (two in step 1, five in step 2), including one stop
+  during the initial app-state sync. One account and one phone; seven clean stops are consistent with the fix, not a
+  proof of a rate.
 
 ### Step 3: cleanup (unlink on the phone, then recovery or delete)
 
