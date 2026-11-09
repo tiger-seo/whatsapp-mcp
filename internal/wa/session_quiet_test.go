@@ -276,6 +276,9 @@ func TestFenceTLSTeardownAfterCloseIsNotADial(t *testing.T) {
 	for f.RefusedWrites() == 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
+	if f.RefusedWrites() == 0 {
+		t.Fatal("TLS teardown wrote nothing after the fence closed; the test no longer exercises a late write")
+	}
 	if f.RefusedDials() != 0 {
 		t.Fatalf("TLS teardown counted %d refused dials", f.RefusedDials())
 	}
