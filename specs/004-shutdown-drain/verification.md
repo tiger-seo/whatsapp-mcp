@@ -611,6 +611,23 @@ Binary built from `8ba2550` (the proxy fix on the new pin), windows/amd64. One a
   - The test's 5 s stop duration comes from the held request blocking the close handshake; the real stop took 346 ms.
   - This confirms the mechanism inferred from the real-account log, and that the refused calls in the reproduction are
     reads. That the eight refused calls of the real stop were the same reads is very likely but was not recorded.
+- **Owner decision, 2026-11-09 (`tiger-seo`): option 1.** A read refused only because the barrier has retired no
+  longer fails the check; it is counted in `DeviceBarrier.RefusedReads()`. Reads failing on their context, a stale
+  lease or another guard error, and every refused write, still count. Implemented in `b6c6d2d`; the documents
+  (`spec.md`, `contracts/quiet-stop.md`, `data-model.md`, `OPERATIONS.md`, §8.11) follow.
+  - Audit of the guard's `write` flag: every call marked as a read is a getter (`Get*`, `HasSession`,
+    `IsTrustedIdentity`, `UploadedPreKeyCount`); the getters that can create rows (`GetOrGenPreKeys`, `GenOnePreKey`)
+    are marked as writes; the nested path in `protected` is reached only by reads.
+  - Store tests: `TestRefusedKeepsReadsAfterRetireApart` (two refused reads leave `Refused` at 0 and `RefusedReads` at
+    2; a refused write raises `Refused`) and `TestRefusedCountsReadsFailingOnTheirContext` (a cancelled read still
+    counts); `TestRefusedCountsEveryRetiredSiteExactlyOnce` now checks `Refused + RefusedReads`. They failed to compile
+    before the change (no `RefusedReads`) and pass after it.
+  - `TestSimulatorStopDuringQueuedAppStateFetches` is now a regular test: it requires a passed check, a clean marker,
+    at least one refused read and no refused write. Against the old counting rule (old store code plus a stub
+    `RefusedReads` returning 0) it failed with `storage_refused=4` and an unsafe marker; with the change it passes, 10
+    of 10 with `WA_APPSTATE_STOP_RUNS=10` (exit 0).
+  - `go test ./internal/wa -count=1` exit 0 (35.4 s); `go test ./internal/store -count=1` exit 0 (196.0 s).
+  - Not verified: the new rule on a real account.
 
 ### Step 3: cleanup (unlink on the phone, then recovery or delete)
 
