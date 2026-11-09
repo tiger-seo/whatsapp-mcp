@@ -159,6 +159,16 @@ and after a failed check you must run offline recovery (below) and pair again.
 The check counts library goroutines across the whole process. It is a strong signal, not a proof: it cannot see
 work the library started outside its own packages, and its allow-list is empty.
 
+What the categories mean in practice:
+
+- `work_running`: a client-library goroutine was still alive at the deadline. One known cause was a library defect: a
+  frame arriving after the client stopped reading could block the socket's read loop forever. It showed up mostly
+  when the server ended the stream at the moment of the stop. The pinned library version (upstream commit `f1b7985`)
+  fixes it. Any other cause is unknown and should be reported.
+- `network_refused`: the retired client tried to open a new connection after its network was blocked. A write on a
+  connection that the block already closed (for example the TLS close alert during teardown) is refused and sends
+  nothing, but does not fail the check.
+
 A store from before this feature (schema 1 or 2) is treated as unsafe, not as clean, because its history is
 unknown. A store whose marker is missing or malformed is refused.
 
@@ -213,17 +223,22 @@ release the store.
 ### What has been checked
 
 - Automated tests pass on Linux, Windows and macOS runners, including process-kill tests of the markers.
-- Feature 004 (quiet stop and the fresh-client post-pair link) is **implemented and tested on the simulator and the
-  store only**. No real account has run it yet: the quiet-stop check, the 1 s and 2 s deadlines (about 100 times the
-  slowest measured simulator check), the clear marker after a stop and the fresh-client link are all unverified
-  against WhatsApp until the permitted real-account journey is recorded in `specs/004-shutdown-drain/verification.md`.
+- Feature 004 (quiet stop and the fresh-client post-pair link) is tested on the simulator and the store, and on
+  2026-11-08 it ran on the same real account and phone on Windows: two `pair` links on a fresh client and restarts
+  that reused the saved session. Before the fence rule above was changed, one stop of four failed with
+  `network_refused` (a TLS close alert); after it, seven of seven checks passed. Seven passes are consistent with the
+  fix, not a proof. These runs used the previous library version; the current pin (`f1b7985`) has passed the automated
+  tests but has not run on a real account. The 1 s and 2 s deadlines are about 100 times the slowest measured
+  simulator check; real checks took 270 to 440 ms. A server disconnect during a stop was not tried on a real account.
   The check counts goroutines process-wide, so a goroutine leaked by anything else in the process fails it.
+  Evidence: `specs/004-shutdown-drain/verification.md`.
 - **Not checked:** power loss and OS crash; macOS `F_FULLFSYNC` hardware flushes; interactive recovery on a real
   console, Linux terminal or macOS terminal; a kill between pairing and the first save; a second real account or
-  phone model (the three runs above used one account and one phone).
+  phone model (every real run used one account and one phone).
 - A known upstream gap, E003-RX-01, is open: the WhatsApp library does not bound some receive-side resources.
   It is a temporary exception for private, local use, owned by `tiger-seo`, expiring at the start of 2026-12-02
-  UTC, with earlier review before any public release, a relevant upstream fix or a resource incident. See
+  UTC, with earlier review before any public release, a relevant upstream fix or a resource incident. The owner
+  extended it to feature 004 and to the current library pin (2026-11-09). See
   `docs/backlog/003-whatsmeow-receive-resource-bounds.md`. It does not make the device safe to expose and is
   not a claim that retention is bounded.
 
