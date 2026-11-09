@@ -10,7 +10,7 @@
 Make a stopped session reusable without an offline recovery, when the program can show that nothing from the
 previous connection is still running. Each generation that attempted a production Connect is retired in a fixed
 order (`contracts/quiet-stop.md`): the program's own work is cancelled, the library's own disconnect runs, a
-per-generation **network fence** (refuse and count dials and writes) closes, the store's **device barrier** (refuse
+per-generation **network fence** (refuse and count dials and writes; only a refused dial fails the check) closes, the store's **device barrier** (refuse
 and count guarded calls, including context errors) retires, the library's context is cancelled only then, and a
 bounded **observation** of the client library's goroutines runs inside the 10 s stop bound. The marker clears only if every checked generation passed and feature 003's other conditions
 hold. The post-pair reconnect moves from the pairing client to a **fresh client and generation**, started only after
@@ -23,9 +23,10 @@ path clears the marker (research R6).
 
 **Language/Version**: Go 1.27.0 module, Go 1.27.3 toolchain, always `CGO_ENABLED=0`.
 
-**Primary Dependencies**: Unchanged. whatsmeow `v0.0.0-20261027104441-1eec1136a50b`, coder/websocket v1.8.15,
-libsignal v0.2.2, util v0.11.0, modernc SQLite v1.61.0. The standard library adds `runtime` (goroutine dump) and
-`net` (connection wrapper). No new module, no fork, no `replace`.
+**Primary Dependencies**: whatsmeow `v0.0.0-20261109152745-f1b798561919` (upstream `f1b7985`; moved from
+`v0.0.0-20261027104441-1eec1136a50b` by owner decision on 2026-11-09, with an E003-RX-01 reassessment, for the
+read-loop fix), coder/websocket v1.8.15, libsignal v0.2.2, util v0.11.0, modernc SQLite v1.61.0. The standard library
+adds `runtime` (goroutine dump) and `net` (connection wrapper). No new module, no fork, no `replace`.
 
 **Storage**: Unchanged schema 3. No migration. The marker's format does not change (FR-012). `internal/store` gains
 an in-memory refusal count on the device session.

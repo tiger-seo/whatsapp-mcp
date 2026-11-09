@@ -19,6 +19,11 @@
 - Q: Should an unresolved pairing attempt (QR timeout, cancellation, or pairing success without a confirmed follow-up connection) keep the marker unsafe even when the stop passes the check? -> A: Yes. The check proves nothing about the phone, so feature 003's rule stands: offline recovery is required.
 - Q: What simulator pass rate counts as good enough, and below what rate is the fork reconsidered? -> A: At least 90% for `stdio` and `serve` stops, and at least 90% for the pairing generation before the post-pair reconnect. If either is lower, the owner decides before the code review whether to keep option A, tune it, or move to the fork.
 
+### Session 2026-11-08 to 2026-11-09 (after the real-account journey and the code review)
+
+- Q: Should a write on a connection that the network block has already closed fail the check? The real-account stop failed once with one refused write: the TLS layer writes its close alert during teardown, by design, and the block refuses it with nothing sent. -> A: No (owner, 2026-11-08). Such a write is still refused and counted, but only a refused dial fails the check's network condition. TLS 1.3 alerts are encrypted, so they cannot be told apart by content.
+- Q: How is the library defect that left the socket's read loop blocked forever handled? It made the check report `work_running` and failed later simulator tests. -> A: Pin upstream commit `f1b7985` (owner, 2026-11-09), which carries the fix sent upstream, instead of a fork. The owner reassessed E003-RX-01 for the new pin the same day: same scope, expiry and controls.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Restart Without Offline Recovery After a Clean Stop (Priority: P1)
@@ -59,7 +64,7 @@ As the account owner, I run `pair`, scan the QR code once, and the device stays 
 4. **Given** the restart request arrives before the pairing success has been handled (observed on the simulator in feature 003), **When** the owner receives it, **Then** it waits for the pairing success within the 30-second watchdog, as today; a pairing error, logout, stop or the watchdog refuses it and no connection starts.
 5. **Given** the pairing generation fails the check, **When** the restart request arrives, **Then** no further connection starts; `pair` reports an incomplete link that needs offline recovery, keeps the marker unsafe and exits unsuccessfully.
 6. **Given** the fresh connection fails, stalls past its watchdog or is cancelled, **When** `pair` ends, **Then** the failure is final: no second reconnect, an incomplete-link report, the marker unsafe and an unsuccessful exit.
-7. **Given** late work from the pairing generation (a session announcement, a receipt, a key share, a resent request or a disconnect), **When** it tries to send or write after its generation's blocks, **Then** it is refused, never reaches the fresh connection, and counts as a refused call for the pairing generation.
+7. **Given** late work from the pairing generation (a session announcement, a receipt, a key share, a resent request or a disconnect), **When** it tries to send or write after its generation's blocks, **Then** it is refused and never reaches the fresh connection. A new dial, or a call to the session, counts against the pairing generation's check. A write on a connection that the block already closed sends nothing and is counted, but does not fail the check.
 
 ---
 
@@ -99,7 +104,7 @@ As an operator, when a stop does not pass the check, I can see the reason in pla
 ### Functional Requirements
 
 - **FR-001**: Stopping a generation MUST happen in this order: block that generation's network traffic (socket and HTTP), then block its storage access, then observe the client library's remaining work. Storage MUST NOT be blocked while the generation's network can still receive, because a refused write during decryption can make the library acknowledge and lose a message.
-- **FR-002**: A generation passes the quiet-stop check only if, by the owner-approved deadline (see Assumptions), (a) none of the client library's work is running, except work named exactly in a reviewed allow-list, (b) no dial or write was refused on the generation's fenced network clients after the network block (this proves isolation of the retired client; it cannot see a library send after the library's own disconnect, which the observation covers), (c) no guarded storage call of the generation failed after retirement began because of a refusal, a context error, a stale lease or another guard error, (d) no call from the program's own code to the session was refused after retirement began, (e) no event that the session would have forwarded to the owner was dropped after retirement, other than `Disconnected`, and (f) the observation is complete. The check also fails when the whole stop has passed its bound (see FR-011). Every other outcome, including an error, a cut-off observation or the deadline, fails.
+- **FR-002**: A generation passes the quiet-stop check only if, by the owner-approved deadline (see Assumptions), (a) none of the client library's work is running, except work named exactly in a reviewed allow-list, (b) no dial was refused on the generation's fenced network clients after the network block (this proves isolation of the retired client; it cannot see a library send after the library's own disconnect, which the observation covers). A write on a connection that the block already closed is refused with nothing sent and counted, but does not fail the check, because TLS and HTTP/2 teardown write close messages by design, (c) no guarded storage call of the generation failed after retirement began because of a refusal, a context error, a stale lease or another guard error, (d) no call from the program's own code to the session was refused after retirement began, (e) no event that the session would have forwarded to the owner was dropped after retirement, other than `Disconnected`, and (f) the observation is complete. The check also fails when the whole stop has passed its bound (see FR-011). Every other outcome, including an error, a cut-off observation or the deadline, fails.
 - **FR-003**: After a production connection attempt, the marker MAY be cleared at orderly shutdown only when every generation of the run passed the check and all existing safe-clear prerequisites hold: storage drained, any latched logout or client deletion durably cleaned up, no unresolved pairing attempt, and low-disk admission granted. A pairing attempt is unresolved unless it ended in a confirmed connection with a durable identity: a QR timeout, a cancellation, or a pairing success without a confirmed follow-up connection all count as unresolved, because the phone may list a half-linked device that only the operator can check. Otherwise the marker MUST stay unsafe and the next start requires offline recovery, as today.
 - **FR-004**: The post-pair reconnect MUST run on a fresh client and a new generation, built from the durably saved identity, and only after the pairing success has been handled and the pairing generation has passed the check. It keeps feature 003's rules: a restart request before the pairing success waits for it within the 30-second watchdog, and a pairing error, logout, stop or the watchdog refuses it. It is one owner-initiated attempt under the single attempt slot and the 30-second watchdog. The fresh client MUST log in with the saved identity (no new registration) and the currently selected WhatsApp Web version and Linux/Chrome identification, and a test MUST assert the selected version on this connection. A failure, stall, cancellation or failed check is final: report an incomplete link that needs offline recovery, keep the marker unsafe and exit unsuccessfully.
 - **FR-005**: The code-level `PostPairReconnect` switch MUST be removed. The post-pair reconnect is part of `pair` only; `stdio` and `serve` do not pair and have no reconnect.
@@ -138,7 +143,7 @@ As an operator, when a stop does not pass the check, I can see the reason in pla
 - Stopping the pairing generation and loading the device again between pairing and the fresh connection may change what WhatsApp sees. On the real account the restart request came 0.6 to 0.8 s after the pairing success and the follow-up connection was made about 0.2 s later (feature 003 `verification.md`); the check adds up to its deadline to that gap. This is unverified and needs a permitted real-account run.
 - If the permitted real-account run shows that the fresh-client reconnect does not complete a link, the owner decides before the code review whether to fix it, keep feature 003's same-client post-pair reconnect with the marker left unsafe, or stop the feature. Removing the code-level switch (FR-005) removes feature 003's fallback of turning it off, so this decision replaces that fallback.
 - The existing store block already refuses calls after retirement; this feature adds a count of refusals and other guard or context failures and a matching block for network traffic. The simulator runs in the same process as the client, so its own websocket server goroutines may be counted as library work in measurements; the owner decides at the deadline gate how to treat that.
-- The client library version stays pinned. A version change (including a pin past upstream change `2fc844f`) is a separate decision with its own E003-RX-01 reassessment.
+- The client library version stays pinned. A version change (including a pin past upstream change `2fc844f`) is a separate decision with its own E003-RX-01 reassessment. One such change was made: on 2026-11-09 the owner moved the pin to upstream `f1b7985` (`go.mau.fi/whatsmeow v0.0.0-20261109152745-f1b798561919`) and reassessed E003-RX-01 for it.
 - Feature 003's recovery prompt wording is tracked separately in `docs/backlog/003-offline-recovery-prompt-usability.md` and is not changed here.
 
 ## Scope and References
@@ -147,7 +152,7 @@ This feature covers stage 1 of the roadmap follow-up "WhatsApp logout and shutdo
 
 Included: the per-generation network block and refusal count, the storage refusal count, the quiet-stop check and its allow-list, clearing the marker after a passed stop, the fresh-client post-pair reconnect, removal of the code-level switch, stop diagnostics, and simulator tests and measurements.
 
-Excluded: the 405 budget, startup retries, ordinary reconnect, other 515 reconnects and same-process re-pair (stage 2, a later feature, after the pass rate is known, with a rate limit and a reassessed E003-RX-01); a whatsmeow fork or any dependency change (option B, a separate owner decision); the upstream proposal in the whatsmeow Matrix room (option C, a separate outward-facing step by the owner); replacing the observation with a process exit (an untested idea); message ingest (feature 005); the recovery prompt wording.
+Excluded: the 405 budget, startup retries, ordinary reconnect, other 515 reconnects and same-process re-pair (stage 2, a later feature, after the pass rate is known, with a rate limit and a reassessed E003-RX-01); a whatsmeow fork or any other dependency change (option B, a separate owner decision; the 2026-11-09 pin move to upstream `f1b7985` is the one change made); the upstream proposal in the whatsmeow Matrix room (option C, a separate outward-facing step by the owner); replacing the observation with a process exit (an untested idea); message ingest (feature 005); the recovery prompt wording.
 
 ## Security
 
@@ -163,7 +168,7 @@ Assets are the Signal sessions, pre-keys and app-state keys in the device store,
 - **SEC-004**: Observation data never leaves the check (FR-008). It can hold raw memory words.
 - **SEC-005**: No new unattended network activity. The only reconnect is the existing post-pair one in `pair`, which the owner starts (FR-005, FR-006).
 - **SEC-006**: Automated tests use the simulator and synthetic data only. Each real-account step needs the owner's separate permission and is recorded with redacted results.
-- **SEC-007**: No new dependency and no change to the pinned client library version.
+- **SEC-007**: No new dependency, no fork and no `replace`. The pinned client library version changes only by an owner decision with its own E003-RX-01 reassessment. The one change made is the 2026-11-09 move to upstream `f1b7985` (`v0.0.0-20261109152745-f1b798561919`), which fixes a socket read loop that could block forever after a stop. No other module changed.
 
 ### Finding Disposition
 
@@ -173,13 +178,13 @@ Assets are the Signal sessions, pre-keys and app-state keys in the device store,
 | F11 - sensitive logs | Only the outcome, category, counts and duration are reported (FR-008, FR-009). |
 | F13 - recovery | Offline recovery is unchanged and remains the fallback for every failed check. |
 | F14 - incident response | A logout latch still needs durable cleanup before the marker clears (FR-003). |
-| F15 - supply chain | No fork and no dependency change (SEC-007). The allow-list is revalidated on any version change (FR-010). |
+| F15 - supply chain | No fork, no `replace` and no new dependency (SEC-007). The pin moved once, to upstream `f1b7985`, by owner decision with an E003-RX-01 reassessment; the 20 upstream commits were read for reconnect and storage changes, and the new automatic-reconnect paths stay off. The allow-list is revalidated on any version change (FR-010); it is empty. |
 | Others | Not touched by this feature; dispositions in feature 003 stand. |
 
 ### Abuse Cases and Verification
 
 - Leave a library task running past the deadline: the marker stays unsafe and nothing is written after the storage block.
-- Send from the pairing generation after its network block: the send is refused, counted and never seen by the fresh connection.
+- Send from the pairing generation after its network block: the send is refused and never seen by the fresh connection. A new dial is counted and fails the check; a write on a connection the block already closed sends nothing and is counted, but does not fail it.
 - Write to storage after its block: the write is refused, counted, the check fails and no row changes.
 - Cut the observation off at its size bound: the check fails.
 - Deliver a logout during the check, and a stop signal during the check: the marker stays unsafe unless the logout cleanup is durable, and the drain order holds.
