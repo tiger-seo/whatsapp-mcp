@@ -340,7 +340,20 @@ toolchain is `~/sdk/go1.27.3`). The second, and a third at `ec2a0b7` with `-p 1`
 by Claude Code during the test run because Windows ran low on memory (about 2.6 GB of 16 GB free); neither recorded a
 result for any package.
 
-Not repeated on the new pin: the WSL2 run, the soak run (T046) and the real-account journey (T045). Those results belong to the old pin. The owner reassessed E003-RX-01 for the new pin on 2026-11-09 (section
+WSL2 on the new pin, 2026-11-09, run by the owner in a WSL2 terminal at `480cd21` (Ubuntu, Go 1.27.3, `CGO_ENABLED=0`,
+`TMPDIR=/var/tmp`), exit codes as printed by the owner's shell:
+
+- `go test -p 1 ./... -count=1 -timeout 20m`: exit 1. Passed: buildinfo, config, lock, private, store (185.2 s), wa
+  (28.1 s), walog. Failed: `cmd/whatsapp-mcp` (the binary build) and `internal/wasim` (`TestNotLinkedIntoTheBinary`,
+  `go list`), both with `error obtaining VCS status: exit status 128`. Git in WSL refused the repository on `/mnt/d`
+  as "dubious ownership"; no test assertion ran in either.
+- After the owner added the repository to `safe.directory` in WSL: `go test -p 1 ./cmd/whatsapp-mcp ./internal/wasim
+  ./internal/wa/testdata/cmd/session-check -count=1 -timeout 20m`: exit 0 (cmd 112.7 s, wasim 1.6 s, helper 0.8 s).
+
+So every package and the helper passed under WSL2, in two invocations. WSL2 is not native Linux.
+
+Not repeated on the new pin: the soak run (T046, accepted by the owner as it stands) and the real-account journey
+(T045; the new pin is not verified on a real account). Those results belong to the old pin. The owner reassessed E003-RX-01 for the new pin on 2026-11-09 (section
 "E003-RX-01 (implementation start)").
 
 ## Soak run
