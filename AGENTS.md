@@ -66,7 +66,10 @@ fork (see the feature's "Current state"). It adds the network fence and the quie
 
 The current state of the feature being worked on can be recorded in a "## Current state" section of that feature's
 `specs/NNN-*/tasks.md` (the resume point for a fresh session: what is done, what is open, what waits for the owner).
-Keep this file's summary short and put the detail there.
+Keep this file's summary short and put the detail there. The review-gate hook ignores this section (in `AGENTS.md`,
+`CLAUDE.md` and the feature's `tasks.md`; the heading may carry a suffix such as "(handoff, 2026-11-09)", and the
+section runs to the next `##` heading), so editing it never makes a review stale and needs no new owner-judge review.
+Anything outside the section does count.
 
 Spike results are in `docs/spikes.md`.
 S1 (§8.5) is done: `sqlstore` works on `modernc.org/sqlite` with the dialect name `"sqlite"`. Nothing is

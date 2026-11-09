@@ -22,6 +22,8 @@ No commit carries attribution lines.
 
 Branch `004-shutdown-drain`, not merged, no pull request. This block is the resume point for a fresh session; `verification.md` holds commands, evidence and the Owner reviews table. Checkbox count: 46 checked, 1 unchecked (T047).
 
+This section is ignored by the review-gate hook: editing it does not make a review stale and needs no new owner-judge review.
+
 **Done:** T001-T046, including the real-account journey (T045: 7 of 7 stop checks passed after the fence fix 3882532) and the four-hour simulator soak run (T046, run 2 passed; about 3 h 43 min under load because the machine slept).
 
 **T047 is open.** The roll-up is written (E003-RX-01 recheck and "Not verified" in `verification.md`). The owner-judge **code** review of 4d65199 returned **BLOCK**, recorded at c53658f. T047 closes only with a passing code review.
