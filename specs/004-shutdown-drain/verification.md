@@ -712,4 +712,4 @@ phone no longer lists the device after unlinking was not checked by the assistan
 | design | 2026-11-08 | ea9234b | PASS | |
 | code | 2026-11-08 | 4d65199 | BLOCK | |
 | code | 2026-11-09 | 2d0c0b0 | BLOCK | |
-| code | 2026-11-10 | c65f8c5 | PASS | |
+| code | 2026-11-10 | c65f8c5 | PASS | This code review also covers the design changes since the design PASS at ea9234b (fence rule, pin, refused-read rule), owner 2026-11-10 |
