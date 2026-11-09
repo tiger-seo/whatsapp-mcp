@@ -563,6 +563,38 @@ The failed directory `wa-004a` was deleted by the owner, so the retry started wi
   server disconnect during a stop (the `work_running` case from the stress run) was not tried on the real account.
 - Phone linked-device entry: the owner reported on 2026-11-08 that the `wa-004b` device is visible in Linked devices (the `wa-004a` entry was removed earlier by the owner). Not checked by the assistant.
 
+### Check on the new pin `f1b7985` (permitted 2026-11-09, new directory `D:\tmp\wa-004c`)
+
+Binary built from `8ba2550` (the proxy fix on the new pin), windows/amd64. One account, one phone, as before.
+
+- **Step 1, `pair --log-level debug`** (run by the owner at 21:32 UTC; the owner reported success): pairing succeeded
+  21:32:32.615; 515 at 21:32:33.209 (0.59 s); `quiet_stop_passed epoch=1` 229 ms (pairing generation); fresh dial
+  21:32:33.440; authenticated with the saved identity 21:32:34.013; `connection_confirmed` 21:32:36.825 (4.21 s);
+  `quiet_stop_passed epoch=2` 439 ms; final line `pair: linked. The saved session can be reused.` No
+  `quiet_stop_failed`, `run_guard_recovery_required`, `reconnect_denied` or error line. Offline `status` (run by the
+  assistant): exit 0, `logged_in: true`, no unsafe warning.
+- **Step 2, five `stdio` stops planned** (permitted by the owner, run by the assistant; stdin held 2, 5, 10, 15 and 20 s).
+  - **Run 1 (hold 2 s): the check FAILED.** Dial and authentication with no QR, `connection_confirmed` at
+    21:33:50.086, the library's initial app-state sync running (a full sync completed at 21:33:50.632). stdin closed at
+    21:33:50.848. At 21:33:51.081-.083 the read loop exited, the library's own `Disconnect` reported the close, and the
+    library logged four failed initial app-state fetches and five failed syncs after server notifications, all in the
+    same millisecond. Result: `quiet_stop_failed epoch=1 reason=storage_refused library_goroutines=0 network_refused=0
+    storage_refused=8 calls_refused=0 events_dropped=0 duration_ms=346`, `run_guard_recovery_required`, stderr
+    `stdio: offline recovery required (storage_refused)`, exit 1, stdout empty.
+  - **Runs 2 to 5 did not connect.** Each refused to start on the unsafe marker (`unsafe or invalid run marker; offline
+    recovery is required using pair`), exit 1, no dial in the log. The script should have stopped after run 1; these
+    four runs had no effect on the account.
+  - Offline `status` afterwards: exit 1, the store is in an unsafe run state; offline recovery is required.
+- **Reading of the failure (inference, not observed):** the library's app-state fetches wait on its own
+  `appStateSyncLock`. When the stop's `Disconnect` made the in-flight request fail, the queued fetches ran one after
+  another; each first reads the stored app-state version (`GetAppStateVersion`) and then fails to send. Calls that
+  reached the store after the barrier retired (step 8) were refused and counted. The production log keeps only format
+  strings, so the refused calls and their errors were not recorded. If this is right, the refused calls are reads,
+  not lost writes, and the check failed closed as designed. The same window existed on the old pin (its 2 s stop on
+  2026-11-08 passed); whether the new pin makes it more likely is not known. One failure in one stop is not a rate.
+- Tally on the new pin: 2 of 3 checks passed (both in step 1); 1 failed (`storage_refused`, a stop 0.76 s after the
+  connection was confirmed, during the initial app-state sync).
+
 ### Step 3: cleanup (unlink on the phone, then recovery or delete)
 
 Done 2026-11-08. The owner unlinked the `wa-004b` device on the phone (the `wa-004a` entry had been removed earlier); the
