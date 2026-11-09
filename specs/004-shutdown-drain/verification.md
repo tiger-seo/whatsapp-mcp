@@ -282,6 +282,40 @@ leaked by an earlier test), so the rate in a loaded or contaminated process is l
 The WSL2 run is WSL2, not native Linux hardware. Not run: CI on Linux, Windows and macOS runners (no push was made),
 native macOS, native Linux. These are not verified.
 
+## Pin change to upstream f1b7985
+
+2026-11-09. Upstream did not merge tulir/whatsmeow#1335; the maintainer closed it with his own commit `f1b7985`
+("socket: check context when sending completed frames to channel", 2026-11-09 15:27 UTC). Its `framesocket.go` change
+is the same `select` as the fork's `dce60de`, without the fork's comment and without its test (upstream has a single
+test file, `client_test.go`). The owner decided on 2026-11-09 ("let's use f1b7985") to move the pin to it instead of
+using the fork.
+
+- `go get go.mau.fi/whatsmeow@f1b798561919a9106f284e39078b39a57982625e` and `go mod tidy`, both exit 0. `go.mod` now pins
+  `go.mau.fi/whatsmeow v0.0.0-20261109152745-f1b798561919`; no other module changed; `go.sum` changed only for
+  whatsmeow. No `replace`, no fork.
+- The new pin is 20 upstream commits past `1eec1136a50b` (including `2fc844f`, named in `spec.md` as needing its own
+  E003-RX-01 reassessment). Read from the module cache: the new retry paths (handshake timeout and closed socket made
+  retryable in `ConnectContext`, keepalive using `ResetConnection`) all require `EnableAutoReconnect`, which
+  `internal/wa/session.go` sets to false. `store/sqlstore` changed only in `store.go` (contact-name deduplication), not
+  in its schema upgrades. `server_sync` notifications change only with `SynchronousAck`, which this project does not set.
+- The allow-list is empty, so the pin test has nothing to revalidate.
+
+| Gate (Windows 10, Go 1.27.3, `CGO_ENABLED=0`, `TEMP` on `D:\tmp`) | Result |
+| --- | --- |
+| `gofmt -l .` | no output, exit 0 |
+| `go vet ./...` | exit 0 |
+| `go mod verify` | all modules verified, exit 0 |
+| `go test ./... -count=1 -timeout 30m` | exit 0: cmd 133.8 s, store 223.9 s, wa 36.3 s, wasim 3.8 s |
+| `go test ./internal/wa -count=1` ten times in a row | 10 of 10 exit 0 (29.8 to 34.4 s); on the old pin about 40% of package runs failed |
+| `go build ./cmd/whatsapp-mcp` for windows/amd64, linux/amd64, linux/arm64, darwin/amd64, darwin/arm64 | five exit 0 |
+| `go vet`, `go test` and `go build` of `./internal/wa/testdata/cmd/session-check` | three exit 0 |
+| `govulncheck@v1.9.0 ./...` | "No vulnerabilities found", exit 0 |
+| `git ls-files --eol` | no `w/crlf` |
+
+Not repeated on the new pin: the WSL2 run, the pass-rate run (T041), the soak run (T046) and the real-account journey
+(T045). Those results belong to the old pin. Under the owner's extension, the pin change stops continued operation
+until the owner reassesses E003-RX-01 for the new pin; that decision is not recorded here yet.
+
 ## Soak run
 
 `TestQuietStopSoak` (`internal/wa/quiet_soak_test.go`), native Windows 10, Go 1.27.3, `CGO_ENABLED=0`, `TEMP` on
