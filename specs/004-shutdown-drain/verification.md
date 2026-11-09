@@ -41,7 +41,7 @@ leak and is not a bound. Same scope (feature 004, private, local, single-owner),
 no renewal), same triggers and compensating controls. The automatic-reconnect paths added upstream stay off
 (`EnableAutoReconnect = false`).
 
-Whether the soak run (T046, run on the old pin) counts for the new pin or is repeated is not decided yet.
+The owner accepted the old-pin soak run (T046) for the new pin on 2026-11-09 (section "E003-RX-01 recheck").
 
 ## Handoff
 
@@ -116,6 +116,11 @@ T047, 2026-11-08, at commit 409c304, against the owner's extension of 2026-11-07
 
 Accepted risks and limits: simulator traffic only (no real receive volume), native Windows only for the soak run,
 run 1's 38 leftover goroutines unexplained.
+
+**Owner decision, 2026-11-09 (`tiger-seo`): the soak run is accepted** as the compensating control of E003-RX-01 for
+feature 004, as it stands: run 2's effective load of about 3 h 43 min instead of 4 h (the machine slept), run 1's 38
+unexplained leftover goroutines, and the fact that it ran on the old pin `1eec1136a50b`, not on `f1b7985`. It is not
+repeated on the new pin.
 
 ## Measurement and deadline approval
 

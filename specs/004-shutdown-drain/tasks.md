@@ -43,7 +43,8 @@ This section is ignored by the review-gate hook: editing it does not make a revi
 **Decisions waiting for the owner**
 1. Done 2026-11-09: the owner extended E003-RX-01 to the new pin, same scope, expiry and controls (`verification.md`, section "E003-RX-01 (implementation start)").
 2. Done 2026-11-09: the fence rule of 3882532 and the new pin are in `spec.md`, `plan.md` and §8.11.
-3. Accept or reject the soak deviation (3 h 43 min instead of 4 h) and the 38 unexplained goroutines of run 1 in the E003-RX-01 record, and decide which old-pin evidence to repeat on the new pin (WSL2 run, pass-rate run, soak run, a short real-account check).
+3. Done 2026-11-09: the owner accepted the soak run as it stands (3 h 43 min, run 1's 38 goroutines, old pin); it is not repeated. The pass-rate run was repeated on the new pin (200 of 200). Still open: the WSL2 rerun (stopped for low memory) and whether to do a short real-account check on the new pin (needs permission).
+4. Window (a): keep the current rule (measured, not decisive) or fail the check whenever the late abort fires (stricter, changes `contracts/quiet-stop.md`).
 
 **Next steps:** commit the pin change; after decisions 1-3, update `spec.md`, `plan.md`, §8.11, `OPERATIONS.md` (including the `readPump` cause of `work_running`) and the stale text; fix the minor findings; repeat the evidence the owner asks for; rerun the gates; commit; run owner-judge in code mode again; add the row. The code review must pass before the start of 2026-12-02 UTC (E003-RX-01 expiry).
 
