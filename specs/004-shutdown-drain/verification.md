@@ -594,6 +594,23 @@ Binary built from `8ba2550` (the proxy fix on the new pin), windows/amd64. One a
   2026-11-08 passed); whether the new pin makes it more likely is not known. One failure in one stop is not a rate.
 - Tally on the new pin: 2 of 3 checks passed (both in step 1); 1 failed (`storage_refused`, a stop 0.76 s after the
   connection was confirmed, during the initial app-state sync).
+- **Cleanup:** the owner unlinked the `wa-004c` device on the phone (reported 2026-11-09); the assistant then deleted
+  `D:\tmp\wa-004c` (`whatsapp.db` and the lock file). The logs `D:\tmp\wa-004c-*.log` remain outside the repository.
+- **Simulator reproduction, 2026-11-09** (`TestSimulatorStopDuringQueuedAppStateFetches` in
+  `internal/wa/appstate_stop_test.go`, guarded by `WA_APPSTATE_STOP=1`): after a connected saved-session run, the
+  simulator holds the first app-state request unanswered and sends five `server_sync` notifications, so the library's
+  other fetches queue on its `appStateSyncLock`; then the stop begins. A recording wrapper around the device's
+  app-state store logs every failed call next to the retirement steps.
+  - New pin `f1b7985`, 3 runs: 3 of 3 failed with `storage_refused=4` (no library goroutine, no other refusal). In
+    every run the four refused calls were `GetAppStateVersion` (a read), each refused with "device generation is
+    retired", each after `barrier_retired`: the queued fetches ran once the in-flight request failed at `Disconnect`.
+    No write was refused.
+  - Old pin `1eec1136a50b`, the same test in a temporary worktree (removed): 3 of 3 failed the same way. The fetch
+    path is the same in both pins (lock, then read the version); the new pin adds only a rate-limit check. So the new
+    pin did not introduce this; the earlier journey's stops did not land while fetches were queued.
+  - The test's 5 s stop duration comes from the held request blocking the close handshake; the real stop took 346 ms.
+  - This confirms the mechanism inferred from the real-account log, and that the refused calls in the reproduction are
+    reads. That the eight refused calls of the real stop were the same reads is very likely but was not recorded.
 
 ### Step 3: cleanup (unlink on the phone, then recovery or delete)
 
