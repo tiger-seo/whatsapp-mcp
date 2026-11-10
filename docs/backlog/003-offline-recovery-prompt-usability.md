@@ -4,7 +4,7 @@
 - **Status:** Open. Not started; no wording or code was changed.
 - **Affected feature:** `specs/003-whatsapp-pairing-status` (US1 offline recovery, `cmd/whatsapp-mcp/recovery.go`, `contracts/cli.md`, `OPERATIONS.md` "Offline recovery").
 - **Owner:** Maintainer `tiger-seo`.
-- **Review trigger:** before the full-branch code review of feature 003, so the review covers the new wording. A change to the reviewed contract also needs a fresh owner design review.
+- **Review trigger:** before the first release (owner, 2026-11-10; the earlier trigger, the full-branch code review of feature 003, passed without this work). A change to the reviewed contract also needs a fresh owner design review.
 - **Source:** the first real run of the recovery path (T062, 2026-11-07), where the user could not tell what to do at the identification prompt.
 
 ## Evidence
