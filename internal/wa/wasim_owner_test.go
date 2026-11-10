@@ -282,8 +282,9 @@ func TestOwnerPostPairLateCallsFromThePairingGenerationNeverReachTheFreshConnect
 	}
 }
 
-// The server closes the pairing socket right after the 515, before the owner has retired that generation: the
-// command never sees a disconnected phase and still links.
+// The server closes the pairing socket right after the client library handled the 515, before the owner has
+// retired that generation: the command never sees a disconnected phase and still links. A close in the same instant
+// as the 515 can make the pinned library drop the 515; that case is TestPostPairLostRestartRequestLeavesThePairingUnresolved.
 func TestOwnerPostPairServerCloseAfterThe515StillLinks(t *testing.T) {
 	r, _ := newRecordedRig(t, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -300,6 +301,7 @@ func TestOwnerPostPairServerCloseAfterThe515StillLinks(t *testing.T) {
 	if err := conn.SendStreamError(ctx, "515"); err != nil {
 		t.Fatal(err)
 	}
+	waitFor(t, func() bool { return r.log.contains("Got 515 code") })
 	conn.Close()
 	conn2, err := r.srv.Accept(ctx)
 	if err != nil {

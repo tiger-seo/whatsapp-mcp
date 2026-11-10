@@ -431,6 +431,29 @@ func TestPostPairStopInterleavings(t *testing.T) {
 	}
 }
 
+// A restart request the client library lost (the server closed the pairing socket in the same instant): after
+// PairSuccess nothing arrives, not even a disconnect, because the library treats its own close as expected. No
+// fresh generation is opened, the pairing stays unresolved, and the stop keeps the marker unsafe.
+func TestPostPairLostRestartRequestLeavesThePairingUnresolved(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := newPostPairRig(t, func(int64, context.Context) error { return nil })
+		r.start(t)
+		r.gen(0).send(SessionPairSuccess)
+		synctest.Sleep(connectWatchdog + time.Minute)
+		if got := r.count(); got != 1 {
+			t.Errorf("generations = %d, want 1: a lost restart request opened a fresh client", got)
+		}
+		if !r.o.unresolvedForTest() {
+			t.Error("the pairing is resolved although no fresh connection confirmed it")
+		}
+		stopInBubble(t, r.ownerTest)
+		<-r.o.Done()
+		if !r.o.unresolvedForTest() && !r.unsafe() {
+			t.Error("a lost restart request left nothing that keeps the marker unsafe")
+		}
+	})
+}
+
 func (o *connectionOwner) unresolvedForTest() bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()
