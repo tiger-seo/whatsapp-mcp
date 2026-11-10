@@ -52,6 +52,8 @@ Earlier history: the first code review (4d65199) returned **BLOCK**; its finding
 
 **After the PR was opened (2026-11-10):** PR #11 (https://github.com/tiger-seo/whatsapp-mcp/pull/11) failed Linux CI: the pinned whatsmeow can drop the post-pair 515 when the server closes in the same instant (verification.md "Lost restart request on Linux CI"). Fix proposed upstream (tulir/whatsmeow#1337, fork commit `ce09515`); the owner chose to record it as a known limitation for now (`59e0663` tests; spec, §8.11, `OPERATIONS.md`, backlog `004-whatsmeow-lost-restart-request.md`). The delivered backlog item `003-post-pair-reconnect-and-unsafe-marker.md` was deleted (`d0070ef`, renewal review PASS).
 
+**Review of 2555128: BLOCK** (the documents described a lost 515 wrongly: `pair` waited until interrupted). The owner chose to add the missing bound: `5728cb9`, with tests; documents corrected.
+
 **Next steps:** a short code review of these changes; push; CI green on the three runners; merge (owner's go-ahead). When #1337 is merged, moving the pin is a separate change with its own E003-RX-01 reassessment. The `agents-md-restructure` branch waits for the merge. The code review must pass before the start of 2026-12-02 UTC (E003-RX-01 expiry).
 
 ## Format: `[ID] [P?] [Story] Description`

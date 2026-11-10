@@ -706,6 +706,17 @@ phone no longer lists the device after unlinking was not checked by the assistan
   `TestPostPairLostRestartRequestLeavesThePairingUnresolved` pins a lost 515: no fresh client, the pairing stays
   unresolved, the marker stays unsafe. That test describes existing behaviour, so it was not observed failing first.
 - Every real-account pairing (four) received and handled its 515.
+- **Code review of `2555128`: BLOCK.** The documents said a lost 515 ends after 30 s with "linking could not be
+  completed safely"; in fact nothing bounded the wait after PairSuccess (the pairing watchdog was already off, the
+  handover watchdog starts only with the 515, and the library reports no disconnect for the expected close), so
+  `pair` waited until interrupted. Fixed in `5728cb9`: PairSuccess arms the attempt watchdog for the restart
+  request; on expiry the link takes the incomplete-link path and a later 515 is refused; a 515 within the wait
+  stops the timer. `TestPostPairLostRestartRequestLeavesThePairingUnresolved` now requires `connecting` just before
+  the watchdog, then `disconnected` and `reconnect_denied`, and a refused late 515; it failed before the fix (phase
+  still `connecting` after the watchdog) and passes after it. New `TestPostPairRestartRequestWithinTheWaitHandsOver`:
+  a 515 halfway through the wait hands over and the deadline does not end the link later. The command's output for
+  this phase is `TestPairDeniedFollowUpConnectionReportsUnsafeLinking`. `go test ./internal/wa ./cmd/whatsapp-mcp
+  -count=1` exit 0 (Windows).
 
 ## Not verified
 
