@@ -683,6 +683,30 @@ remain on disk, outside the repository (the `wa-004a` logs are already gone). Th
 redacted, but the QR code is not in them: the library logs the format string, not the code (checked by grep). That the
 phone no longer lists the device after unlinking was not checked by the assistant.
 
+## Lost restart request on Linux CI
+
+2026-11-10. The first CI run of pull request #11 (head `478052c`) failed `test (ubuntu-latest)` in both workflow runs on
+`TestOwnerPostPairServerCloseAfterThe515StillLinks` ("no fresh connection after the close"); Windows, macOS and the
+`check` job passed.
+
+- **Reproduced under WSL2** (Ubuntu, Go 1.27.3): 2 of 10 runs failed on the current pin `f1b7985`; 5 of 15 on the
+  previous pin `1eec1136a50b` (temporary worktree, removed). Native Windows: 20 of 20 passed.
+- **Cause, from the owner log of a failing run:** the simulator sends the 515 and closes the socket in the same
+  instant. The library logged the received node, then "OnDisconnect() called, but it was expected" and "Closing
+  handler queue loop", with no "Got 515 code": the 515 was dropped. `handleFrame` chooses at random between queueing
+  the node and the already cancelled socket context; with that fixed, a second drop showed up in `handlerQueueLoop`
+  ("Closing handler queue loop before node handling" after taking the node). The code is the same in both pins.
+- **Upstream fix:** fork `tiger-seo/whatsmeow`, branch `fix-handleframe-stream-error`, commit `ce09515` (both drop
+  points, stream errors handled with the `ConnectContext` context after an independent review's finding), opened by
+  the owner as tulir/whatsmeow#1337. With it (temporary `replace` in a worktree, removed): the test 200 of 200 under
+  WSL2; `internal/wa` and `cmd/whatsapp-mcp` pass. Not adopted.
+- **Owner decision, 2026-11-10 (`tiger-seo`): known limitation** (spec clarification, §8.11, `OPERATIONS.md`,
+  `docs/backlog/004-whatsmeow-lost-restart-request.md`). `59e0663`: the simulator test now closes the socket after
+  the library handled the 515 (100 of 100 under WSL2 on the current pin, 10 of 10 on Windows), and
+  `TestPostPairLostRestartRequestLeavesThePairingUnresolved` pins a lost 515: no fresh client, the pairing stays
+  unresolved, the marker stays unsafe. That test describes existing behaviour, so it was not observed failing first.
+- Every real-account pairing (four) received and handled its 515.
+
 ## Not verified
 
 - Another account or phone (one account, one phone only).
@@ -693,6 +717,7 @@ phone no longer lists the device after unlinking was not checked by the assistan
 - A server disconnect during a stop on the real account (the `work_running` case).
 - The cause of run 1's 38 leftover goroutines.
 - That the phone stopped listing the unlinked device (not checked by the assistant).
+- A post-pair restart request lost in the same instant as the server's close on a real account (simulator only).
 - The soak run on the new pin (the owner accepted the old-pin run). The new pin did run on the real account
   (`wa-004c`, `wa-004d`, sections above).
 - That the eight refused calls of the failed real stop on 2026-11-09 were reads (the production log does not record
