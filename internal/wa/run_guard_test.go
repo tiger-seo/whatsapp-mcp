@@ -22,11 +22,20 @@ func TestRunGuardLatePinnedLogoutAfterRetirement(t *testing.T) {
 	}
 	cap := &capture{}
 	factory := cap.factory()
-	o := NewOwner(OwnerConfig{Store: st, Versions: bundledProvider(context.Background()), Sessions: func(cfg SessionConfig) (SessionHandle, error) {
-		cfg.PreLoginHTTP = countingClient(forbiddenTransport{})
-		cfg.WebsocketHTTP = countingClient(forbiddenTransport{})
-		return factory(cfg)
-	}})
+	var late func()
+	o := NewOwner(OwnerConfig{Store: st, Versions: bundledProvider(context.Background()),
+		// The pinned logout handler, delayed before its logout branch, runs after the barrier drained and before the
+		// quiet-stop observation has finished: its delete is refused and its event dropped.
+		trace: func(step string) {
+			if step == "lib_cancelled" && late != nil {
+				late()
+			}
+		},
+		Sessions: func(cfg SessionConfig) (SessionHandle, error) {
+			cfg.PreLoginHTTP = countingClient(forbiddenTransport{})
+			cfg.WebsocketHTTP = countingClient(forbiddenTransport{})
+			return factory(cfg)
+		}})
 	if err := o.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -35,16 +44,16 @@ func TestRunGuardLatePinnedLogoutAfterRetirement(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_ = s.Connect(ctx)
+	late = func() {
+		s.client.DangerousInternals().HandleConnectFailure(context.Background(), &waBinary.Node{Attrs: waBinary.Attrs{"reason": "401"}})
+	}
 	o.BeginStop()
 	<-o.Done()
-	// Exercise the pinned logout handler after the retirement barrier, modelling
-	// a detached upstream node handler delayed before its logout branch.
-	s.client.DangerousInternals().HandleConnectFailure(context.Background(), &waBinary.Node{Attrs: waBinary.Attrs{"reason": "401"}})
 	if err := s.dev.Delete(context.Background()); !errors.Is(err, store.ErrRetired) {
 		t.Fatalf("late delete = %v", err)
 	}
 	if o.StopError() == nil {
-		t.Error("unproved upstream drain reported successful")
+		t.Error("a late pinned logout during the check reported a successful stop")
 	}
 	if err := st.Close(context.Background()); err != nil {
 		t.Fatal(err)

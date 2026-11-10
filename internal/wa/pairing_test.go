@@ -3,6 +3,7 @@ package wa
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -52,7 +53,8 @@ func TestPairingFailureWinsConflictingSuccess(t *testing.T) {
 	o := NewOwner(OwnerConfig{Versions: bundledProvider(context.Background())})
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &fakeSession{}
-	gen := &genState{handle: s, lifetime: ctx, cancel: cancel}
+	lib, libCancel := context.WithCancel(context.Background())
+	gen := &genState{handle: s, work: ctx, workCancel: cancel, lib: lib, libCancel: libCancel}
 	w := &pairingWindow{o: o, gen: gen, result: PairingFailed}
 	o.gen, o.pairing = gen, w
 	w.finish(PairingSucceeded, true)
@@ -432,4 +434,56 @@ func TestPairingRejectsUnsupportedAndInvalidFlows(t *testing.T) {
 			})
 		})
 	}
+}
+
+// Retiring a generation with an open pairing window ends the window's QR channel, so the library's emitter
+// goroutine returns. The window's outcome and the unresolved accounting are unchanged.
+func TestRetiringAnOpenWindowEndsItsQRChannel(t *testing.T) {
+	trace := &stepLog{}
+	r := newOwnerRigWith(t, func(cfg *OwnerConfig) { cfg.trace = trace.add })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := r.owner.RequestPairing(ctx); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := r.srv.Accept(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.SendPairDevice(ctx, "ref-1"); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if snap, ok := r.owner.PairingSnapshot(); ok && snap.Code != "" {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("no QR code")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	if !dumpHasQREmitter(t) {
+		t.Fatal("the QR emitter goroutine was not running while the window was open")
+	}
+	r.owner.BeginStop()
+	select {
+	case <-r.owner.Done():
+	case <-time.After(20 * time.Second):
+		t.Fatal("stop did not finish")
+	}
+	waitFor(t, func() bool { return !dumpHasQREmitter(t) })
+	if snap, ok := r.owner.PairingSnapshot(); !ok || snap.Result != PairingCancelled {
+		t.Errorf("window = %+v, %v; want cancelled", snap, ok)
+	}
+	if err := r.owner.StopError(); err == nil {
+		t.Error("an unresolved pairing stopped successfully")
+	}
+}
+
+func dumpHasQREmitter(t *testing.T) bool {
+	t.Helper()
+	buf := make([]byte, 4<<20)
+	n := runtime.Stack(buf, true)
+	return strings.Contains(string(buf[:n]), "(*qrChannel).emitQRs")
 }

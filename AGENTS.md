@@ -44,18 +44,33 @@ Feature 003 added (owner reviews: design PASS at 8edc293, code PASS at 71edddf a
 
 - `internal/wa`: the connection owner (state, epochs, one attempt at a time, watchdog, pairing windows), the pinned
   whatsmeow session adapter, the version provider, the app-state repair controller (`recovery.go`) and the bounded
-  HTTP client. Every automatic reconnect is denied by default except the one post-pair connection, which `pair` enables
-  (`PostPairReconnect`, approved 2026-11-06; the long-running commands keep it off). Checked in three permitted runs
-  on one real account and phone (2026-11-06 and 2026-11-07, Windows). The 405 budget, startup retries and ordinary
-  reconnect are deferred to the roadmap follow-up "logout and shutdown drain".
+  HTTP client. Every automatic reconnect is denied by default; the one exception is the connection WhatsApp requests
+  right after pairing, which `pair` makes on a fresh client after the pairing client was retired and checked (feature
+  004; the `PostPairReconnect` switch is gone). The 405 budget, startup retries and ordinary reconnect are deferred
+  to the roadmap follow-up "logout and shutdown drain".
 - `internal/wasim`: a simulated WhatsApp server and phone for tests only.
 - `internal/store`: the unsafe-run marker (schema 3), repair markers, the read-only `Inspect` view and offline
-  recovery. After any production Connect the marker stays unsafe until a separately authorized offline recovery
-  (`pair`, interactive terminal).
+  recovery. The marker stays unsafe after a failed quiet-stop check, an unresolved pairing, a storage fault or a kill,
+  until a separately authorized offline recovery (`pair`, interactive terminal).
 - `internal/lock`: also `AcquireExisting`, for `status`.
 - Evidence is Windows, WSL2, Linux/Windows/macOS CI runners and one real account on Windows. Not verified: another
   account or phone, native Linux or macOS runs, native console/PTY recovery, macOS `F_FULLFSYNC`, power loss.
   `OPERATIONS.md` separates implemented from verified.
+
+Feature 004 (shutdown drain, branch `004-shutdown-drain`, not merged) is implemented and was run on one real account.
+The whatsmeow pin moved to upstream `f1b7985` (owner, 2026-11-09) for a read-loop fix, and a read refused after the
+storage barrier no longer fails the quiet-stop check (owner, 2026-11-09). The third code review is **PASS** (c65f8c5,
+2026-11-10) and every task is done; push, CI, pull request and merge are next (see the feature's "Current state"). It adds the network fence and the quiet-stop check (`internal/wa/fence.go`,
+`quiet.go`), the fresh-client post-pair link in `internal/wa/owner.go`, and the stop lines of `stdio`, `serve` and
+`pair`. The deadlines (1 s, 2 s) and the allow-list (empty) are in `quiet.go`. Evidence is in
+`specs/004-shutdown-drain/verification.md`. E003-RX-01 expires at the start of 2026-12-02 UTC.
+
+The current state of the feature being worked on can be recorded in a "## Current state" section of that feature's
+`specs/NNN-*/tasks.md` (the resume point for a fresh session: what is done, what is open, what waits for the owner).
+Keep this file's summary short and put the detail there. The review-gate hook ignores this section (in `AGENTS.md`,
+`CLAUDE.md` and the feature's `tasks.md`; the heading may carry a suffix such as "(handoff, 2026-11-09)", and the
+section runs to the next `##` heading), so editing it never makes a review stale and needs no new owner-judge review.
+Anything outside the section does count.
 
 Spike results are in `docs/spikes.md`.
 S1 (§8.5) is done: `sqlstore` works on `modernc.org/sqlite` with the dialect name `"sqlite"`. Nothing is

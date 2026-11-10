@@ -40,7 +40,6 @@ type scripted struct {
 	stopErr     error
 	done        chan struct{}
 	stopOnce    sync.Once
-	postPair    bool
 	windowOpen  bool
 	windowClose bool
 }
@@ -103,13 +102,12 @@ func (s *scripted) PairingSnapshot() (wa.PairingState, bool) {
 }
 
 type rig struct {
-	t       *testing.T
-	dir     string
-	owner   *scripted
-	built   atomic.Int64
-	postSet atomic.Bool
-	out     bytes.Buffer
-	errb    bytes.Buffer
+	t     *testing.T
+	dir   string
+	owner *scripted
+	built atomic.Int64
+	out   bytes.Buffer
+	errb  bytes.Buffer
 }
 
 func newRig(t *testing.T) *rig {
@@ -126,7 +124,6 @@ func (r *rig) deps(input string, interactive bool) deps {
 		defaultDir:  func() (string, error) { return filepath.Join(r.t.TempDir(), "default-data"), nil },
 		newOwner: func(env ownerEnv) (wa.Owner, error) {
 			r.built.Add(1)
-			r.postSet.Store(env.postPair)
 			return r.owner, nil
 		},
 	}
@@ -275,9 +272,6 @@ func TestConnectRunsOnceObservesAndReleasesEverything(t *testing.T) {
 	if r.owner.started.Load() != 1 || r.built.Load() != 1 {
 		t.Errorf("started %d, built %d", r.owner.started.Load(), r.built.Load())
 	}
-	if r.postSet.Load() {
-		t.Error("connect enabled the post-pair reconnect")
-	}
 	if r.owner.requests.Load() != 0 {
 		t.Error("connect asked for a pairing window")
 	}
@@ -295,9 +289,6 @@ func TestPairRendersTheCodeOnStdoutOnly(t *testing.T) {
 	code := r.run([]string{"-dir", r.dir, "-action", "pair"}, "I permit pair in acceptance-one\ndone\n")
 	if code != exitOK {
 		t.Fatalf("exit %d\nstderr:\n%s", code, r.errb.String())
-	}
-	if !r.postSet.Load() {
-		t.Error("pair did not enable the post-pair reconnect")
 	}
 	if r.owner.requests.Load() != 1 {
 		t.Errorf("%d pairing windows requested", r.owner.requests.Load())

@@ -42,12 +42,11 @@ const (
 
 var errDenialBroken = errors.New("a second pairing request in the same process was not denied")
 
-// ownerEnv is what the owner factory needs; postPair mirrors the shipped pair command only.
+// ownerEnv is what the owner factory needs.
 type ownerEnv struct {
-	ctx      context.Context
-	log      *slog.Logger
-	store    *store.Store
-	postPair bool
+	ctx   context.Context
+	log   *slog.Logger
+	store *store.Store
 }
 
 type deps struct {
@@ -87,14 +86,12 @@ func interactiveTerminal() bool {
 	return true
 }
 
-// productionOwner is the shipped owner on the shipped store. The post-pair reconnect is on for pair only,
-// like the shipped command.
+// productionOwner is the shipped owner on the shipped store.
 func productionOwner(env ownerEnv) (wa.Owner, error) {
 	return wa.NewOwner(wa.OwnerConfig{
-		Log:               env.log,
-		Store:             env.store,
-		Versions:          wa.NewVersionProvider(env.ctx),
-		PostPairReconnect: env.postPair,
+		Log:      env.log,
+		Store:    env.store,
+		Versions: wa.NewVersionProvider(env.ctx),
 	}), nil
 }
 
@@ -219,7 +216,7 @@ func run(ctx context.Context, args []string, d deps) int {
 		return exitRefused
 	}
 
-	owner, err := d.newOwner(ownerEnv{ctx: ctx, log: logger, store: st, postPair: *action == "pair"})
+	owner, err := d.newOwner(ownerEnv{ctx: ctx, log: logger, store: st})
 	if err != nil {
 		fmt.Fprintf(d.stderr, "session-check: %v\n", err)
 		return exitFailed

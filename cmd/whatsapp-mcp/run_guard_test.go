@@ -573,11 +573,21 @@ func TestRunGuardUnsafePairRefusesRedirectedInput(t *testing.T) {
 	}
 }
 
-func TestProductionOwnerEnablesPostPairReconnectOnlyForPair(t *testing.T) {
-	if cfg := productionOwnerConfig(ownerDeps{}, nil, nil); !cfg.PostPairReconnect {
-		t.Error("pair must enable the post-pair reconnect")
+// The post-pair link has no switch: the pair command and the shells build the same owner, and only the shells
+// carry the startup budget that denies every retry. A shell never starts a pairing window, so it has no 515 and no
+// reconnect of any kind (the shell tests in store_test.go drive that end to end).
+func TestProductionOwnerConfigHasNoReconnectSwitch(t *testing.T) {
+	pair := productionOwnerConfig(ownerDeps{}, nil, nil)
+	shell := productionOwnerConfig(ownerDeps{shell: true}, nil, nil)
+	if pair.ShellStartupBudget || !shell.ShellStartupBudget {
+		t.Errorf("startup budget: pair=%v shell=%v, want false and true", pair.ShellStartupBudget, shell.ShellStartupBudget)
 	}
-	if cfg := productionOwnerConfig(ownerDeps{shell: true}, nil, nil); cfg.PostPairReconnect {
-		t.Error("the long-running shells must keep the 515 refused")
+}
+
+func TestProductionOwnerGetsTheShutdownTimeoutAsItsStopBound(t *testing.T) {
+	for _, shell := range []bool{false, true} {
+		if cfg := productionOwnerConfig(ownerDeps{shell: shell}, nil, nil); cfg.StopBound != shutdownTimeout {
+			t.Errorf("shell=%v: StopBound = %v, want %v", shell, cfg.StopBound, shutdownTimeout)
+		}
 	}
 }

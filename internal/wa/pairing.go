@@ -28,7 +28,8 @@ type pairingWindow struct {
 	gen *genState
 
 	result      PairingResult
-	ended       bool // the terminal outcome was logged; guarded by the owner mutex
+	qrCancel    context.CancelFunc // ends the QR channel's context; guarded by the owner mutex
+	ended       bool               // the terminal outcome was logged; guarded by the owner mutex
 	code        string
 	codeExpires time.Time
 	expiry      *time.Timer
@@ -82,7 +83,7 @@ func (o *connectionOwner) RequestPairing(ctx context.Context) (PairingState, err
 	o.mu.Lock()
 	if o.stopping || o.gen != gen || gen.retiring {
 		o.mu.Unlock()
-		o.retireGeneration(gen)
+		o.retireGeneration(gen, quietStopDeadline)
 		return PairingState{}, ErrStopping
 	}
 	o.pairing = w
@@ -103,13 +104,13 @@ func (o *connectionOwner) RequestPairing(ctx context.Context) (PairingState, err
 func (o *connectionOwner) ensureFreshGeneration() (*genState, error) {
 	o.mu.Lock()
 	gen := o.gen
-	reusable := gen != nil && !gen.retiring && gen.lifetime.Err() == nil && !gen.handle.HasIdentity()
+	reusable := gen != nil && !gen.retiring && gen.work.Err() == nil && !gen.handle.HasIdentity()
 	o.mu.Unlock()
 	if reusable {
 		return gen, nil
 	}
 	if gen != nil {
-		o.retireGeneration(gen)
+		o.retireGeneration(gen, quietStopDeadline)
 	}
 	o.mu.Lock()
 	blocked := o.unsafeStop || o.stopping
@@ -163,7 +164,7 @@ func (w *pairingWindow) run() {
 	}
 
 	// Version discovery happens before the connection; a failure keeps the last usable version.
-	if err := o.cfg.Versions.Refresh(w.gen.lifetime); err != nil {
+	if err := o.cfg.Versions.Refresh(w.gen.work); err != nil {
 		o.log.Warn("version discovery failed; keeping the last usable version", "event", "version_refresh_failed", "reason", versionFailureReason(err))
 	}
 	src, ok := w.gen.handle.(QRChannelSource)
@@ -171,13 +172,30 @@ func (w *pairingWindow) run() {
 		w.finish(PairingFailed, false)
 		return
 	}
-	qrch, err := src.GetQRChannel(w.gen.lifetime)
+	// The QR channel belongs to the window, so it uses the work context and can be ended on its own when the
+	// generation retires. It never reaches the context the socket's handlers run with.
+	qrCtx, qrCancel := context.WithCancel(w.gen.work)
+	o.mu.Lock()
+	w.qrCancel = qrCancel
+	o.mu.Unlock()
+	defer qrCancel()
+	qrch, err := src.GetQRChannel(qrCtx)
 	if err != nil {
 		w.finish(PairingFailed, false)
 		return
 	}
-	// The initial pairing connection carries its own watchdog, disarmed by the first valid code.
-	attemptCtx, acancel := context.WithCancel(w.gen.lifetime)
+	// The initial pairing connection carries its own watchdog, disarmed by the first valid code. Its context is
+	// the handlers' context for the pairing socket, so it is a child of the library context and is aborted only
+	// while the Connect has not returned. The stop check and the recorded abort share one critical section.
+	o.mu.Lock()
+	refused := o.stopping || w.gen.retiring
+	var attemptCtx context.Context
+	if !refused {
+		var abort context.CancelCauseFunc
+		attemptCtx, abort = context.WithCancelCause(w.gen.lib)
+		w.gen.abort, w.gen.abortFired = abort, false
+	}
+	o.mu.Unlock()
 	fired := make(chan struct{})
 	expired := false
 	timer := time.AfterFunc(connectWatchdog, func() {
@@ -185,10 +203,10 @@ func (w *pairingWindow) run() {
 		expired = o.gen == w.gen && !w.gen.retiring && !o.stopping && !o.connected
 		if expired {
 			w.gen.timingOut = true
+			o.abortAttemptLocked(w.gen)
 		}
 		o.mu.Unlock()
 		if expired {
-			acancel()
 			w.gen.handle.Disconnect()
 		}
 		close(fired)
@@ -221,7 +239,7 @@ func (w *pairingWindow) run() {
 					if !ok {
 						return
 					}
-				case <-w.gen.lifetime.Done():
+				case <-w.gen.work.Done():
 					return
 				}
 			}
@@ -234,11 +252,22 @@ func (w *pairingWindow) run() {
 		if timedOut {
 			// A simultaneous PairSuccess can already have published success; the timed-out
 			// connection still must be retired after the watchdog disconnect completes.
-			o.retireGeneration(w.gen)
+			o.retireGeneration(w.gen, quietStopDeadline)
 			o.setPhaseIf(PhaseDisconnected, PhaseConnecting)
 		}
 	}
-	if err := w.gen.handle.Connect(attemptCtx); err != nil {
+	if refused {
+		end(PairingCancelled, false)
+		return
+	}
+	err = w.gen.handle.Connect(attemptCtx)
+	o.mu.Lock()
+	if err == nil && w.gen.abortFired {
+		w.gen.abortLate = true
+	}
+	w.gen.abort = nil
+	o.mu.Unlock()
+	if err != nil {
 		end(PairingFailed, false)
 		return
 	}
@@ -304,6 +333,20 @@ func (w *pairingWindow) run() {
 			return
 		case <-upch:
 		}
+	}
+}
+
+// endPairingWindow ends the QR channel of a generation's pairing window, so the library's emitter goroutine can
+// return. The window's diagnostics and its unresolved-pairing accounting are unchanged.
+func (o *connectionOwner) endPairingWindow(gen *genState) {
+	o.mu.Lock()
+	var cancel context.CancelFunc
+	if w := o.pairing; w != nil && w.gen == gen {
+		cancel = w.qrCancel
+	}
+	o.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 
@@ -416,5 +459,5 @@ func (w *pairingWindow) finish(result PairingResult, _ bool) {
 	if result == PairingSucceeded {
 		return
 	}
-	o.retireGeneration(gen)
+	o.retireGeneration(gen, quietStopDeadline)
 }

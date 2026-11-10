@@ -171,9 +171,9 @@ func productionOwner(deps ownerDeps) (*ownerHandle, error) {
 	return &ownerHandle{owner: owner, refreshDone: refreshDone}, nil
 }
 
-// productionOwnerConfig is the owner configuration of the shipped binary. The post-pair reconnect
-// (owner decision 2026-11-06, see the post-pair reconnect decision in the feature verification.md) is enabled for the pair command
-// only: the long-running shells never start a pairing window, so a 515 there stays refused.
+// productionOwnerConfig is the owner configuration of the shipped binary. The link that WhatsApp requests right
+// after pairing runs on a fresh client inside the owner; no setting or switch controls it, and the long-running
+// shells never start a pairing window.
 func productionOwnerConfig(deps ownerDeps, provider *wa.VersionProvider, sessions wa.SessionFactory) wa.OwnerConfig {
 	return wa.OwnerConfig{
 		Log:                deps.log,
@@ -181,7 +181,7 @@ func productionOwnerConfig(deps ownerDeps, provider *wa.VersionProvider, session
 		Versions:           provider,
 		Sessions:           sessions,
 		ShellStartupBudget: deps.shell,
-		PostPairReconnect:  !deps.shell,
+		StopBound:          shutdownTimeout,
 	}
 }
 
@@ -282,7 +282,17 @@ func runPair(cmd *command, args []string, s *streams) int {
 		return exitError
 	}
 	if recoveryRequired.Load() {
-		fmt.Fprintln(s.stderr, "whatsapp-mcp: pair: linked. Offline recovery is required before the next run: the connection used for pairing leaves the data directory marked unsafe")
+		if reason := oh.owner.Health().QuietReason; reason != "" {
+			fmt.Fprintf(s.stderr, "whatsapp-mcp: pair: linked. Offline recovery is required before the next run: the stop check failed (%s)\n", reason)
+		} else {
+			fmt.Fprintln(s.stderr, "whatsapp-mcp: pair: linked. Offline recovery is required before the next run: the connection used for pairing leaves the data directory marked unsafe")
+		}
+	} else if oh.owner.Health().QuietPassed {
+		word := "connected"
+		if snap, ok := oh.owner.PairingSnapshot(); ok && snap.Result == wa.PairingSucceeded {
+			word = "linked"
+		}
+		fmt.Fprintf(s.stderr, "whatsapp-mcp: pair: %s. The saved session can be reused.\n", word)
 	}
 	return exitOK
 }
@@ -345,7 +355,7 @@ func waitSavedConnection(owner wa.Owner, events <-chan wa.Event, s *streams, ctx
 			switch ev.Phase {
 			case wa.PhaseDisconnected:
 				if afterPairing {
-					fmt.Fprintln(s.stderr, "whatsapp-mcp: pair: linking could not be completed safely because the follow-up connection is not available; the phone may show a failure or, in some cases, a linked device; check Linked devices on the phone. Offline recovery is required before another attempt")
+					fmt.Fprintln(s.stderr, "whatsapp-mcp: pair: linking could not be completed safely because the follow-up connection is not available; the phone may show a failure or, in some cases, a linked device; check Linked devices on the phone. Offline recovery is required before another attempt"+quietSuffix(owner))
 					return false
 				}
 				fmt.Fprintln(s.stderr, "whatsapp-mcp: pair: the saved session did not connect; the identity was kept, no new pairing was started")
@@ -518,7 +528,12 @@ func attachOwner(kind string, lc *lifecycle, logger *slog.Logger, st *store.Stor
 	}
 	// Registered after the store stop, so shutdown runs owner first and the store closes after the
 	// device writes drained.
-	lc.addStop("owner", oh.stopStep())
+	stopOwner := oh.stopStep()
+	lc.addStop("owner", func(ctx context.Context) error {
+		err := stopOwner(ctx)
+		reportShellStop(kind, oh.owner, err, s)
+		return err
+	})
 	if err := oh.owner.Start(lc.ctx); err != nil {
 		fmt.Fprintf(s.stderr, "whatsapp-mcp: %s: %s\n", kind, safeError(err))
 		lc.requestStop("owner start failed")

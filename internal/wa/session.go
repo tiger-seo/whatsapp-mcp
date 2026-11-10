@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/tiger-seo/whatsapp-mcp/internal/store"
 	"github.com/tiger-seo/whatsapp-mcp/internal/walog"
@@ -48,8 +49,23 @@ type Session struct {
 	callbackDrained chan struct{}
 	accountWork     bool // guarded by mu
 
+	// fence is this generation's network block; closing it is retirement step 7.
+	fence *fence
+	// droppedEvents counts owner-relevant events the handler dropped after the retire bit; lateCalls counts the
+	// program's own calls to the session after it (the retirement sequence's own Disconnect excepted).
+	droppedEvents atomic.Uint64
+	lateCalls     atomic.Uint64
+	retireStarted time.Time // guarded by mu
+	handlerOnce   sync.Once
+	// observer builds the quiet-stop observation; tests replace it, production uses the goroutine dump.
+	observer func() quietObserver
+
 	mu sync.Mutex
 }
+
+// errAttemptAborted is the cause of an attempt context cancelled through the owner's recorded abort. A Connect
+// that finds the session retired with this cause never dialled and is not a late call.
+var errAttemptAborted = errors.New("connection attempt aborted before it began")
 
 var (
 	_ SessionHandle   = (*Session)(nil)
@@ -111,28 +127,31 @@ func OpenSession(cfg SessionConfig) (*Session, error) {
 		diagnosticDone:  make(chan struct{}),
 		retireDone:      make(chan struct{}),
 		callbackDrained: make(chan struct{}, 1),
+		fence:           newFence(),
+		observer:        productionObserver,
 	}
 	s.pendingRep.Store(len(pending) > 0)
 	client := whatsmeow.NewClient(dev, walog.New(cfg.Log))
 	client.QRClientType = whatsmeow.PairClientChrome
 	// Every automatic reconnect is denied: work detached by an earlier connection cannot be
 	// excluded, so the library may not start a Connect of its own. The login-time flag only
-	// routes the post-pair 515 to the owner, which denies it as well.
+	// routes the post-pair 515 to the owner, which answers it with a fresh client.
 	client.EnableAutoReconnect = false
 	client.InitialAutoReconnect = false
 	client.DisableLoginAutoReconnect = true
 	client.BackgroundEventCtx = cfg.Lifetime
+	if cfg.Library != nil {
+		client.BackgroundEventCtx = cfg.Library
+	}
 	// Disable unneeded buffering: no automatic history blob transfer, no decrypted app-state event
 	// buffering and no cross-restart retry message store.
 	client.ManualHistorySyncDownload = true
-	s.mediaClient = newAppStateHTTPClient()
+	// All three HTTP clients dial through this generation's fence, so none can reach the network after it closes.
+	// The media and app-state client keeps the direct bounded transport: no environment proxy, no decompression.
+	s.mediaClient = newBoundedHTTPClient(10*time.Second, 16<<20, s.fence.RoundTripper(newDirectTransport()))
 	client.SetMediaHTTPClient(s.mediaClient)
-	if cfg.PreLoginHTTP != nil {
-		client.SetPreLoginHTTPClient(cfg.PreLoginHTTP)
-	}
-	if cfg.WebsocketHTTP != nil {
-		client.SetWebsocketHTTPClient(cfg.WebsocketHTTP)
-	}
+	client.SetPreLoginHTTPClient(s.fence.HTTPClient(cfg.PreLoginHTTP))
+	client.SetWebsocketHTTPClient(s.fence.HTTPClient(cfg.WebsocketHTTP))
 	client.GetClientPayload = s.handshakePayload
 	s.client = client
 	s.repair = newRepairController(barrier, s.fetchAppState, cfg.RepairSlot, cfg.Log)
@@ -160,33 +179,53 @@ func (s *Session) Connect(ctx context.Context) error {
 	}
 	s.mu.Unlock()
 	if retired {
+		if !errors.Is(context.Cause(ctx), errAttemptAborted) {
+			s.lateCalls.Add(1)
+		}
 		return ErrSessionRetired
 	}
 	return s.client.ConnectContext(ctx)
 }
 
-// UpstreamDrainUnproven reports whether the pinned client could have created
-// detached node handlers that Disconnect and the device barrier do not join.
-func (s *Session) UpstreamDrainUnproven() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.accountWork
-}
-
-// Disconnect stops the socket after an attempt was cancelled.
+// Disconnect stops the socket after an attempt was cancelled. After the retire bit it is a late call and is
+// counted; the retirement sequence uses its own uncounted disconnect.
 func (s *Session) Disconnect() {
+	if s.isRetired() {
+		s.lateCalls.Add(1)
+	}
 	s.client.Disconnect()
 }
 
-// Retire rejects new guarded access, stops the socket and waits for the generation to drain.
+func (s *Session) isRetired() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.retired
+}
+
+// MarkRetiring starts the store's refusal count without retiring anything. The owner calls it before it
+// cancels any of the generation's own work, so a guarded write that fails because of that is counted.
+func (s *Session) MarkRetiring() { s.barrier.MarkRetiring() }
+
+// BeginRetire sets the retire bit and starts the store's refusal count. From then on events the handler would
+// have forwarded are dropped and counted, and the program's own calls to the session are refused and counted.
+// It is idempotent and does not stop anything.
+func (s *Session) BeginRetire() {
+	s.mu.Lock()
+	if s.retireStarted.IsZero() {
+		s.retireStarted = time.Now()
+	}
+	s.retired = true
+	s.mu.Unlock()
+	s.callbackState.Or(1 << 63)
+	s.barrier.MarkRetiring()
+}
+
+// Retire rejects new guarded access, stops the socket and waits for the generation to drain: the library's own
+// Disconnect, then the network fence, then the store barrier. The event handler stays registered until
+// QuietStop removes it.
 func (s *Session) Retire(ctx context.Context) error {
-	s.retireOnce.Do(func() {
-		s.mu.Lock()
-		s.retired = true
-		s.mu.Unlock()
-		s.callbackState.Or(1 << 63)
-		go s.finishRetire()
-	})
+	s.BeginRetire()
+	s.retireOnce.Do(func() { go s.finishRetire() })
 	select {
 	case <-s.retireDone:
 		return s.retireErr
@@ -211,12 +250,15 @@ func (s *Session) FinishRevocation(ctx context.Context, confirmed bool) error {
 
 func (s *Session) finishRetire() {
 	defer close(s.retireDone)
-	s.client.RemoveEventHandler(s.handlerID)
 	s.client.Disconnect()
+	s.step("disconnect")
+	s.fence.Close()
+	s.step("fence_closed")
 	if err := s.barrier.Retire(context.Background()); err != nil {
 		s.retireErr = err
 		return
 	}
+	s.step("barrier_retired")
 	for s.callbackState.Load() != 1<<63 {
 		<-s.callbackDrained
 	}
@@ -226,6 +268,10 @@ func (s *Session) finishRetire() {
 
 // GetQRChannel acquires the upstream pairing channel; it must be called before Connect.
 func (s *Session) GetQRChannel(ctx context.Context) (<-chan whatsmeow.QRChannelItem, error) {
+	if s.isRetired() {
+		s.lateCalls.Add(1)
+		return nil, ErrSessionRetired
+	}
 	return s.client.GetQRChannel(ctx)
 }
 
@@ -322,6 +368,7 @@ func (s *Session) handleEvent(raw any) {
 	for {
 		state := s.callbackState.Load()
 		if state&(1<<63) != 0 {
+			s.countDropped(raw)
 			return
 		}
 		if s.callbackState.CompareAndSwap(state, state+1) {
@@ -356,14 +403,80 @@ func (s *Session) handleEvent(raw any) {
 	}
 }
 
+// countDropped counts an event that would have reached the owner and was dropped after the retire bit. A
+// disconnect is expected after retirement (the server closes after the 515, and the library's own Disconnect
+// emits none); receipts, presence and the like carry no owner state. StreamReplaced is not counted because the
+// session maps it to a disconnect: it is the server ending this connection, not work started by this process.
+func (s *Session) countDropped(raw any) {
+	switch raw.(type) {
+	case *events.Connected, *events.PairSuccess, *events.PairError, *events.LoggedOut,
+		*events.ClientOutdated, *events.ManualLoginReconnect:
+		s.droppedEvents.Add(1)
+	}
+}
+
+// QuietStop decides whether this retired generation stopped quietly. It runs after Retire returned nil. ctx
+// carries the stop bound as its deadline; deadline is the approved observation time, capped at what is left of
+// it. A generation that never attempted Connect returns not_checked and passed. The event handler is removed
+// when the check ends.
+func (s *Session) QuietStop(ctx context.Context, deadline time.Duration) QuietStopResult {
+	defer s.removeHandler()
+	s.mu.Lock()
+	attempted, began := s.accountWork, s.retireStarted
+	s.mu.Unlock()
+	if !attempted {
+		return QuietStopResult{Passed: true, Reason: QuietNotChecked}
+	}
+	if until, ok := ctx.Deadline(); ok {
+		deadline = min(deadline, time.Until(until))
+	}
+	deadline = max(deadline, 0)
+	s.step("observe")
+	count, reason := s.observer().observeQuiet(ctx, deadline)
+	if began.IsZero() {
+		began = time.Now()
+	}
+	return decideQuiet(quietInputs{
+		Observation:   reason,
+		Goroutines:    count,
+		Network:       s.fence.RefusedDials(),
+		Storage:       s.barrier.Refused(),
+		Calls:         s.lateCalls.Load(),
+		Events:        s.droppedEvents.Load(),
+		BoundExceeded: errors.Is(ctx.Err(), context.DeadlineExceeded),
+		Duration:      time.Since(began),
+	})
+}
+
+func (s *Session) removeHandler() {
+	s.handlerOnce.Do(func() {
+		s.client.RemoveEventHandler(s.handlerID)
+		s.step("handler_removed")
+	})
+}
+
+func (s *Session) step(name string) {
+	if s.cfg.trace != nil {
+		s.cfg.trace(name)
+	}
+}
+
 // fetchAppState is the one real app-state call the repair controller makes.
 func (s *Session) fetchAppState(ctx context.Context, name string, full bool) error {
+	if s.isRetired() {
+		s.lateCalls.Add(1)
+		return ErrSessionRetired
+	}
 	return s.client.FetchAppState(ctx, appstate.WAPatchName(name), full, false)
 }
 
 // RunRepairs recovers the pending collections of this generation and refreshes the pending flag.
 // The owner calls it once after a confirmed connection.
 func (s *Session) RunRepairs(ctx context.Context) error {
+	if s.isRetired() {
+		s.lateCalls.Add(1)
+		return ErrSessionRetired
+	}
 	err := s.repair.run(ctx)
 	if remaining, perr := s.barrier.PendingRepairs(ctx); perr == nil {
 		s.pendingRep.Store(len(remaining) > 0)

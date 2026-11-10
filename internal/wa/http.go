@@ -91,15 +91,21 @@ func (b *boundedBody) Read(p []byte) (int, error) {
 }
 func (b *boundedBody) Close() error { return b.source.Close() }
 
+// newDirectTransport is the transport of the bounded clients: it never uses a proxy from the environment and
+// never decompresses transparently, so the body limit counts the bytes actually received.
+func newDirectTransport() *http.Transport {
+	return &http.Transport{
+		Proxy:             nil,
+		DialContext:       (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2: true, DisableCompression: true, MaxIdleConns: 100,
+		IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: 10 * time.Second,
+		ExpectContinueTimeout: time.Second,
+	}
+}
+
 func newBoundedHTTPClient(timeout time.Duration, limit int64, base http.RoundTripper) *http.Client {
 	if base == nil {
-		base = &http.Transport{
-			Proxy:             nil,
-			DialContext:       (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-			ForceAttemptHTTP2: true, DisableCompression: true, MaxIdleConns: 100,
-			IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: 10 * time.Second,
-			ExpectContinueTimeout: time.Second,
-		}
+		base = newDirectTransport()
 	}
 	return &http.Client{
 		Transport: &boundedTransport{base: base, limit: limit}, Timeout: timeout,

@@ -25,3 +25,19 @@ Inspected HEAD `54038813c47f3f351eb6fcaafab0e1b99d676850` (2026-11-02) is seven 
 ## Closure
 
 Close after a reviewed mitigation enforces the accepted policy and retires the exception, or a separately explicit product/constitution process changes the requirement. Renewal or an operator restart is not closure. Preserve historical approvals/evidence and the original threat-model review.
+
+## Update 2026-11-07/08: extension to feature 004
+
+The owner extended E003-RX-01 to feature 004 (same private, local, single-owner deployment; no inheritance by any other
+feature; expiry unchanged at the start of 2026-12-02 UTC; pin `go.mau.fi/whatsmeow v0.0.0-20261027104441-1eec1136a50b`).
+Feature 004 makes repeated long connected runs possible, so its compensating control is a 4-hour soak test on the
+simulator (`TestQuietStopSoak`, T046) and a recheck at code review. Record: `specs/004-shutdown-drain/verification.md`,
+section "E003-RX-01 (implementation start)". The soak run and the code-review recheck are still to be done.
+
+## Update 2026-11-09: new pin
+
+The soak run (T046) was done on 2026-11-08 on the old pin. The pin then moved to upstream `f1b7985`
+(`go.mau.fi/whatsmeow v0.0.0-20261109152745-f1b798561919`), which fixes a `FrameSocket.readPump` goroutine leak. The
+owner extended the exception to the new pin on 2026-11-09 with the same scope, expiry and controls: the 20 upstream
+commits add no receive-resource bounds, so this item stays open unchanged. Record:
+`specs/004-shutdown-drain/verification.md`, section "E003-RX-01 (implementation start)".

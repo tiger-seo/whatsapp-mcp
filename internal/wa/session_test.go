@@ -227,6 +227,49 @@ func newSessionTestConfig(st *store.Store, lifetime context.Context) SessionConf
 	}
 }
 
+// The media and app-state client the library is given must connect directly and keep the bounded profile, even
+// with the fence in front of it: no proxy from the environment, no transparent decompression, verified TLS.
+func TestSessionMediaClientConnectsDirectlyThroughTheFence(t *testing.T) {
+	st := openWADir(t)
+	lifetime, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, err := OpenSession(newSessionTestConfig(st, lifetime))
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	if s.mediaClient.Timeout != 10*time.Second {
+		t.Errorf("timeout = %v", s.mediaClient.Timeout)
+	}
+	bounded, ok := s.mediaClient.Transport.(*boundedTransport)
+	if !ok || bounded.limit != 16<<20 {
+		t.Fatalf("media transport = %T", s.mediaClient.Transport)
+	}
+	gate, ok := bounded.base.(*gateTransport)
+	if !ok || gate.f != s.fence {
+		t.Fatalf("media base transport = %T, want this generation's fence", bounded.base)
+	}
+	base, ok := gate.next.(*http.Transport)
+	if !ok {
+		t.Fatalf("fenced media transport = %T, want an *http.Transport with a dial hook", gate.next)
+	}
+	if base.Proxy != nil {
+		t.Error("media transport follows a proxy (the environment's HTTPS_PROXY would apply)")
+	}
+	if !base.DisableCompression {
+		t.Error("media transport allows transparent decompression")
+	}
+	if base.TLSClientConfig != nil && base.TLSClientConfig.InsecureSkipVerify {
+		t.Error("media transport skips TLS verification")
+	}
+	if base.DialContext == nil {
+		t.Fatal("media transport has no dial hook")
+	}
+	s.fence.Close()
+	if _, err := base.DialContext(context.Background(), "tcp", "127.0.0.1:1"); err == nil || s.fence.RefusedDials() != 1 {
+		t.Errorf("dial after the fence closed: err=%v refused=%d; want refused through the fence", err, s.fence.RefusedDials())
+	}
+}
+
 func TestSessionOpensGuardedDeviceWithReviewedOptions(t *testing.T) {
 	st := openWADir(t)
 	lifetime, cancel := context.WithCancel(context.Background())

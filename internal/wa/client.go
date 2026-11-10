@@ -75,6 +75,10 @@ type Health struct {
 	Ready           bool
 	RecoveryPending bool
 	StorageFault    bool
+	// QuietReason is the category of the first failed quiet-stop check of this run; empty when none failed.
+	QuietReason string
+	// QuietPassed records that at least one generation's quiet-stop check passed and none failed.
+	QuietPassed bool
 }
 
 type Event struct {
@@ -152,8 +156,15 @@ type SessionConfig struct {
 	Versions *VersionProvider
 	// Epoch is the owner epoch this generation belongs to.
 	Epoch uint64
-	// Lifetime is the generation's cancellable context; it is also BackgroundEventCtx.
+	// Lifetime is the generation's work context: the program's own work (device load, repair pass, QR channel).
+	// The owner cancels it on a stop signal and at the start of retirement.
 	Lifetime context.Context
+	// Library is the context the client library gives its detached handlers (BackgroundEventCtx) and the
+	// parent of every Connect attempt. Nothing cancels it before the generation's network and storage are
+	// blocked; nil falls back to Lifetime (tests that do not separate the two).
+	Library context.Context
+	// trace receives the name of each retirement step as it happens; tests only.
+	trace func(step string)
 	// Dispatch receives this generation's admitted upstream events.
 	Dispatch func(epoch uint64, event SessionEvent)
 	// Test-only transport injections; nil uses the approved defaults.

@@ -86,7 +86,7 @@ func (r *ownerRig) waitLog(substr string) {
 // drained (shown by the store closing cleanly afterwards), no Connect follows the pending 515, and
 // no identity is written for a link the phone may already hold.
 func TestSimulatorStopWhileSaveHeldDrainsWithoutIdentity(t *testing.T) {
-	r := newOwnerRig(t, true)
+	r := newOwnerRig(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
 	r.seedChat()
@@ -123,7 +123,7 @@ func TestSimulatorStopWhileSaveHeldDrainsWithoutIdentity(t *testing.T) {
 // Cancelling the window while the Save is held leaves the generation to drain; the pending 515 is
 // never turned into a Connect, even after the lock is released.
 func TestSimulatorCancelWindowWhileSaveHeldMakesNoConnect(t *testing.T) {
-	r := newOwnerRig(t, true)
+	r := newOwnerRig(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
 	r.seedChat()
@@ -150,5 +150,75 @@ func TestSimulatorCancelWindowWhileSaveHeldMakesNoConnect(t *testing.T) {
 	}
 	if r.chatCount() != 1 {
 		t.Error("chat sentinel lost")
+	}
+}
+
+// A pinned handler of the pairing socket that is writing when the stop signal arrives finishes its write: the
+// stop signal reaches only the program's own work, not the context the socket's handlers run with. The Save is
+// still waiting on the database lock when the stop begins, and completes once the lock is released.
+func TestSimulatorStopSignalLetsTheHeldPairingSaveFinish(t *testing.T) {
+	trace := &stepLog{}
+	r := newOwnerRigWith(t, func(cfg *OwnerConfig) { cfg.trace = trace.add })
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+	r.seedChat()
+	h := r.holdPairingSave(ctx)
+	if err := h.conn.SendStreamError(ctx, "515"); err != nil {
+		t.Fatal(err)
+	}
+	r.waitLog("Got 515 code")
+	r.owner.BeginStop()
+	select {
+	case <-r.owner.Done():
+		t.Fatal("stop finished while the pairing Save was still waiting on the lock")
+	case <-time.After(300 * time.Millisecond):
+	}
+	h.release()
+	select {
+	case <-r.owner.Done():
+	case <-time.After(15 * time.Second):
+		t.Fatal("stop did not finish after the lock was released")
+	}
+	if rows := deviceRows(t, r.dir); len(rows) != 1 {
+		t.Errorf("identity rows = %d; the Save that was running when the stop began must complete", len(rows))
+	}
+	if r.log.contains("owner_drain_failed") {
+		t.Error("the barrier took the forced path although the write could finish")
+	}
+	if err := r.owner.StopError(); err == nil {
+		t.Error("an unresolved pairing stopped successfully")
+	}
+	if err := checkRetirementOrder(trace.get()); err != nil {
+		t.Errorf("order %v: %v", trace.get(), err)
+	}
+}
+
+// A drain that does not finish inside its bound takes the forced path: the handlers' context is released, the
+// held write fails, and the stop is unsafe.
+func TestSimulatorHeldSaveBeyondTheDrainBoundForcesTheStop(t *testing.T) {
+	r := newOwnerRigWith(t, func(cfg *OwnerConfig) { cfg.drainBound = 300 * time.Millisecond })
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+	r.seedChat()
+	h := r.holdPairingSave(ctx)
+	if err := h.conn.SendStreamError(ctx, "515"); err != nil {
+		t.Fatal(err)
+	}
+	r.waitLog("Got 515 code")
+	r.owner.BeginStop()
+	select {
+	case <-r.owner.Done():
+	case <-time.After(20 * time.Second):
+		t.Fatal("the forced path did not end the stop")
+	}
+	h.release()
+	if !r.log.contains("owner_drain_failed") {
+		t.Errorf("the forced path was not reported: %v", r.log.lines)
+	}
+	if rows := deviceRows(t, r.dir); len(rows) != 0 {
+		t.Errorf("identity rows = %d; the cancelled Save must not persist an identity", len(rows))
+	}
+	if err := r.owner.StopError(); err == nil {
+		t.Error("a forced stop reported success")
 	}
 }
