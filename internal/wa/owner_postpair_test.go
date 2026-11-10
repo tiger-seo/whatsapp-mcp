@@ -432,16 +432,33 @@ func TestPostPairStopInterleavings(t *testing.T) {
 }
 
 // A restart request the client library lost (the server closed the pairing socket in the same instant): after
-// PairSuccess nothing arrives, not even a disconnect, because the library treats its own close as expected. No
-// fresh generation is opened, the pairing stays unresolved, and the stop keeps the marker unsafe.
+// PairSuccess nothing arrives, not even a disconnect, because the library treats its own close as expected. The
+// wait for it is bounded by the attempt watchdog: then the link ends as incomplete (disconnected, reconnect
+// denied), no fresh generation is opened, the pairing stays unresolved and the stop keeps the marker unsafe. A 515
+// that arrives after that is refused.
 func TestPostPairLostRestartRequestLeavesThePairingUnresolved(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		r := newPostPairRig(t, func(int64, context.Context) error { return nil })
 		r.start(t)
 		r.gen(0).send(SessionPairSuccess)
-		synctest.Sleep(connectWatchdog + time.Minute)
+		synctest.Sleep(connectWatchdog - time.Second)
+		if p := r.o.phaseForTest(); p != PhaseConnecting {
+			t.Fatalf("phase before the watchdog = %v, want connecting", p)
+		}
+		synctest.Sleep(2 * time.Second)
+		if p := r.o.phaseForTest(); p != PhaseDisconnected {
+			t.Fatalf("phase after the watchdog = %v, want disconnected: the link must end as incomplete", p)
+		}
+		if !r.log.contains("reconnect_denied") {
+			t.Errorf("no reconnect_denied diagnostic when the wait for the restart request expired:\n%v", r.log.lines)
+		}
+		r.gen(0).send(SessionManualLoginReconnect)
+		synctest.Sleep(time.Minute)
 		if got := r.count(); got != 1 {
-			t.Errorf("generations = %d, want 1: a lost restart request opened a fresh client", got)
+			t.Errorf("generations = %d, want 1: a lost or late restart request opened a fresh client", got)
+		}
+		if p := r.o.phaseForTest(); p != PhaseDisconnected {
+			t.Errorf("phase after a late 515 = %v, want disconnected", p)
 		}
 		if !r.o.unresolvedForTest() {
 			t.Error("the pairing is resolved although no fresh connection confirmed it")
@@ -451,6 +468,31 @@ func TestPostPairLostRestartRequestLeavesThePairingUnresolved(t *testing.T) {
 		if !r.o.unresolvedForTest() && !r.unsafe() {
 			t.Error("a lost restart request left nothing that keeps the marker unsafe")
 		}
+	})
+}
+
+// A restart request that arrives within the wait after PairSuccess hands over as usual, and the wait's deadline
+// does not end the link later.
+func TestPostPairRestartRequestWithinTheWaitHandsOver(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := newPostPairRig(t, func(int64, context.Context) error { return nil })
+		r.start(t)
+		r.gen(0).send(SessionPairSuccess)
+		synctest.Sleep(connectWatchdog / 2)
+		r.gen(0).send(SessionManualLoginReconnect)
+		synctest.Wait()
+		if got := r.count(); got != 2 || r.gen(1).connectN.Load() != 1 {
+			t.Fatalf("handover: %d generations, %d fresh connects; want 2 and 1", got, r.gen(1).connectN.Load())
+		}
+		r.gen(1).send(SessionConnected)
+		synctest.Sleep(connectWatchdog)
+		if p := r.o.phaseForTest(); p != PhaseConnected {
+			t.Errorf("phase after the wait's deadline passed = %v, want connected", p)
+		}
+		if r.log.contains("reconnect_denied") {
+			t.Errorf("a handover that succeeded logged reconnect_denied:\n%v", r.log.lines)
+		}
+		stopInBubble(t, r.ownerTest)
 	})
 }
 

@@ -146,7 +146,10 @@ type genState struct {
 	// at connecting with no attempt running.
 	refused515 bool // guarded by connectionOwner.mu
 	pending515 *time.Timer
-	reconnects int // post-pair handovers started (or refused) for this generation
+	// await515 bounds the wait for the restart request after PairSuccess. The pinned library can lose a 515 that
+	// arrives as the server closes the pairing socket, and it reports no disconnect for that close.
+	await515   *time.Timer // guarded by connectionOwner.mu
+	reconnects int         // post-pair handovers started (or refused) for this generation
 	// handover records that the server's restart request was accepted: the pairing socket is about to be replaced
 	// by a fresh client, so its remote close must not end the link.
 	handover bool // guarded by connectionOwner.mu
@@ -405,6 +408,7 @@ func (o *connectionOwner) dispatch(epoch uint64, ev SessionEvent) {
 		o.cancelPending515(gen, true)
 	case SessionPairSuccess:
 		o.releasePending515(gen)
+		o.awaitRestartRequest(gen)
 	case SessionManualLoginReconnect:
 		o.tryManualReconnect(gen)
 	}
@@ -1025,10 +1029,44 @@ func (o *connectionOwner) releasePending515(gen *genState) {
 	go o.runPostPairHandover(gen)
 }
 
+// awaitRestartRequest bounds the wait for the server's restart request after PairSuccess with the attempt
+// watchdog. Without it a lost 515 would leave the owner connecting with nothing running and `pair` waiting until
+// it is interrupted.
+func (o *connectionOwner) awaitRestartRequest(gen *genState) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if gen.reconnects > 0 || gen.await515 != nil || gen.retiring || o.stopping || o.gen != gen {
+		return
+	}
+	gen.await515 = time.AfterFunc(connectWatchdog, func() { o.restartRequestExpired(gen) })
+}
+
+// restartRequestExpired ends a link whose restart request never arrived: the pairing stays unresolved, a later
+// 515 is refused, and the command reports that linking could not be completed safely.
+func (o *connectionOwner) restartRequestExpired(gen *genState) {
+	o.mu.Lock()
+	if gen.await515 == nil || gen.reconnects > 0 {
+		o.mu.Unlock()
+		return
+	}
+	gen.await515 = nil
+	gen.reconnects++
+	gen.refused515 = true
+	live := o.gen == gen && !gen.retiring && !o.stopping && !o.health.StorageFault && o.phase != PhaseLoggedOut
+	o.mu.Unlock()
+	if live {
+		o.failPostPair()
+	}
+}
+
 // beginHandoverLocked accepts the server's restart request for a paired generation. The owner is connecting from
 // this moment, before the attempt slot is taken: the server's close of the pairing socket can follow the request
 // within milliseconds, and it must not read as a failed link. Call it with o.mu held.
 func (o *connectionOwner) beginHandoverLocked(gen *genState) {
+	if gen.await515 != nil {
+		gen.await515.Stop()
+		gen.await515 = nil
+	}
 	gen.reconnects++
 	gen.handover = true
 	o.connected = false
