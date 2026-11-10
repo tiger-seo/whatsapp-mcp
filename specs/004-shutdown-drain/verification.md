@@ -717,6 +717,12 @@ phone no longer lists the device after unlinking was not checked by the assistan
   a 515 halfway through the wait hands over and the deadline does not end the link later. The command's output for
   this phase is `TestPairDeniedFollowUpConnectionReportsUnsafeLinking`. `go test ./internal/wa ./cmd/whatsapp-mcp
   -count=1` exit 0 (Windows).
+- Code review of `7893044`: PASS. The reviewer's own runs (Windows, `CGO_ENABLED=0`): `gofmt -l internal cmd` empty,
+  `go vet ./...` 0, `go test -count=1 ./internal/wa ./cmd/whatsapp-mcp` 0, the five cross-builds 0, and with only
+  `owner.go` restored from `2555128` the lost-515 test failed ("phase after the watchdog = connecting"). Open from that
+  review (medium, older than this change, code reading only): `pair` can still wait without a bound when a 515 was
+  refused before a PairSuccess that came more than 30 s later, because `waitSavedConnection` waits for a new event
+  and never reads the current phase. CI for `7893044` follows the push.
 
 ## Not verified
 
@@ -752,3 +758,4 @@ phone no longer lists the device after unlinking was not checked by the assistan
 | code | 2026-11-10 | 8eb8c07 | PASS | |
 | code | 2026-11-10 | d0070ef | PASS | |
 | code | 2026-11-10 | 2555128 | BLOCK | |
+| code | 2026-11-10 | 7893044 | PASS | |
