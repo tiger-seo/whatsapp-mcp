@@ -2,7 +2,7 @@
 
 Phase 0 of the [plan](plan.md). Each entry records a decision, why it was made, and what else was considered. Sources
 were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-20261027104441-1eec1136a50b`,
-`go.mau.fi/util v0.11.0` (its `dbutil`) and `modernc.org/sqlite v1.61.0`, plus `docs/spikes.md` S1 and the code on
+`go.mau.fi/util v0.11.0` (its `dbutil`) and `modernc.org/sqlite v1.61.0`, plus spike S1 (appendix "Spike results" below) and the code on
 `main` (`internal/private`, `internal/config`, `cmd/whatsapp-mcp`).
 
 ## R1. Driver, DSN and pragmas
@@ -124,7 +124,7 @@ were read on 2026-10-28 from the pinned modules: `go.mau.fi/whatsmeow v0.0.0-202
     so SQLite never asks for shared memory.
   - **`-shm`:** it is never read. Its only job is to coordinate live connections, and the preflight runs while
     holding the instance lock, so none exists.
-- **Rationale:** spike S2 (`docs/spikes.md`, 2026-10-28) tried every SQLite read-only mode on Windows and Linux,
+- **Rationale:** spike S2 (appendix "Spike results" below, 2026-10-28) tried every SQLite read-only mode on Windows and Linux,
   using clean, empty-sidecar, crash, torn-frame and restarted-WAL states.
   - `mode=ro` creates or rewrites `-shm` and `-wal` in every state.
   - `readonly_shm=1` is unchanged only when both `-wal` and `-shm` already exist. After a clean close it creates
@@ -446,3 +446,93 @@ unreachable one is recorded as an exception in `verification.md` (Principle V, X
   one index entry with no sort, and the four candidates are compared in Go by the same three keys.
 - **Alternatives:** `soft_heap_limit` alone (advisory; SQLite may exceed it); no limit (the review's finding);
   temporary files on disk (`temp_store(FILE)`), which puts sensitive rows in the system temp directory (R1).
+
+## Appendix: Spike results
+
+Moved here from the local `docs/spikes.md` on 2026-11-10, so the evidence behind R4 and the store's DSN lives in the
+repository. S1 was required by §8.5 of the specification; S2 is this feature's research for R4. The spike programs
+were throwaway code and are not in this repository. Neither spike touched a real WhatsApp account: every device was
+synthetic, with random keys and a made-up JID. S1 ran on 2026-10-27 on Windows 10 with Go 1.27.0,
+`go.mau.fi/whatsmeow v0.0.0-20261027104441-1eec1136a50b` (`go.mau.fi/util v0.11.0`, whatsmeow schema version 16)
+and `modernc.org/sqlite v1.61.0`; S2 gives its own versions.
+
+| Spike | Status (2026-11-10) |
+| --- | --- |
+| S1 | Adopted (`internal/store/store.go`). Rechecked on the pin `f1b7985`: same 15 schema upgrades (version 16), same `PutContactName` order quirk. |
+| S2 | Adopted: the Go WAL overlay is `internal/store/walview.go`, used by the preflight (`internal/store/preflight.go`). |
+
+### S1: whatsmeow `sqlstore` on `modernc.org/sqlite` (§8.5)
+
+**Result: works. Use the dialect name `"sqlite"`.**
+
+- modernc registers its driver as `sqlite`. `dbutil.ParseDialect` treats any name that starts with `sqlite` as
+  SQLite, so `sqlstore.New(ctx, "sqlite", dsn, log)` opens the database and selects the SQLite dialect in one
+  step. `"sqlite3"` fails with `unknown driver "sqlite3"`, because only mattn registers that name.
+- `sqlstore.Upgrade` refuses to run unless `PRAGMA foreign_keys` is on. A DSN that works:
+
+  ```text
+  file:<path>?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate
+  ```
+
+  modernc v1.61 also accepts mattn's `_foreign_keys=on` as an alias. The `_pragma` form is used anyway because
+  it is the documented one. The production write DSN (`writeParams` in `internal/store/store.go`) extends this with
+  `synchronous(FULL)`, `temp_store(MEMORY)`, `journal_size_limit` and `hard_heap_limit`.
+- All migrations ran from an empty file up to version 16.
+- A device was saved, the database closed and reopened, and the device read back:
+  - identical: JID, LID, noise key, identity key, registration ID and ADV secret
+  - read back correctly: sessions, identities, pre-keys (including the uploaded count), sender keys, app-state
+    keys and versions, contacts, LID map, message secrets and chat settings.
+- Concurrency: 16 goroutines each made 100 writes (sessions and pre-keys) to one file with no errors. This was
+  run twice: without `_txlock` it took 5.4 s, and with `_txlock=immediate` 2.3 s. Use `_txlock=immediate`.
+- With `CGO_ENABLED=0` the spike cross-built for all five G1 targets, at about 17 MB each.
+- dbutil's `litestream` subpackage imports mattn/CGO. Never import it.
+- An upstream quirk worth knowing: the `store.ContactStore` interface declares
+  `PutContactName(ctx, user, fullName, firstName)`, but `sqlstore` implements it as `(firstName, fullName)`.
+  The implementation's order is the one that takes effect.
+
+### S2: a read-only preflight that changes no file (feature 002, research R4)
+
+**Result: SQLite's own read-only modes cannot do it. A Go WAL overlay served through `modernc.org/sqlite/vfs`
+can, on every state tested.**
+
+Run on 2026-10-28 with `modernc.org/sqlite v1.61.0` (SQLite 3.54.1), Go 1.27.3, `CGO_ENABLED=0`. Platforms:
+Windows 10 (NTFS, D:) and Linux (WSL2 Ubuntu, kernel 5.15, ext4 in the distribution's own disk). macOS was not
+run: the darwin/arm64 binary builds but there is no Mac here. Throwaway code in `D:\tmp\spike-preflight`.
+
+Each fixture was copied into a fresh directory and opened once; "changed" compares name, size, modification time
+and SHA-256 of every file before and after. A crash was simulated by copying the files while the writer was still
+open (`wal_autocheckpoint(0)`, 100 rows checkpointed into the main file, 50 more committed only in the WAL).
+
+| State on disk | `mode=ro` | `mode=ro&readonly_shm=1` | `mode=ro&immutable=1` | Go overlay VFS |
+| --- | --- | --- | --- | --- |
+| clean close: main only | creates `-wal`(0) and `-shm`(32 KiB) | Windows: creates `-wal`(0) and `-shm`(0). Linux: creates `-wal`(0), then fails "unable to open database file (14)" | right, no change | right, no change |
+| main + empty `-wal` | creates `-shm` | Windows: creates `-shm`(0). Linux: fails (14) | right, no change | right, no change |
+| main + empty `-wal` + empty `-shm` | rewrites `-shm` | right, no change | right, no change | right, no change |
+| crash: main + `-wal` | creates `-shm` | Windows: creates `-shm`(0). Linux: fails (14) | **misses the WAL commits** | right, no change |
+| crash: main + `-wal` + `-shm` | rewrites `-shm` | right, no change | **misses the WAL commits** | right, no change |
+| crash: `-shm` zeroed | rewrites `-shm` | right, no change | **misses the WAL commits** | right, no change |
+| crash: last WAL frame torn | creates `-shm` | Windows: creates `-shm`. Linux: fails (14) | **misses the WAL commits** | right (drops the torn commit), no change |
+| crash: WAL restarted after a checkpoint, stale frames behind | creates `-shm` | Windows: creates `-shm`. Linux: fails (14) | **misses the WAL commits** | right, no change |
+
+- `readonly_shm=1` is only safe when both `-wal` and `-shm` already exist, and it behaves differently on Windows
+  and Linux otherwise. It cannot be the preflight.
+- `immutable=1` never touches a file, and is right exactly when the WAL holds no valid commit.
+- Deserialising the main file plus WAL into memory (`conn.Deserialize`) is right in every state, but holds the
+  whole database in memory: on a 1 GB database with a 4 MB WAL it took 9.7 s and a peak RSS of 3.0 GB (Linux).
+- **The overlay:** an `fs.FS` registered with `vfs.New` (read-only; SQLite can neither write nor create files
+  through it). It exposes one name. Reads of a page committed in the WAL come from memory, other pages from the
+  main file read in place. Bytes 18–19 are presented as `1` (rollback journal), so SQLite never asks for shared
+  memory, and the `-wal` and `-journal` names do not exist in that view. The WAL is replayed in Go like SQLite's
+  recovery:
+  - the header magic chooses the checksum byte order;
+  - a frame counts only if its salts match the header and the running checksum matches;
+  - the first bad frame ends the scan;
+  - pages apply only up to the last commit frame, whose commit field sets the database size in pages.
+
+  On the same 1 GB database it took 2.4 s with a peak RSS of 19 MB. Most of that time is the `count(*)` scan
+  over every page; the real preflight reads only the schema and two version tables. The WAL itself is read
+  whole, so memory grows with the WAL size and not with the database. That is about 80 lines of code. `-shm` is
+  ignored, which is safe only because the preflight runs while holding the instance lock, so no live writer
+  exists.
+- Not verified: macOS, a WAL whose page size differs from the main file's, a database larger than 4 GiB,
+  big-endian WAL checksums (magic `0x377f0683`, written by big-endian hosts only).

@@ -301,7 +301,7 @@ R4, spike S2).
     `st.Device().NewDevice()` + `Save`;
   - `seedContacts(t, st, ...)`, which uses the device's `Contacts`/`LIDs` stores
     (`PutContactName`, `PutPushName`, `PutBusinessName`, `LIDs.PutLIDMapping`). Note the upstream argument order
-    quirk from `docs/spikes.md`: `PutContactName` takes `(firstName, fullName)`;
+    quirk from spike S1 (`research.md`, appendix): `PutContactName` takes `(firstName, fullName)`;
   - `msg(chat, id, sender, t, opts...)`, a builder for messages.
 
 **Checkpoint**: the foundation is ready and both gates are recorded. User stories can start.

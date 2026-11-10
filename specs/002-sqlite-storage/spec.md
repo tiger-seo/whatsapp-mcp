@@ -8,7 +8,7 @@
 
 **Input**: User description: "Create the single SQLite database on modernc.org/sqlite. It holds both the whatsmeow
 device store and our message tables, with versioned embedded migrations and the store operations ingest and tools
-need. See docs/specification.md S1-S6, D18, §3.2 (as the reference for what is stored), docs/spikes.md S1 (dialect
+need. See docs/specification.md S1-S6, D18, §3.2 (as the reference for what is stored), research.md, appendix "Spike results", S1 (dialect
 name and DSN), and docs/roadmap.md feature 002."
 
 **Covers** (`docs/specification.md` §8): S1, S2, S3, S4, S6, D2, D16, D18, the store half of P2 (the `@lid` chat
@@ -880,7 +880,7 @@ case is tested on each platform it covers; one that cannot be run there is recor
 
 - **Settled decisions used as given:** one SQLite file on a pure-Go driver, no PostgreSQL (S1, D2); whatsmeow's
   device store opens on that driver with the dialect name `"sqlite"` and the connection options found in
-  `docs/spikes.md` S1; captions in their own field (D18); no import of earlier data (D16).
+  spike S1 (`research.md`, appendix); captions in their own field (D18); no import of earlier data (D16).
 - **One device at a time:** the process links one WhatsApp account (§8.2), so contact queries read the device store
   of the current device only.
 - **Who decides what is stored:** which WhatsApp messages are worth storing (text or a recognised media type), how
