@@ -22,7 +22,8 @@ verified apart.
 `docs/` except `docs/backlog/` is kept locally. Without it, ask the user for the specification before planning; do not
 infer behaviour from the code. §1–§7 describe the earlier implementation (behaviour to keep), §6 its defects (avoided
 by design), §8 this project; §8.10 holds decisions D1–D18 (settled: do not reopen unless the user asks) and §8.11 the
-feature security decisions. `docs/roadmap.md` orders the features; `docs/spikes.md` holds the spike results.
+feature security decisions. `docs/roadmap.md` orders the features. The storage spikes S1 and S2 are in
+`specs/002-sqlite-storage/research.md` (appendix "Spike results").
 
 ### `specs/NNN-*/`: feature specs
 Every feature so far: 001 binary skeleton, 002 SQLite storage, 003 connection, pairing and status (all merged), 004
