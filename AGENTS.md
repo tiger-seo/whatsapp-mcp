@@ -67,8 +67,10 @@ Add the row it ends with to the "Owner reviews" table in `specs/NNN-*/verificati
 
 ## Current state
 
-Features 001–003 are merged. Feature 004 (shutdown drain) passed its code review (8eb8c07) and is pull request #11,
-waiting for CI. The resume point of a feature in progress is the `## Current state` section of its `tasks.md`.
+Features 001–004 are merged (004, shutdown drain: pull request #11, 2026-11-10). No feature is in progress; the next
+one is in `docs/roadmap.md`. The resume point of a feature in progress is the `## Current state` section of its
+`tasks.md`. The whatsmeow pin is upstream `f1b7985`; the fix for a lost post-pair 515 is upstream PR
+tulir/whatsmeow#1337 (backlog `004-whatsmeow-lost-restart-request.md`).
 E003-RX-01, the receive-resource exception, expires at the start of 2026-12-02 UTC.
 
 ## Commands
