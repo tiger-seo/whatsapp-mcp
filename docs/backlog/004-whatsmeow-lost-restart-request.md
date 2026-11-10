@@ -17,7 +17,7 @@ cancelled, and the library can drop it in two places:
 - `handlerQueueLoop` takes the node from the queue, sees the cancelled context and returns without handling it.
 
 The library treats its own disconnect as expected, so no event arrives either. The owner never starts the fresh
-connection and the link ends after the 30 s watchdog as incomplete: safe (no fresh client, the pairing stays
+connection and the link ends after the 30 s watchdog as incomplete (that bound on the wait after PairSuccess was added in `5728cb9`; before it, `pair` waited until interrupted): safe (no fresh client, the pairing stays
 unresolved, the marker stays unsafe), but the operator has to recover and pair again.
 
 ## Evidence
