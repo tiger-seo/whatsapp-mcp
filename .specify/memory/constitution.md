@@ -62,6 +62,27 @@ or credentials.
   Only resource bounds on specifically identified upstream dependency receive paths may be temporarily
   deferred through an explicitly owner-approved exception under Principle X. Application-owned and
   device-store resource bounds remain mandatory.
+- For the limits in the previous rule, WhatsApp input is what another WhatsApp account can choose:
+  how many messages arrive and how fast, and their size, content, names and media. This holds
+  wherever that content arrives, including inside a history sync: the bytes read and the bytes
+  produced by expanding a history sync are limited, and the messages in it meet the same application
+  limits as live messages.
+- The WhatsApp service and the account's own linked devices are not treated as attackers. What only
+  they can author needs no resource limit and no exception: the structure and compression of protocol
+  frames, server responses and their paging, app-state data, and how a history sync is divided and
+  packaged. This exemption does not remove limits on work, concurrency or retained state that another
+  account can drive through message content, number or rate.
+  Code that this project writes or changes checks the lengths and types of such data before
+  it uses them, so that malformed data returns an error instead of a panic; a panic found in the
+  client library on such data is fixed as a defect. This is a correctness rule, not a resource
+  guarantee and not a claim that the whole library has been audited: it does not promise an error when
+  well-formed data from these parties is simply too large.
+- When the client library drops socket receive data because a limit was reached (frame size, node
+  count, nesting depth or a full handler queue), the connection is closed and the event is reported
+  with a warning that messages may be missing. When a history download or its expansion is rejected
+  at a limit, the incomplete history is reported, but the connection need not be closed. Neither is
+  skipped silently. A limit that drops no received data, such as a cap on retry bookkeeping, needs no
+  disconnect and no report.
 - Sensitive data (the WhatsApp session, the database, secrets, media) lives only in private
   directories and files: owner-only on Unix; on Windows an access list limited to the user, SYSTEM and
   Administrators. Paths are opened without following links and checked on the open handle. An existing
@@ -231,6 +252,16 @@ user from being made inside a feature.
 
 **Amendments:**
 
+- 3.0.0 (2026-11-12): Principle V now says whose input its resource limits are measured against: other
+  WhatsApp accounts and MCP clients, not the WhatsApp service or the account's own devices. Data that
+  only the service or own devices can author needs no resource limit but is still checked for shape.
+  Content written by other accounts stays in scope inside a history sync. A library limit that drops
+  socket receive data closes the connection and is reported; rejected history is reported as incomplete.
+  Reason: feature 005 planning was blocked for a
+  resource ceiling on the whole client library against a hostile server, which no patch set could
+  demonstrate, while the owner does not consider the service an attacker (`docs/security-review.md`,
+  F09 scope decision). This narrows the rule, so it is a redefinition. It approves no dependency
+  revision, numeric limit or exception, and existing verdicts are re-evaluated under the new text.
 - 2.0.0 (2026-11-03): Principles V/X now explicitly permit owner-approved temporary deferral of
   identified upstream receive-resource bounds, with scoped controls, expiry and reassessment gates.
   Application/device-store bounds and all other mandatory protections remain binding. Reason: the
@@ -252,4 +283,4 @@ user from being made inside a feature.
   secret handling and supply-chain rules, replacing the Unix-only "0600" rule; Principle X added. Reason:
   the security review of 2026-10-27 and the hardening of feature 001 that followed it.
 
-**Version**: 2.0.0 | **Ratified**: 2026-10-27 | **Last Amended**: 2026-11-03
+**Version**: 3.0.0 | **Ratified**: 2026-10-27 | **Last Amended**: 2026-11-12
