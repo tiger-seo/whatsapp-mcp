@@ -38,8 +38,9 @@ Branch `005-message-ingest`, planning complete, tasks generated and the cross-ar
 and the second (`1b1d91f`) CONCERNS; the owner approved fork commits `d83e19e` and `bedcf01` (the two phone-request
 gates) and kept the roadmap's history check, and the findings are addressed in the documents and the tasks below.
 The third review (`84dfa32`) returned PASS with three lows; the owner answered T004 and decided the placeholder
-scope, and those edits are applied. T003 is done; T004 waits for the owner's tick. Nothing implemented. Next: a fourth
-owner-judge **design** review of these edits, then `/speckit-implement`. This section is ignored by the review-gate hook.
+scope, and those edits are applied. T003 is done; T004 waits for the owner's tick. The fourth design review (`a040210`) returned PASS with one wording
+low (T004 still names the plan heading "Open questions"; the heading is now "Questions for the design review"; left
+unchanged so the PASS stays current). Nothing implemented. Next: the owner ticks T004, then `/speckit-implement`. This section is ignored by the review-gate hook.
 
 ## Format: `[ID] [P?] [Story] Description`
 
