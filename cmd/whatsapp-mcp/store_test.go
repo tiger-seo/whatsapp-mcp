@@ -142,10 +142,10 @@ func runWith(t *testing.T, dir string, body func(context.Context, *lifecycle, *s
 	var stderr bytes.Buffer
 	s := &streams{stdin: strings.NewReader(""), stdout: &bytes.Buffer{}, stderr: &stderr}
 	cmd := &command{name: "stdio", flags: true}
-	code := runShell("stdio", cmd, []string{"--data-dir", dir}, s, func(ctx context.Context, lc *lifecycle, logger *slog.Logger, st *store.Store, s *streams) bool {
+	code := runShell("stdio", cmd, []string{"--data-dir", dir}, s, func(ctx context.Context, lc *lifecycle, logger *slog.Logger, st *store.Store, s *streams) (*ownerHandle, bool) {
 		body(ctx, lc, logger, st)
 		<-lc.ctx.Done()
-		return false
+		return nil, false
 	})
 	return code, stderr.String()
 }

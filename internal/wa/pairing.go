@@ -127,6 +127,7 @@ func (o *connectionOwner) ensureFreshGeneration() (*genState, error) {
 	o.publishLocked()
 	o.mu.Unlock()
 	o.watchStorageFault(fresh)
+	o.watchIngestFailure(fresh)
 	if fresh.handle.HasIdentity() {
 		o.mu.Lock()
 		o.identity = true

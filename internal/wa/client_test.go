@@ -40,6 +40,7 @@ func (ownerStub) PairingSnapshot() (PairingState, bool)                { return 
 func (ownerStub) CancelPairing()                                       {}
 func (ownerStub) Subscribe(func(Event)) func()                         { return func() {} }
 func (ownerStub) Health() Health                                       { return Health{} }
+func (ownerStub) Terminal() <-chan struct{}                            { return nil }
 
 func TestContractValues(t *testing.T) {
 	length := int64(7)

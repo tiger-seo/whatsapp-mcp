@@ -79,6 +79,11 @@ type Health struct {
 	QuietReason string
 	// QuietPassed records that at least one generation's quiet-stop check passed and none failed.
 	QuietPassed bool
+	// IngestFailed records that message storage failed; the command must stop and the operator restart.
+	IngestFailed bool
+	// ReceiveOverload is the library's reason for the last connection it closed at a receive limit; empty when
+	// none. Messages may be missing.
+	ReceiveOverload string
 }
 
 type Event struct {
@@ -100,6 +105,8 @@ type Owner interface {
 	CancelPairing()
 	Subscribe(func(Event)) func()
 	Health() Health
+	// Terminal closes when the running command must stop because message storage failed.
+	Terminal() <-chan struct{}
 }
 
 // SessionEvent is one admitted upstream event the adapter forwards to the owner.
@@ -113,6 +120,9 @@ const (
 	SessionLoggedOut
 	SessionClientOutdated
 	SessionManualLoginReconnect
+	// SessionReceiveOverload precedes the SessionDisconnected of a connection the library closed at a receive
+	// limit.
+	SessionReceiveOverload
 )
 
 // SessionHandle is the owner's narrow view of one client generation. It is created through a

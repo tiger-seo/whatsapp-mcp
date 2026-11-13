@@ -16,6 +16,7 @@ import (
 	"go.mau.fi/whatsmeow/proto/waCompanionReg"
 	waWa6 "go.mau.fi/whatsmeow/proto/waWa6"
 	wastore "go.mau.fi/whatsmeow/store"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
 )
@@ -59,6 +60,14 @@ type Session struct {
 	handlerOnce   sync.Once
 	// observer builds the quiet-stop observation; tests replace it, production uses the goroutine dump.
 	observer func() quietObserver
+
+	// ingest stores this generation's messages. droppedMessages counts message events the handler dropped after
+	// the retire bit; they are left unacknowledged and reported, and never fail the quiet-stop check.
+	ingest            *ingest
+	droppedMessages   atomic.Uint64
+	handlerWithStatus bool
+	ingestFailed      chan struct{}
+	ingestFailOnce    sync.Once
 
 	mu sync.Mutex
 }
@@ -129,6 +138,7 @@ func OpenSession(cfg SessionConfig) (*Session, error) {
 		callbackDrained: make(chan struct{}, 1),
 		fence:           newFence(),
 		observer:        productionObserver,
+		ingestFailed:    make(chan struct{}),
 	}
 	s.pendingRep.Store(len(pending) > 0)
 	client := whatsmeow.NewClient(dev, walog.New(cfg.Log))
@@ -153,12 +163,34 @@ func OpenSession(cfg SessionConfig) (*Session, error) {
 	client.SetPreLoginHTTPClient(s.fence.HTTPClient(cfg.PreLoginHTTP))
 	client.SetWebsocketHTTPClient(s.fence.HTTPClient(cfg.WebsocketHTTP))
 	client.GetClientPayload = s.handshakePayload
+	// A message is acknowledged only after every handler returned true, so one whose write failed is not
+	// acknowledged. The history notification receipt stays on: the notification itself carries no message.
+	client.SynchronousAck = true
+	client.DisableManualHistorySyncReceipt = false
 	s.client = client
 	s.repair = newRepairController(barrier, s.fetchAppState, cfg.RepairSlot, cfg.Log)
-	s.handlerID = client.AddEventHandler(s.handleEvent)
+	lib := cfg.Library
+	if lib == nil {
+		lib = cfg.Lifetime
+	}
+	s.ingest = newIngest(IngestConfig{
+		Store:  cfg.Store,
+		Client: ingestClientAdapter{client},
+		Log:    cfg.Log,
+		Lib:    lib,
+		Failed: func() { s.ingestFailOnce.Do(func() { close(s.ingestFailed) }) },
+	})
+	barrier.SetMappingObserver(s.ingest.NoteMapping)
+	s.handlerID = client.AddEventHandlerWithSuccessStatus(s.handleEvent)
+	s.handlerWithStatus = true
 	go s.consumeDiagnostics()
 	return s, nil
 }
+
+// ingestClientAdapter gives ingest the library calls it needs and nothing else.
+type ingestClientAdapter struct{ *whatsmeow.Client }
+
+func (a ingestClientAdapter) OwnJID() types.JID { return a.Store.GetJID().ToNonAD() }
 
 func (s *Session) Epoch() uint64         { return s.epoch }
 func (s *Session) HasIdentity() bool     { return s.hasID }
@@ -262,8 +294,14 @@ func (s *Session) finishRetire() {
 	for s.callbackState.Load() != 1<<63 {
 		<-s.callbackDrained
 	}
+	// Ingest workers that outlived the bounded wait are joined now: storage is blocked, so a device write they
+	// attempt is refused and counted, and the library context is still live.
+	s.ingest.Stop()
+	_ = s.ingest.Wait(context.Background())
+	s.step("ingest_joined")
 	close(s.diagnosticStop)
 	<-s.diagnosticDone
+	s.ingest.logStopped(s.droppedMessages.Load())
 }
 
 // GetQRChannel acquires the upstream pairing channel; it must be called before Connect.
@@ -363,13 +401,22 @@ func (s *Session) consumeDiagnostics() {
 	}
 }
 
-// handleEvent maps pinned upstream events to the owner's admitted dispatch.
-func (s *Session) handleEvent(raw any) {
+// IngestFailed closes when this generation's ingest has failed terminally.
+func (s *Session) IngestFailed() <-chan struct{} { return s.ingestFailed }
+
+// StopIngest stops the ingest workers at their next checkpoint (retirement step 4).
+func (s *Session) StopIngest() { s.ingest.Stop() }
+
+// WaitIngest waits for the ingest workers, up to ctx (retirement step 5).
+func (s *Session) WaitIngest(ctx context.Context) error { return s.ingest.Wait(ctx) }
+
+// handleEvent maps pinned upstream events to the owner's admitted dispatch and stores messages. Its result is the
+// library's success status: false leaves a message unacknowledged.
+func (s *Session) handleEvent(raw any) bool {
 	for {
 		state := s.callbackState.Load()
 		if state&(1<<63) != 0 {
-			s.countDropped(raw)
-			return
+			return s.countDropped(raw)
 		}
 		if s.callbackState.CompareAndSwap(state, state+1) {
 			break
@@ -383,7 +430,15 @@ func (s *Session) handleEvent(raw any) {
 			}
 		}
 	}()
-	switch raw.(type) {
+	switch ev := raw.(type) {
+	case *events.Message:
+		return s.ingest.HandleMessage(ev)
+	case *events.UndecryptableMessage:
+		// A placeholder for a message this device was not sent, for example a view-once message. It is
+		// acknowledged; with phone re-requests off, nothing asks the phone for its content.
+		if ev.IsUnavailable {
+			s.ingest.NoteUnavailable()
+		}
 	case *events.Connected:
 		s.cfg.Dispatch(s.epoch, SessionConnected)
 	case *events.Disconnected:
@@ -401,18 +456,26 @@ func (s *Session) handleEvent(raw any) {
 	case *events.StreamReplaced:
 		s.cfg.Dispatch(s.epoch, SessionDisconnected)
 	}
+	return true
 }
 
 // countDropped counts an event that would have reached the owner and was dropped after the retire bit. A
 // disconnect is expected after retirement (the server closes after the 515, and the library's own Disconnect
 // emits none); receipts, presence and the like carry no owner state. StreamReplaced is not counted because the
 // session maps it to a disconnect: it is the server ending this connection, not work started by this process.
-func (s *Session) countDropped(raw any) {
-	switch raw.(type) {
+// A message event is counted apart and returns false, so it is not acknowledged: it holds no session state and
+// this process did not start it, but it may be missing from the store.
+func (s *Session) countDropped(raw any) bool {
+	switch ev := raw.(type) {
+	case *events.Message:
+		s.droppedMessages.Add(1)
+		s.ingest.NoteDropped(ev)
+		return false
 	case *events.Connected, *events.PairSuccess, *events.PairError, *events.LoggedOut,
 		*events.ClientOutdated, *events.ManualLoginReconnect:
 		s.droppedEvents.Add(1)
 	}
+	return true
 }
 
 // QuietStop decides whether this retired generation stopped quietly. It runs after Retire returned nil. ctx
@@ -424,8 +487,9 @@ func (s *Session) QuietStop(ctx context.Context, deadline time.Duration) QuietSt
 	s.mu.Lock()
 	attempted, began := s.accountWork, s.retireStarted
 	s.mu.Unlock()
+	dropped := s.droppedMessages.Load() + s.ingest.Counters().DroppedMessages
 	if !attempted {
-		return QuietStopResult{Passed: true, Reason: QuietNotChecked}
+		return QuietStopResult{Passed: true, Reason: QuietNotChecked, DroppedMessages: dropped}
 	}
 	if until, ok := ctx.Deadline(); ok {
 		deadline = min(deadline, time.Until(until))
@@ -436,7 +500,7 @@ func (s *Session) QuietStop(ctx context.Context, deadline time.Duration) QuietSt
 	if began.IsZero() {
 		began = time.Now()
 	}
-	return decideQuiet(quietInputs{
+	res := decideQuiet(quietInputs{
 		Observation:   reason,
 		Goroutines:    count,
 		Network:       s.fence.RefusedDials(),
@@ -446,6 +510,8 @@ func (s *Session) QuietStop(ctx context.Context, deadline time.Duration) QuietSt
 		BoundExceeded: errors.Is(ctx.Err(), context.DeadlineExceeded),
 		Duration:      time.Since(began),
 	})
+	res.DroppedMessages = dropped
+	return res
 }
 
 func (s *Session) removeHandler() {

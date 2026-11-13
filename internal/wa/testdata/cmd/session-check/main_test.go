@@ -62,11 +62,12 @@ func (s *scripted) Start(context.Context) error {
 	}
 	return nil
 }
-func (s *scripted) BeginStop()            { s.stopOnce.Do(func() { close(s.done) }) }
-func (s *scripted) Done() <-chan struct{} { return s.done }
-func (s *scripted) StopError() error      { return s.stopErr }
-func (s *scripted) Snapshot() wa.Status   { s.mu.Lock(); defer s.mu.Unlock(); return s.status }
-func (s *scripted) Health() wa.Health     { return wa.Health{} }
+func (s *scripted) BeginStop()                { s.stopOnce.Do(func() { close(s.done) }) }
+func (s *scripted) Done() <-chan struct{}     { return s.done }
+func (s *scripted) StopError() error          { return s.stopErr }
+func (s *scripted) Snapshot() wa.Status       { s.mu.Lock(); defer s.mu.Unlock(); return s.status }
+func (s *scripted) Health() wa.Health         { return wa.Health{} }
+func (s *scripted) Terminal() <-chan struct{} { return nil }
 func (s *scripted) CancelPairing() {
 	s.cancels.Add(1)
 	s.mu.Lock()
