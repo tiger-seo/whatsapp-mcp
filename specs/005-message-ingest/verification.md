@@ -440,6 +440,31 @@ No kind is lower than feature 004's recorded rate, so the gate before the user s
   A live write registers itself as waiting and a worker gives way to it before each flush, so a waiting live write
   always goes first.
 
+## US3 tests and implementation (T041–T043)
+
+- **Expected failures (T041)**, 2026-11-13, Windows 10, `CGO_ENABLED=0`. `go test -count=1 -run
+  'TestIngestLID|TestOwnerHands' ./internal/wa` and `go test -count=1 -run Reconcile ./cmd/whatsapp-mcp`: exit 1,
+  missing symbols (`ingest.hintRetry`, `lidLookup`, `hintAttempts`, `ingestStore.PhoneForLID`, `ownerDeps.reconcileFrom`,
+  `wa.ReconcileLIDs`, `wa.LIDMergeStore`, `startupReconcile`). The first run after T042–T043 failed in the tests'
+  own setup ("device storage is not ready": the device was loaded but never saved); the tests now save it first.
+- **After T042–T043**, same date: the same two runs exit 0 (7.8 s, 4.2 s); `go test -count=3 -run
+  'TestIngestLID|TestOwnerHands' ./internal/wa` exit 0; `go test -count=1 -timeout 30m ./internal/wa/
+  ./internal/wasim/ ./cmd/whatsapp-mcp/` exit 0 (55.7 s, 2.1 s, 125.1 s).
+- **Results**: a mapped chat or sender LID is stored under the phone JID with its phone; an unmapped one stays a LID;
+  a lookup error or deadline keeps the LID within the deadline; a mapping written during the run merges without a
+  restart, a hint whose mapping is not visible yet is retried and merged, and dropped after 5 attempts; Stop during
+  a retry wait ends the worker at once; a failed merge logs `lid_merge_failed` with escaped JIDs, is counted and is
+  not terminal; an unchanged upsert produces no lookup; a remap logs `lid_reassigned` with old and new phones; the
+  hint set stays at 1,024 and counts drops; a mapping merged between the first lookup and the write is seen by the
+  re-lookup under the lock, live and in history; 250 unresolvable LIDs in one flush hold the lock under one
+  deadline; the startup pass merges a LID chat (the phone chat's copy of a shared message wins) and a group-only
+  sender before the owner starts, the second start merges nothing, an unmapped LID is untouched, a failed merge
+  leaves both sides; an exhausted pass hands its cursor through `OwnerConfig` to the first generation, whose worker
+  merges the rest.
+- **Design notes**: `lid_reconcile` reports `status` (`completed`, `budget_exhausted`, or `incomplete` when a page
+  read failed with budget left), `merged`, `failed` and `skipped` (a mapping the store refused as invalid). The store
+  open and the pass share one 10-minute startup budget in `runShell`.
+
 ## Owner Reviews
 
 | Stage | Date | Commit | Verdict | Owner decision |

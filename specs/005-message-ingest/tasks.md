@@ -309,11 +309,11 @@ and ingest events with and without mappings.
 
 ### Tests for User Story 3 (write first, observe failing)
 
-- [ ] T038 [P] [US3] Write `internal/wa/ingest_lid_test.go` normalisation cases: a mapped chat LID and a mapped sender LID
+- [X] T038 [P] [US3] Write `internal/wa/ingest_lid_test.go` normalisation cases: a mapped chat LID and a mapped sender LID
   are replaced by the phone JID and the sender phone is filled; an unmapped LID is kept and its phone is empty; a
   lookup that exceeds "2 s", returns an error or is cancelled keeps the LID and is not treated as "no mapping"
   elsewhere; normalisation applies to live and history alike.
-- [ ] T039 [P] [US3] Write run-time merge cases in `internal/wa/ingest_lid_test.go`: a `NoteMapping` for a LID with stored
+- [X] T039 [P] [US3] Write run-time merge cases in `internal/wa/ingest_lid_test.go`: a `NoteMapping` for a LID with stored
   messages merges them through `MergeLID` without a restart; a mapping not yet visible is retried "5 attempts 1 s
   apart" and merged once it commits, else dropped and counted `hintsDropped`, and `Stop` during those retries ends the
   worker within one attempt; a failed merge logs `lid_merge_failed`; a flush with 250 distinct unmapped LIDs and a slow
@@ -328,22 +328,22 @@ and ingest events with and without mappings.
   logs `lid_reassigned` with the escaped LID and the old and new phone JIDs from `NoteMapping`, and undoes nothing; given a startup cursor, the worker pages on from it with
   `MappedLIDsWithData` (200 per page) between hints until the table is done, and stops at a checkpoint between
   merges.
-- [ ] T040 [P] [US3] Write `cmd/whatsapp-mcp/reconcile_test.go` for the startup pass: before the owner opens a
+- [X] T040 [P] [US3] Write `cmd/whatsapp-mcp/reconcile_test.go` for the startup pass: before the owner opens a
   generation, mapped LID chats and group-only LID senders are merged through `MappedLIDsWithData` pages of 200; the
   phone chat's duplicate wins and names and latest times follow feature 002 (SC-004); a second startup merges nothing;
   an unmapped LID and a merge that fails are left intact and reported in `lid_reconcile`; an exhausted startup budget
   stops the pass with `budget_exhausted`, the command still starts, and the first generation's reconcile worker
   receives the cursor and merges the rest without a restart.
-- [ ] T041 [US3] Run T038–T040 and record the expected failures in `verification.md`.
+- [X] T041 [US3] Run T038–T040 and record the expected failures in `verification.md`.
 
 ### Implementation for User Story 3
 
-- [ ] T042 [US3] Create `internal/wa/ingest_lid.go`: normalisation through `store.PhoneForLID` with a 2 s deadline, used
+- [X] T042 [US3] Create `internal/wa/ingest_lid.go`: normalisation through `store.PhoneForLID` with a 2 s deadline, used
   by `HandleMessage` and the history worker before validation, and the re-lookup of still-unmapped LIDs under the
   ingest lock before each write or flush; the hint set ("1,024 LIDs", deduplicated), the
   reconcile worker with its retries, checkpoints and the startup cursor continuation, `MergeLID` under the ingest lock, and the `lid_reassigned` log.
   Implement `NoteMapping`. Make T038 and T039 pass.
-- [ ] T043 [US3] Add the startup reconciliation to `cmd/whatsapp-mcp/commands.go` for `serve` and `stdio`, after the run
+- [X] T043 [US3] Add the startup reconciliation to `cmd/whatsapp-mcp/commands.go` for `serve` and `stdio`, after the run
   guard and before `attachOwner`, under the remaining startup budget, logging `lid_reconcile` (merged, failed,
   skipped, completed or `budget_exhausted`), and pass a `budget_exhausted` cursor to the owner for the first
   generation's reconcile worker. A failure never stops the command. Make T040 pass.
