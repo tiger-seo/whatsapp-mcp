@@ -262,7 +262,7 @@ resulting records.
 
 ### Tests for User Story 2 (write first, observe failing)
 
-- [ ] T033 [P] [US2] Write `internal/wa/ingest_history_test.go` with the fake client: a history notification from the
+- [X] T033 [P] [US2] Write `internal/wa/ingest_history_test.go` with the fake client: a history notification from the
   account's own device is queued and `HandleMessage` returns `true`; one from another sender is ignored; the queue
   holds "8 notifications" and the ninth is reported `history_incomplete` (`queue_full`) without a disconnect; the
   worker calls `DownloadHistorySync` with synchronous storage and the library context; each history message goes
@@ -273,23 +273,23 @@ resulting records.
   between flushes, and a live write waiting on it runs before the next flush; a message without a timestamp is
   rejected and its neighbours are stored; a conversation's display name or name is offered once per batch as
   `NameReal`; history never calls `Live`.
-- [ ] T034 [P] [US2] Write failure cases in `internal/wa/ingest_history_test.go`: `ErrHistorySyncTooLarge`, a download
+- [X] T034 [P] [US2] Write failure cases in `internal/wa/ingest_history_test.go`: `ErrHistorySyncTooLarge`, a download
   error and a parse error each report `history_incomplete` with the reason (`too_large`, `download`, `parse`), the
   chunk order and sync type, and keep the connection and ingest `running`; a store error on the second batch keeps
   the first batch, reports `ingest_failed` with operation `history` and the messages committed from the chunk, makes
   ingest `failed` and claims nothing complete; a live message newer than the history keeps the chat's last activity
   for every arrival order (SC-003).
-- [ ] T035 [P] [US2] Write retirement cases in `internal/wa/ingest_history_test.go` and `internal/wa/quiet_order_test.go`:
+- [X] T035 [P] [US2] Write retirement cases in `internal/wa/ingest_history_test.go` and `internal/wa/quiet_order_test.go`:
   `Stop` is observed before each download, between conversations and before each flush; a worker blocked inside
   `DownloadHistorySync` at step 5 is not cancelled by the work context, is joined after step 8, and a device write it
   attempts after the barrier is refused and counted, so the check fails with `storage_refused` (the honest outcome,
   R11); no message-store write happens after the worker was joined; notifications still queued at `Stop`, and a
   history notification that arrives after the retire bit, are each reported `history_incomplete` (`stopped`).
-- [ ] T036 [US2] Run T033–T035 and record the expected failures in `verification.md`.
+- [X] T036 [US2] Run T033–T035 and record the expected failures in `verification.md`.
 
 ### Implementation for User Story 2
 
-- [ ] T037 [US2] Create `internal/wa/ingest_history.go`: the history queue ("8 notifications"), the single worker, the
+- [X] T037 [US2] Create `internal/wa/ingest_history.go`: the history queue ("8 notifications"), the single worker, the
   download with synchronous storage under `Lib`, conversion through `ParseWebMessage` and `ingest_extract.go`, flushes
   cut at "250 messages or 4 MiB of field bytes" with one `StoreMessages` and one `UpdateChats` per flush under the
   ingest lock, released between flushes, the checkpoints, and the `history_incomplete` and `ingest_failed` reports. Add history step 2 to `HandleMessage`. Make

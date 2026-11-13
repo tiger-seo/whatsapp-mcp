@@ -418,6 +418,28 @@ No kind is lower than feature 004's recorded rate, so the gate before the user s
 - **Design note**: ingest escapes chat JIDs and message IDs in warnings with `strconv.QuoteToASCII`; the store has no
   exported escaping helper.
 
+## US2 tests and implementation (T036–T037)
+
+- **Expected failures (T036)**, 2026-11-13, Windows 10, `CGO_ENABLED=0`. `go test -count=1 -run
+  'TestIngestHistory|TestHistoryWorker' ./internal/wa`: first exit 1 with missing symbols (`IngestConfig.afterHistory`,
+  `ingest.liveWaiting`); with those added and no history worker, exit 1 (186.1 s): every history test timed out
+  waiting for the worker or for the download to start. A first run hung because two waits had no deadline; every
+  wait in these tests is now bounded.
+- **After T037**, same date: `go test -count=1 -timeout 5m -run 'TestIngest|TestHistoryWorker|TestSession'
+  ./internal/wa` exit 0 (72.7 s); `go test -count=5 -run TestIngestHistory ./internal/wa` exit 0 (24.5 s); `go test
+  -count=1 -timeout 30m ./internal/wa/ ./internal/wasim/ ./cmd/whatsapp-mcp/` exit 0 (85.6 s, 3.6 s, 154.5 s).
+- **Results**: own notifications only are queued (8), the ninth waiting one is reported `queue_full`; downloads are
+  synchronous under the library context; history uses the library's own `ParseWebMessage` and the live sender rules;
+  a bare edit never overwrites the original in either order; 600 messages flush as 250, 250, 100 with the
+  conversation name offered once per flush as a real name; 200 KiB messages cut at 20 (under 4 MiB); a waiting live
+  write goes between two flushes; too-large, download and parse failures are reported and not terminal; a store
+  error on the second flush keeps the first 250 and reports `committed=250`; last activity never moves back; Stop is
+  observed before downloads, between conversations and before flushes; a worker held inside the download is joined
+  after the barrier and its device write is refused, so the check reports `storage_refused`.
+- **Design note**: the ingest lock is a one-slot channel, not a `sync.Mutex`, which does not serve waiters in order.
+  A live write registers itself as waiting and a worker gives way to it before each flush, so a waiting live write
+  always goes first.
+
 ## Owner Reviews
 
 | Stage | Date | Commit | Verdict | Owner decision |
