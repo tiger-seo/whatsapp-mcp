@@ -392,6 +392,32 @@ yet committed), pin `bedcf01`. `WA_MEASURE=1 CGO_ENABLED=0 go test ./internal/wa
 
 No kind is lower than feature 004's recorded rate, so the gate before the user stories is met.
 
+## US1 tests and implementation (T029–T032)
+
+- **Expected failures (T029)**, 2026-11-13, Windows 10, `CGO_ENABLED=0`. `go test -count=1 -run
+  'TestIngestExtract|TestIngestIgnores|TestIngestRejects|TestIngestLive|TestSimulatorIngest' ./internal/wa`: exit 1,
+  first with missing symbols (`extractMessage`, `ingestStore`, `IngestConfig.store`, `SessionConfig.wrapIngestStore`).
+  With the two test seams and a stub `extractMessage` that marks nothing eligible, the same run (exit 1, 138.5 s)
+  failed on assertions: text, media and wrapped messages "not eligible"; every rejected case counted as ignored;
+  nothing stored for the live senders, duplicates and the `Live` callback; a failed write returned `true`; on the
+  simulator the text was acknowledged but not stored, the terminal signal never closed after a failed write, and the
+  held handler never reached the store. `TestSimulatorIngestSendsNothingToThePhoneForOtherAccounts` passed against
+  the stub, as expected: it checks the pin's configuration, not new code.
+- **Simulator peer**: `internal/wasim/peer.go` sends end-to-end encrypted messages as another account. It starts a
+  Signal session from the linked device's signed prekey (no one-time prekey), so the pinned library decrypts a real
+  `pkmsg` and runs the session's handler. It also sends undecryptable stanzas and `unavailable` placeholders.
+- **After T030–T032**, same date: `go test -count=1 -run TestIngest ./internal/wa` exit 0 (3.8 s); `go test -count=1
+  -run 'TestSimulatorIngest|TestSession|TestOwnerTerminal|TestOwnerHealth' ./internal/wa` exit 0 (7.9 s); `go test
+  -count=1 -timeout 30m ./internal/wa/ ./internal/wasim/ ./cmd/whatsapp-mcp/` exit 0 (88.8 s, 5.8 s, 146.9 s).
+- **Simulator results**: a text and a captioned image are stored (caption apart from text) and receive delivery
+  receipts; with the store failing, the message gets no receipt or ack, `Terminal()` closes, `Health().IngestFailed`
+  is set and the stop leaves the marker clean; an undecryptable stanza gets one retry receipt and one ack, a
+  `view_once` placeholder one ack and no receipt, the client sends no `message` node, and `unavailable` is 1; with the
+  handler held, 2,100 queued receipts close the connection with one `receive_overload` (`item_limit`, "messages may
+  be missing"), `Health().ReceiveOverload` is `item_limit` and there is no further dial.
+- **Design note**: ingest escapes chat JIDs and message IDs in warnings with `strconv.QuoteToASCII`; the store has no
+  exported escaping helper.
+
 ## Owner Reviews
 
 | Stage | Date | Commit | Verdict | Owner decision |

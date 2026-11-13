@@ -208,7 +208,7 @@ real account.
 
 ### Tests for User Story 1 (write first, observe failing)
 
-- [ ] T026 [P] [US1] Write `internal/wa/ingest_extract_test.go`: text from `Conversation`, else
+- [X] T026 [P] [US1] Write `internal/wa/ingest_extract_test.go`: text from `Conversation`, else
   `ExtendedTextMessage.Text`; image, video and document with caption in `Caption` and never in `Text`; audio without a
   caption; URL, direct path, media key, file SHA-256, encrypted SHA-256, length, MIME type and the document file name
   copied; view-once and ephemeral wrappers and `DocumentWithCaptionMessage` stored as their inner type; an event with
@@ -217,7 +217,7 @@ real account.
   eligible message with a zero time, a time outside "2000-01-01 to 2100-01-01 UTC", an empty or over-256-byte ID, a
   sender absent or not a user or LID JID, a 32-byte field of another length or text over "256 KiB" is `rejected`,
   never repaired, and nothing is written.
-- [ ] T027 [P] [US1] Write `internal/wa/ingest_live_test.go` with the fake client and a temporary store: an own message's
+- [X] T027 [P] [US1] Write `internal/wa/ingest_live_test.go` with the fake client and a temporary store: an own message's
   sender is the account's phone JID; a group message's sender is `Info.Sender` with the device part dropped; a direct
   message's sender is the chat's user; a duplicate `(chat, ID)` leaves one row and keeps non-empty media metadata as
   feature 002 does; the same ID in two chats gives two rows; `HandleMessage` returns `true` for stored, ignored and
@@ -225,7 +225,7 @@ real account.
   counted; the `ingest_failed` warning carries the operation `live`, the error class and the escaped chat JID and
   message ID, and no text or caption; `ErrIndeterminate` is reported as "may or may not be stored"; `Live` is called
   once per committed live message with the stored record and never for an ignored or rejected one.
-- [ ] T028 [P] [US1] Write `internal/wa/wasim_ingest_test.go` on the simulator: a text and a captioned image sent to the
+- [X] T028 [P] [US1] Write `internal/wa/wasim_ingest_test.go` on the simulator: a text and a captioned image sent to the
   account are stored and acknowledged; with the store made to fail, the message is not acknowledged (assert on the
   simulator's received acks, extending `internal/wasim` to record them if needed), the owner's `Terminal()` closes and
   the stop passes its quiet check; a stanza from another account that cannot be decrypted produces one retry receipt
@@ -233,16 +233,16 @@ real account.
   `view_once` produces one acknowledgement, **no** message to the phone and an `unavailable` count of 1 (assert on
   every node the simulator receives); a full handler queue (the fork's 2,048 items, driven by a blocked handler) logs
   one `receive_overload` with reason `item_limit`, sets `Health().ReceiveOverload`, and no reconnect follows.
-- [ ] T029 [US1] Run T026–T028 and record the expected failures in `verification.md`.
+- [X] T029 [US1] Run T026–T028 and record the expected failures in `verification.md`.
 
 ### Implementation for User Story 1
 
-- [ ] T030 [US1] Create `internal/wa/ingest_extract.go`: eligibility and field extraction from `*events.Message` into
+- [X] T030 [US1] Create `internal/wa/ingest_extract.go`: eligibility and field extraction from `*events.Message` into
   `store.Message` per data-model "Message", then `store.ValidateMessage`. Make T026 pass.
-- [ ] T031 [US1] Implement live `HandleMessage` steps 1, 3, 4, 5 and 7 of contracts/ingest.md in `internal/wa/ingest.go`
+- [X] T031 [US1] Implement live `HandleMessage` steps 1, 3, 4, 5 and 7 of contracts/ingest.md in `internal/wa/ingest.go`
   (no LID normalisation and no name offer yet: chat and sender are stored as supplied, device part dropped). The write
   takes the ingest lock. Make T027 pass.
-- [ ] T032 [US1] Read `client.LatestReceiveQueueOverload()` on `*events.Disconnected` in `internal/wa/session.go`, log
+- [X] T032 [US1] Read `client.LatestReceiveQueueOverload()` on `*events.Disconnected` in `internal/wa/session.go`, log
   `receive_overload` once with the fork's reason and "messages may be missing", dispatch `SessionReceiveOverload`
   before `SessionDisconnected`, and record the reason for `Health().ReceiveOverload` in `internal/wa/owner.go`. Make
   T028 pass.
