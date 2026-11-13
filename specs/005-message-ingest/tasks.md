@@ -98,94 +98,94 @@ terminal signal, and the command's exit on a terminal failure. Depends on T003 a
 
 ### Tests (write first, observe failing)
 
-- [ ] T005 [P] Add to `internal/store/validate_test.go` cases for `ValidateMessage` and `MessageFieldBytes`: for each
+- [X] T005 [P] Add to `internal/store/validate_test.go` cases for `ValidateMessage` and `MessageFieldBytes`: for each
   field of `store.Message`, a value that `StoreMessages` rejects is rejected by `ValidateMessage` with the same field
   name, and one that it accepts is accepted (table shared with the existing `StoreMessages` validation cases);
   `MessageFieldBytes` equals the charge `StoreMessages` makes, so a batch of messages summing to exactly 16 MiB is
   accepted and one byte more is `ErrResourceLimit`. Error text never contains the field value.
-- [ ] T006 [P] Write `internal/store/lids_test.go`: `PhoneForLID` returns the mapped phone JID, `ok == false` for no
+- [X] T006 [P] Write `internal/store/lids_test.go`: `PhoneForLID` returns the mapped phone JID, `ok == false` for no
   mapping, a `*ValidationError` for a JID not on `@lid`, the caller's context error on cancel, `ErrClosed` after
   `Close`; `MappedLIDsWithData(ctx, afterLID, limit)` returns "up to limit (1..200) mappings whose LID is greater than
   afterLID, in key order, and that have a chat or a message sender stored under the LID", rejects limit 0 and 201,
   skips mappings with no data, and pages through 1,000 mappings without repeats or gaps while new mappings are
   inserted between pages.
-- [ ] T007 [P] Add to `internal/store/contacts_test.go` cases for `ContactNames`: saved is full name, else first name;
+- [X] T007 [P] Add to `internal/store/contacts_test.go` cases for `ContactNames`: saved is full name, else first name;
   real is push name, else business name; empty strings when absent; names over 1 KiB in the device table are
   returned as a `ErrResourceLimit`, not truncated silently; only the current device's rows are read.
-- [ ] T008 [P] Add to `internal/store/device_lids_test.go` cases: after a successful `PutLIDMapping` or
+- [X] T008 [P] Add to `internal/store/device_lids_test.go` cases: after a successful `PutLIDMapping` or
   `PutManyLIDMappings` through the guarded device store, the registered mapping observer receives each **changed**
   LID exactly once with its previous phone JID ("" for a new row) and its new one; an upsert that leaves the row
   unchanged notifies nothing (the library repeats it for almost every LID-addressed message); a failed or refused write notifies nothing; the observer is called after the write returns and
   never while a store lock is held; a nil observer is allowed.
-- [ ] T009 [P] Extend `internal/wa/quiet_test.go` `TestQuietAllowListPin`: when `go.mod` has a `replace` for
+- [X] T009 [P] Extend `internal/wa/quiet_test.go` `TestQuietAllowListPin`: when `go.mod` has a `replace` for
   `go.mau.fi/whatsmeow`, the version compared is the replacement's (research R15); add a table test of the parser on
   `go.mod` texts with and without a replace.
-- [ ] T010 [P] Write `internal/wa/ingest_test.go` skeleton cases with the fake client (new file
+- [X] T010 [P] Write `internal/wa/ingest_test.go` skeleton cases with the fake client (new file
   `internal/wa/ingest_fake_test.go`): states follow data-model "Ingest state transitions" exactly (`running` →
   `failed` on a message-store error; `running` or `failed` → `retiring` at the retire bit; `retiring` → `stopped` when
   joined; never back to `running`); `Stop` is idempotent and never blocks; `Wait` returns when the workers return
   and returns the context error at its deadline; `Failed` is called exactly once; counters start at zero and are
   monotonic; a context error caused by the generation's own retirement does not make ingest `failed`.
-- [ ] T011 [P] Write `internal/wa/session_ingest_test.go`: the session registers its handler with
+- [X] T011 [P] Write `internal/wa/session_ingest_test.go`: the session registers its handler with
   `AddEventHandlerWithSuccessStatus` and sets `SynchronousAck = true`, `ManualHistorySyncDownload = true`,
   `DisableManualHistorySyncReceipt = false`, and leaves feature 004's settings unchanged; owner events return `true`
   and dispatch as before; after the retire bit a message event returns `false`, increments `DroppedMessages`, does
   not touch the store and does not increment the owner-event drop count; an `UndecryptableMessage` with
   `IsUnavailable` returns `true` and increments `unavailable`; `IngestFailed()` closes when ingest fails.
-- [ ] T012 [P] Extend `internal/wa/quiet_order_test.go` with the ingest steps: `ingest.Stop()` happens at step 4,
+- [X] T012 [P] Extend `internal/wa/quiet_order_test.go` with the ingest steps: `ingest.Stop()` happens at step 4,
   `ingest.Wait` waits at most 2 s at step 5, workers still running are joined after step 8 and before step 9, and no
   step of feature 004 moves (the existing assertions keep passing). `QuietStopResult.DroppedMessages` is reported and
   never makes `Passed` false.
-- [ ] T013 [P] Write `internal/wa/owner_terminal_test.go`: `Terminal()` closes once on an ingest failure and not on
+- [X] T013 [P] Write `internal/wa/owner_terminal_test.go`: `Terminal()` closes once on an ingest failure and not on
   a device storage fault (feature 003's behaviour is unchanged); `Health()` reports `IngestFailed` and `ReceiveOverload` (empty when none).
-- [ ] T014 [P] Write `cmd/whatsapp-mcp/ingest_cmd_test.go` with the fake owner seam: for `serve` and `stdio`, a terminal
+- [X] T014 [P] Write `cmd/whatsapp-mcp/ingest_cmd_test.go` with the fake owner seam: for `serve` and `stdio`, a terminal
   signal runs the normal stop and exits 1 with exactly `whatsapp-mcp: message storage failed; messages may be
   missing. Fix the cause and start again.` on stderr; stdout stays empty in `stdio`; a lifecycle stop without a
   terminal signal behaves as before; for `pair`, an ingest failure after the link prints the link outcome, then the
   storage message, and exits 1.
-- [ ] T015 Run the tests of T005–T014 and record that each fails for the expected reason (missing symbol or
+- [X] T015 Run the tests of T005–T014 and record that each fails for the expected reason (missing symbol or
   assertion), in `specs/005-message-ingest/verification.md` "Foundational tests".
 
 ### Implementation
 
-- [ ] T016 [P] Export `ValidateMessage` and `MessageFieldBytes` in `internal/store/validate.go` (and
+- [X] T016 [P] Export `ValidateMessage` and `MessageFieldBytes` in `internal/store/validate.go` (and
   `internal/store/messages.go` if the charge lives there), with `StoreMessages` calling the same code, so there is one
   definition of valid and of size. Make T005 pass.
-- [ ] T017 [P] Add `PhoneForLID`, `MappedLIDsWithData` and the `LIDMapping` type in `internal/store/lids.go` as ordinary
+- [X] T017 [P] Add `PhoneForLID`, `MappedLIDsWithData` and the `LIDMapping` type in `internal/store/lids.go` as ordinary
   read operations (admission, 10 s limit, typed errors), reading `whatsmeow_lid_map`, which has no device column (one account per data directory).
   Keyset paging on `lid`; existence checks through the existing `messages_sender_jid` index and the chats primary
   key; no schema change. Make T006 pass.
-- [ ] T018 [P] Add `ContactNames` in `internal/store/contacts.go`, reusing the contact-name expressions already in
+- [X] T018 [P] Add `ContactNames` in `internal/store/contacts.go`, reusing the contact-name expressions already in
   `contacts.go` and `queries.go`. Make T007 pass.
-- [ ] T019 [P] Add a mapping observer to the guarded device LID store in `internal/store/device_lids.go` (set through
+- [X] T019 [P] Add a mapping observer to the guarded device LID store in `internal/store/device_lids.go` (set through
   the device barrier or `LoadDevice`, one per generation), called after a successful write for each row that was
   inserted or whose phone changed, with the previous phone read in the same transaction. Make T008 pass.
-- [ ] T020 [P] Change `TestQuietAllowListPin` in `internal/wa/quiet_test.go` to use the `replace` target. Make T009
+- [X] T020 [P] Change `TestQuietAllowListPin` in `internal/wa/quiet_test.go` to use the `replace` target. Make T009
   pass.
-- [ ] T021 Create `internal/wa/ingest.go`: `IngestConfig`, `newIngest`, the `ingestClient` interface (`ParseWebMessage`,
+- [X] T021 Create `internal/wa/ingest.go`: `IngestConfig`, `newIngest`, the `ingestClient` interface (`ParseWebMessage`,
   `DownloadHistorySync`, `GetGroupInfo`, own JID), the state machine, the per-generation ingest lock, counters
   (`stored`, `ignored`, `rejected`, `unavailable`, `droppedMessages`, `historyIncomplete`, `lookupsDropped`, `hintsDropped`,
   `merged`, `mergeFailed`, each `uint64`), `Stop`, `Wait`, `Counters`, and the terminal-failure routine of
   contracts/ingest.md (once: set `failed`, `Stop`, log `ingest_failed`, call `Failed`). `HandleMessage` returns `true`
   for everything at this stage except the retiring and failed cases. Make T010 pass.
-- [ ] T022 Wire ingest into `internal/wa/session.go`: `SynchronousAck = true`, `AddEventHandlerWithSuccessStatus`,
+- [X] T022 Wire ingest into `internal/wa/session.go`: `SynchronousAck = true`, `AddEventHandlerWithSuccessStatus`,
   `handleEvent` returning `bool`, message events to `HandleMessage`, the retire-bit drop counted in
   `DroppedMessages`, the mapping observer to `NoteMapping`, `IngestFailed()`, and `Lib` derived from the library
   context, never the work context. Make T011 pass.
-- [ ] T023 Wire ingest into `internal/wa/owner.go`: `ingest.Stop()` at step 4, a bounded 2 s `Wait` at step 5, the join
+- [X] T023 Wire ingest into `internal/wa/owner.go`: `ingest.Stop()` at step 4, a bounded 2 s `Wait` at step 5, the join
   after step 8 with the handler callbacks, `Terminal()`, `Health().IngestFailed`, `Health().ReceiveOverload`,
   `QuietStopResult.DroppedMessages` in the stop log with "messages may be missing" when non-zero. Then wire
   `cmd/whatsapp-mcp/commands.go` (`serve`, `stdio`, `pair`) to wait on `owner.Terminal()` beside the lifecycle and exit 1 with
   the message of T014. Update `specs/004-shutdown-drain/contracts/quiet-stop.md`'s event-count rule only by pointing to
   contracts/ingest.md "Revised event-count rule". Make T012–T014 pass.
-- [ ] T024 Adapt feature 004's `TestSimulatorStopDuringQueuedAppStateFetches` in `internal/wa/appstate_stop_test.go`
+- [X] T024 Adapt feature 004's `TestSimulatorStopDuringQueuedAppStateFetches` in `internal/wa/appstate_stop_test.go`
   to `SynchronousAck`: `server_sync` fetches now run inline on the handler (plan, "What `SynchronousAck` changes in the
   pin"), so four fetches can no longer be queued in goroutines. Keep the test's purpose (a stop while app-state work is
   in flight and more is pending refuses only reads after the barrier and passes the check) with the new shape: one
   fetch in progress on the handler and at least four `server_sync` notifications waiting in the handler queue. Run it
   with `WA_APPSTATE_STOP_RUNS=20` and record the result in `verification.md` before T025. Do not weaken its refused-read,
   write or quiet assertions.
-- [ ] T025 Rerun the quiet-stop pass rate with `SynchronousAck` on: `WA_MEASURE=1 CGO_ENABLED=0 go test ./internal/wa -run
+- [X] T025 Rerun the quiet-stop pass rate with `SynchronousAck` on: `WA_MEASURE=1 CGO_ENABLED=0 go test ./internal/wa -run
   'TestQuietStopPassRate' -count=1 -v -timeout 60m` (quickstart §5a). Record per kind and failure categories in
   `verification.md` "Pass rate with SynchronousAck" next to feature 004's recorded rates. A lower rate for any kind
   goes to the owner before any story starts.

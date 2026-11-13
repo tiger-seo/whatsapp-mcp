@@ -339,6 +339,59 @@ Recorded during `/speckit-plan`, answered by the owner (`tiger-seo`):
 - Date: 2026-11-13. `docs/specification.md` is present locally. Found: §3.4 (line 131), §3.5 (169), §8.5 (542) with
   S3 (553), S4 (559) and S5 (562), §8.6 (567) with P2 (572) and P3 (573), §8.7 (584) with M7 (633).
 
+## Foundational tests (T015)
+
+- Date: 2026-11-13, Windows 10, `CGO_ENABLED=0`. Command per package: `go test -count=1 -run NONE -gcflags=-e
+  ./internal/store/` (and `./internal/wa/`, `./cmd/whatsapp-mcp/`), each exit 1 before any production code.
+- Every new test failed to compile for the expected reason: a missing symbol. `internal/store`: `ValidateMessage`,
+  `MessageFieldBytes` (T005), `PhoneForLID`, `MappedLIDsWithData` (T006), `ContactNames` (T007),
+  `DeviceBarrier.SetMappingObserver` (T008). `internal/wa`: `pinnedWhatsmeow` (T009); `ingest`, `IngestConfig`,
+  `newIngest`, the state constants, `IngestCounters`, `ingestWorkerWait` (T010); `Session.ingest`,
+  `droppedMessages`, `IngestFailed`, `handleEvent` with no result (T011); `QuietStopResult.DroppedMessages` (T012);
+  `Terminal`, `Health.IngestFailed`, `Health.ReceiveOverload`, `SessionReceiveOverload` (T013). `cmd/whatsapp-mcp`:
+  `Health.IngestFailed` (T014).
+- After T016–T023 the same tests pass. Full suites on the result, 2026-11-13: `go test ./internal/wa/ -count=1
+  -timeout 30m` exit 0 (34.3 s); `go test ./cmd/whatsapp-mcp/ -count=1 -timeout 30m` exit 0 (122.0 s); `go test
+  ./internal/store/ -count=1 -timeout 30m` exit 0 (259.9 s). `go vet ./...` and `go vet
+  ./internal/wa/testdata/cmd/session-check` exit 0; `gofmt -l .` prints nothing.
+- Two defects found by the existing suite and fixed before it passed: messages dropped after the retire bit were
+  counted twice (session and ingest); and the `ingest_stopped` log was written before the session's diagnostic
+  consumer was stopped, so a stalled logger delayed retirement (`TestSessionCodecFailuresDoNotBlockCallback`). The
+  log now comes last and only when a count is non-zero.
+
+## App-State Stop Test with SynchronousAck (T024)
+
+- With `SynchronousAck` the library runs each `server_sync` fetch on its event handler, and on `Disconnect` its
+  handler loop drops the nodes still queued without handling them (`handlerQueueLoop` in `client.go` of
+  `bedcf01`). The feature 004 shape (four fetches queued on `appStateSyncLock` in goroutines) cannot occur.
+- New shape: the simulator holds the first app-state request, sends five more `server_sync` notifications, then
+  answers the request with an error; the answer is read after the five, so they are in the handler queue. The next
+  fetch stops inside its version read at the recording gate, on the handler, with four notifications queued behind
+  it; a goroutine dump shows one fetch in progress and none waiting on the library's lock. The gate opens at
+  `barrier_retired`, so that read is refused after the barrier. The refused-read, no-refused-write, passed-check and
+  clean-marker assertions are unchanged.
+- A first attempt held the second request in the simulator's read loop; the library's `Disconnect` then waited
+  5 s for a websocket close the stalled simulator never answered. That was the simulator, not production code; the
+  final shape holds no request.
+- `WA_APPSTATE_STOP_RUNS=20 CGO_ENABLED=0 go test ./internal/wa/ -count=1 -run
+  TestSimulatorStopDuringQueuedAppStateFetches -v -timeout 20m`, 2026-11-13 13:51 UTC: exit 0, outcomes
+  `passed:20`.
+
+## Pass rate with SynchronousAck (T025)
+
+2026-11-13 13:59 UTC, Windows 10, Go 1.27.4, `CGO_ENABLED=0`, `TEMP` on `D:\tmp`, working tree after T005–T024 (not
+yet committed), pin `bedcf01`. `WA_MEASURE=1 CGO_ENABLED=0 go test ./internal/wa -run TestQuietStopPassRate -count=1
+-v -timeout 60m`: exit 0 (64.4 s).
+
+| Kind | Runs | Passed | Rate | Failures | Passed but marker not clean | Feature 004 (`a3fb844`, 2026-11-09) |
+| --- | --- | --- | --- | --- | --- | --- |
+| pair: the pairing generation's check | 50 | 50 | 100.0% | none | 0 | 50 of 50 |
+| pair: the stop check after the fresh link | 50 | 50 | 100.0% | none | 0 | 50 of 50 |
+| stdio: stop check | 50 | 50 | 100.0% | none | 0 | 50 of 50 |
+| serve: stop check | 50 | 50 | 100.0% | none | 0 | 50 of 50 |
+
+No kind is lower than feature 004's recorded rate, so the gate before the user stories is met.
+
 ## Owner Reviews
 
 | Stage | Date | Commit | Verdict | Owner decision |
