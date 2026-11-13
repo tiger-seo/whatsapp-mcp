@@ -53,8 +53,9 @@ func ValidateMessage(m Message) error
 // MessageFieldBytes is the size StoreMessages charges against its 16 MiB batch limit for m.
 func MessageFieldBytes(m Message) int
 
-// PhoneForLID returns the phone JID mapped to lidJID in the current device's LID map. ok is false when there is no
-// mapping. It reads only; ctx bounds it (ingest passes 2 s).
+// PhoneForLID returns the phone JID mapped to lidJID in the LID map. The map has no device column; it is the one
+// account's map, since a data directory holds one account. ok is false when there is no mapping. It reads only;
+// ctx bounds it (ingest passes 2 s).
 func (s *Store) PhoneForLID(ctx context.Context, lidJID string) (phoneJID string, ok bool, err error)
 
 // MappedLIDsWithData returns up to limit (1..200) mappings whose LID is greater than afterLID, in key order, and
@@ -76,10 +77,12 @@ All are ordinary store operations: admission, the 10 s limit, `ErrClosed` after 
 | --- | --- | --- |
 | History queue | 8 notifications (*proposed*) | the notification is reported as incomplete history; no disconnect |
 | History worker | 1 goroutine; one decoded history at a time (≤ 128 MiB expanded, fork limit) | – |
+| History flush | 250 messages or 4 MiB of field bytes (*proposed*), ingest lock released between flushes | the batch is cut early |
 | Name cache | 4,096 chats, least recently used (*proposed*) | the oldest entry is forgotten; the next miss reads the store again |
 | Group lookup set | 64 distinct groups (*proposed*); 1 worker; 10 s per lookup (*proposed*) | the request is dropped and counted; the fallback name stays |
-| Failed-lookup cache | entries expire after 10 min (*proposed*); shares the name cache's 4,096 entries | – |
+| Failed-lookup cache | 1,024 groups (*proposed*), entries expire after 10 min (*proposed*) | the oldest entry is forgotten; that group may be asked again sooner |
 | LID hint set | 1,024 LIDs (*proposed*); 1 worker; 5 attempts 1 s apart (*proposed*) | the hint is dropped and counted; startup reconciles it |
+| Reconcile cursor | one LID: where an unfinished startup pass stopped; the worker pages on from it, 200 per page, between hints | – |
 | Ingest lock | one per generation | – (serialises message writes, history batches and merges) |
 | Counters | `stored`, `ignored`, `rejected`, `droppedMessages`, `historyIncomplete`, `lookupsDropped`, `hintsDropped`, `merged`, `mergeFailed` | `uint64`, logged at stop and on terminal failure |
 

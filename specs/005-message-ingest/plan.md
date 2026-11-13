@@ -4,9 +4,9 @@
 
 **Input**: Feature specification from `specs/005-message-ingest/spec.md`
 
-**Status**: Phase 0 and Phase 1 complete. The constitution gate passes on the pinned fork; its condition, the
-race-detector run, was met on 2026-11-13 (`verification.md`, "Race Detector (WSL2)"). Next: `/speckit-tasks`, then the
-owner's design review.
+**Status**: Phase 0 and Phase 1 complete; tasks generated and the cross-artifact analysis of 2026-11-13 applied. The
+constitution gate passes on the pinned fork; its condition, the race-detector run, was met on 2026-11-13
+(`verification.md`, "Race Detector (WSL2)"). Next: the owner's design review.
 
 ## Summary
 
@@ -38,13 +38,15 @@ stores; quiet-stop pass-rate rerun with `SynchronousAck`; the race detector once
 **Project Type**: Single-process CLI that owns one WhatsApp session and one SQLite store.
 
 **Performance Goals**: One group lookup per group while its name stays available (SC-005). The live write path takes
-one store write plus, at most, one chat update per message; the fork's 2,048-item queue absorbs bursts.
+one store write plus, at most, one chat update per message; the fork's 2,048-item queue absorbs bursts. An initial
+history sync with a concurrent live burst causes no `receive_overload` on the simulator (research R3, measured).
 
 **Constraints**: Fork limits as approved (16 MiB frame after expansion, 64 levels, 65,536 nodes, 2,048 queued items,
 4,096 retry counters, 128 MiB expanded history). Store limits from feature 002 (1,000 messages and 16 MiB per batch,
 per-field limits, 16 active and 64 waiting operations, 10 s per operation). Application limits proposed in
-[data-model.md](data-model.md): history queue 8, name cache 4,096, group lookup set 64 with 10 s lookups and a 10-minute
-failure cache, LID hint set 1,024 with 5 attempts, 2 s LID lookups, 2 s worker wait at stop. Feature 004's stop bound
+[data-model.md](data-model.md): history queue 8, history flushes of 250 messages or 4 MiB, name cache 4,096, group
+lookup set 64 with 10 s lookups and a 10-minute failure cache of 1,024 groups, LID hint set 1,024 with 5 attempts, 2 s
+LID lookups, 2 s worker wait at stop. Feature 004's stop bound
 of 10 s and its retirement order.
 
 **Scale/Scope**: One account. History bounded per chunk by the fork; the store grows without a retention limit
@@ -109,13 +111,12 @@ over the limit is reported as incomplete (R4).
 
 1. **Proposed application limits** in [data-model.md](data-model.md). They follow from the design, not from
    measurement.
-2. **History right after pairing.** WhatsApp sends the initial history to the newly linked device, which is `pair`'s
-   post-pair connection. `pair` stops soon after it confirms the link, and the library has already acknowledged each
-   notification it received, so history that `pair` has not stored is lost and reported. Recommended: keep `pair`
-   as it is in this feature and record the gap. The alternative is a bounded wait in `pair` for the history queue to
-   become empty, which changes feature 004's `pair` contract.
-3. **Unsafe stops during history.** A stop while the history worker is inside a library call can leave the marker
+2. **Unsafe stops during history.** A stop while the history worker is inside a library call can leave the marker
    unsafe (R11). The rate is measured, not estimated.
+
+Settled on 2026-11-13 and recorded in the spec's clarifications: the history gap after `pair` is accepted (a bounded
+wait is in the backlog), merges are not undone when a LID is remapped, and a startup pass stopped by its budget is
+continued by the running session.
 
 ## Project Structure
 

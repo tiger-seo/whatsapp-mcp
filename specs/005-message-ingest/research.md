@@ -55,6 +55,14 @@ an old counter and drop it. A failed write is therefore reported as a possible g
 `SynchronousAck` also moves the per-message acknowledgement and the retry receipt for an undecryptable message from a
 goroutine into the handler, so feature 004's quiet-stop measurement is repeated with it (plan, verification).
 
+**Handler latency**: the handler shares the ingest lock with history flushes and run-time merges (R8), so a long
+hold stalls live delivery and can fill the fork's queue under ordinary traffic. Two rules keep each hold short:
+history flushes are cut at **250 messages or 4 MiB** of field bytes (proposed; well inside the store's 1,000 and
+16 MiB), and the lock is released between flushes, so a waiting live write runs before the next one. Run-time merges
+are rare (one per newly mapped identity with stored data) and the startup pass runs before any connection. The design
+is accepted only if a simulator run of an initial history sync with a concurrent live burst shows no
+`receive_overload` and a bounded lock wait for the handler (tasks, "Handler latency under history").
+
 **Alternatives**: An application queue and worker (an extra bound, an extra drain and no better guarantee).
 Asynchronous acknowledgement (the server is told "delivered" before the write, so a failed write is silent loss).
 
@@ -65,8 +73,12 @@ message from the account's own device, `Info.IsFromMe`), puts the notification i
 **8** entries (proposed), and returns. One history worker per generation takes entries in order and calls
 `DownloadHistorySync(ctx, notif, true)` with synchronous storage, so the library's device-store side effects (NCT
 salt, LID mappings, push names, message secrets) finish inside the call and leave no detached goroutine. The worker
-then converts each conversation through `ParseWebMessage` and stores it in batches (R6). The library's default
+then converts each conversation through `ParseWebMessage` and stores it in batches (R6, R3). The library's default
 history receipt stays on.
+
+The initial history after linking arrives on `pair`'s connection. `pair` keeps its lifetime; what it has not stored
+when it stops is reported and lost (owner decision 2026-11-13, spec clarification). A bounded wait in `pair` is in
+the backlog (`005-pair-initial-history-wait.md`).
 
 A full queue, a download error, `ErrHistorySyncTooLarge` and a parse error each report an incomplete history (chunk
 order and sync type, never content) and do not close the connection. A message-store failure during history is a
@@ -105,7 +117,8 @@ create a second message with the edited text, which is a new behaviour (Principl
 **Decision**: Each candidate message is checked with a new exported `store.ValidateMessage` (the exact rules
 `StoreMessages` applies) before it is added to a batch. An invalid message is skipped and counted, never repaired: no
 fabricated time, sender or ID. History batches are cut at 1,000 messages or at 16 MiB of field bytes, measured by a
-new exported `store.MessageFieldBytes`, whichever comes first. Each batch is one `StoreMessages` call. Chat names from
+new exported `store.MessageFieldBytes`, whichever comes first; history uses the smaller cut of R3 (250 messages
+or 4 MiB). Each batch is one `StoreMessages` call. Chat names from
 the history conversation go in one `UpdateChats` call per batch, at most 1,000 updates.
 
 **Rationale**: `StoreMessages` is all-or-nothing; one invalid message would reject 999 valid ones. Exporting the
@@ -129,8 +142,9 @@ it dispatches the event, so a mapped sender is found on its first message.
 - **At startup**, in `serve` and `stdio` after the run guard and before the owner opens a generation, page through
   `whatsmeow_lid_map` in key order, 200 rows per page, with a new `Store.MappedLIDsWithData(ctx, afterLID, limit)`
   that returns only mappings with a chat or a sender stored under the LID. Call `MergeLID` for each. Count merged,
-  failed and skipped. The pass stops when the startup budget (10 minutes, shared with the store's open) runs out and
-  reports how far it got.
+  failed and skipped. The pass stops when the startup budget (10 minutes, shared with the store's open) runs out,
+  reports how far it got (`budget_exhausted`) and hands its cursor, the last LID it reached, to the first session's
+  reconcile worker, which continues paging from there between hints (owner decision 2026-11-13).
 - **During a run**, the device LID store wrapper reports each LID whose mapping it wrote to a per-generation hint set
   of **1,024** LIDs (proposed). The set is deduplicated; a full set drops the hint and counts it (the next startup
   covers it). A reconcile worker takes hints, re-reads the mapping with `PhoneForLID` and, when it is visible, merges.
@@ -142,7 +156,7 @@ it dispatches the event, so a mapped sender is found on its first message.
 A failed merge leaves both sides intact; it is retried at the next startup. A mapping that later points a LID at a
 different phone is not undone: data merged earlier stays where it went, later writes follow the new mapping, and the
 reassignment is logged with both JIDs escaped. This matches the earlier implementation, which also merged without
-provenance.
+provenance; the owner accepted it on 2026-11-13 (spec clarification).
 
 **Rationale**: Enumerating the mapping table, not only `@lid` chats, covers senders that appear only in groups. The
 table grows with contacts, and each page costs 200 index probes. Startup is the guarantee; the run-time merge is a
@@ -174,6 +188,10 @@ storage fault.
 **Rationale**: This is the clarified behaviour (stop, report, operator fixes, restart under existing rules). Exit 1
 lets a supervisor see the failure.
 
+**Later load**: `ErrBusy` is terminal too, as the clarification says for temporarily unavailable storage. Features
+006–007 add MCP reads to the same store, and a read burst could then stop ingest. The backlog item
+`005-store-busy-stops-ingest.md` makes this a planning input for feature 006.
+
 ## R10. Receive overload
 
 **Decision**: On a `Disconnected` event the session reads `LatestReceiveQueueOverload()` from the client. A record
@@ -204,7 +222,8 @@ nothing new is needed to avoid bypassing them, and the record must not be silent
   10 s limit before the worker or handler returns; nothing writes after its goroutine was joined.
 
 **Rationale**: Steps 6 to 9 keep their order and meaning. The only new waiting is bounded and sits inside the
-existing stop bound of 10 s.
+existing stop bound of 10 s. Because steps 6 and 8 can already take 5 s and 10 s in the worst case, the extra wait is
+measured with every worker busy, not assumed harmless (tasks, the stop measurement with active workers).
 
 ## R12. Chat names
 
@@ -219,7 +238,8 @@ existing stop bound of 10 s.
 - **Groups**: the history conversation's display name or name (`NameReal`); otherwise the cached stored name;
   otherwise the group JID is put into a lookup set of **64** groups (proposed). One group-name worker calls
   `GetGroupInfo` with a **10 s** deadline (proposed) and writes the subject (`NameReal`). A failed lookup is cached
-  for **10 minutes** (proposed), so a group that keeps failing is asked at most six times an hour. A full set drops the
+  for **10 minutes** (proposed) in its own map of at most **1,024** groups (proposed; the oldest entry goes first), so
+  a group that keeps failing is asked at most once per 10 minutes while its entry is kept. A full lookup set drops the
   request and counts it. The message is stored meanwhile with `Group <id>` (`NameFallback`), never discarded.
 - **Observation time**: a name from a message or a history conversation takes that message's time; a name from the
   contact table or a group lookup takes the time it was read.

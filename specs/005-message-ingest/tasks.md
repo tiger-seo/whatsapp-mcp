@@ -22,14 +22,18 @@ US1 to US4 in spec priority order, then polish and evidence.
 - E003-RX-01 is retired; the four library maps are accepted (R2);
 - a storage failure stops ingest and the connected command; the operator restarts (spec clarifications, R9);
 - receive overload is reported and follows the existing no-reconnect rule (R10);
-- edits are not stored (R5); merges are not undone on a mapping change (R8).
+- edits are not stored (R5); merges are not undone on a mapping change (R8, spec clarification 2026-11-13);
+- history `pair` has not stored when it stops is reported and lost; a bounded wait is in the backlog (spec
+  clarification 2026-11-13);
+- a startup LID pass stopped by its budget is continued by the running session (spec clarification 2026-11-13).
 
 No commit carries attribution lines.
 
 ## Current state
 
-Branch `005-message-ingest`, planning complete, tasks generated 2026-11-13. Nothing implemented. Next: commit, then the
-owner-judge **design** review, then T004. This section is ignored by the review-gate hook.
+Branch `005-message-ingest`, planning complete, tasks generated and the cross-artifact analysis applied on 2026-11-13
+(three owner decisions recorded in the spec's clarifications). Nothing implemented. Next: the owner-judge **design**
+review, then T003 and T004. This section is ignored by the review-gate hook.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -37,6 +41,10 @@ owner-judge **design** review, then T004. This section is ignored by the review-
 - `[P]` means different files and no dependency on an unfinished task.
 - `[US1]` to `[US4]` mark story tasks. Setup, foundational and polish tasks have no label.
 - Constraints quoted from data-model.md and contracts/ingest.md are binding.
+- Test function names start with the prefix the quickstart runs: `TestIngest` (unit tests of `internal/wa/ingest*`),
+  `TestSimulatorIngest` (simulator), `TestOwnerTerminal`, `TestQuietOrder`, `TestShellIngest` (commands), and the store
+  helpers' own names (`TestValidateMessage`, `TestMessageFieldBytes`, `TestPhoneForLID`, `TestMappedLIDsWithData`,
+  `TestContactNames`).
 
 ## Phase 1: Setup
 
@@ -50,12 +58,11 @@ owner-judge **design** review, then T004. This section is ignored by the review-
 - [ ] T003 Confirm `docs/specification.md` exists locally and contains §3.4, §3.5, §8.5 (S3–S5), §8.6 (P2, P3) and §8.7
   (M7). If it is missing, stop and ask the user for it; do not infer behaviour from code. Record the check in
   `specs/005-message-ingest/verification.md`.
-- [ ] T004 **OWNER DECISION.** Ask the owner the three "Open questions for the design review" in
-  `specs/005-message-ingest/plan.md`: (1) accept or change the proposed limits in `data-model.md`; (2) keep `pair`
-  without a history wait (recommended) or add a bounded wait; (3) accept that a stop during a history download can
-  leave the marker unsafe, to be measured in T046. Record the answers and the date in `verification.md` "Owner
-  Decisions" and update `data-model.md` if a number changes. Only the owner ticks this task. If (2) is "add a wait",
-  stop: that changes feature 004's `pair` contract and needs a spec update first.
+- [ ] T004 **OWNER DECISION.** Ask the owner the two "Open questions for the design review" in
+  `specs/005-message-ingest/plan.md`: (1) accept or change the proposed limits in `data-model.md`; (2) accept that a
+  stop during a history download can leave the marker unsafe, to be measured in T046. Record the answers and the date
+  in `verification.md` "Owner Decisions" and update `data-model.md` if a number changes. Only the owner ticks this
+  task. The `pair` history gap, LID remapping and the budget handover were decided on 2026-11-13 and are in the spec.
 
 ---
 
@@ -121,7 +128,7 @@ terminal signal, and the command's exit on a terminal failure. Depends on T003 a
   `internal/store/messages.go` if the charge lives there), with `StoreMessages` calling the same code, so there is one
   definition of valid and of size. Make T005 pass.
 - [ ] T017 [P] Add `PhoneForLID`, `MappedLIDsWithData` and the `LIDMapping` type in `internal/store/lids.go` as ordinary
-  read operations (admission, 10 s limit, typed errors), reading `whatsmeow_lid_map` for the current device only.
+  read operations (admission, 10 s limit, typed errors), reading `whatsmeow_lid_map`, which has no device column (one account per data directory).
   Keyset paging on `lid`; existence checks through the existing `messages_sender_jid` index and the chats primary
   key; no schema change. Make T006 pass.
 - [ ] T018 [P] Add `ContactNames` in `internal/store/contacts.go`, reusing the contact-name expressions already in
@@ -222,8 +229,9 @@ resulting records.
   holds "8 notifications" and the ninth is reported `history_incomplete` (`queue_full`) without a disconnect; the
   worker calls `DownloadHistorySync` with synchronous storage and the library context; each history message goes
   through `ParseWebMessage` and the same extraction as live, so a group participant, an own message and a direct
-  message get the senders of US1; 2,500 valid messages are written as batches of 1,000, 1,000 and 500, and messages
-  summing to more than 16 MiB of `MessageFieldBytes` are cut before the limit; a message without a timestamp is
+  message get the senders of US1; 600 valid messages are written as flushes of "250 messages", 250 and 100, and messages
+  summing to more than "4 MiB of field bytes" of `MessageFieldBytes` are cut before that; the ingest lock is released
+  between flushes, and a live write waiting on it runs before the next flush; a message without a timestamp is
   rejected and its neighbours are stored; a conversation's display name or name is offered once per batch as
   `NameReal`; history never calls `Live`.
 - [ ] T033 [P] [US2] Write failure cases in `internal/wa/ingest_history_test.go`: `ErrHistorySyncTooLarge`, a download
@@ -242,9 +250,9 @@ resulting records.
 ### Implementation for User Story 2
 
 - [ ] T036 [US2] Create `internal/wa/ingest_history.go`: the history queue ("8 notifications"), the single worker, the
-  download with synchronous storage under `Lib`, conversion through `ParseWebMessage` and `ingest_extract.go`, batches
-  cut at 1,000 messages or 16 MiB with one `StoreMessages` and one `UpdateChats` per flush under the ingest lock, the
-  checkpoints, and the `history_incomplete` and `ingest_failed` reports. Add history step 2 to `HandleMessage`. Make
+  download with synchronous storage under `Lib`, conversion through `ParseWebMessage` and `ingest_extract.go`, flushes
+  cut at "250 messages or 4 MiB of field bytes" with one `StoreMessages` and one `UpdateChats` per flush under the
+  ingest lock, released between flushes, the checkpoints, and the `history_incomplete` and `ingest_failed` reports. Add history step 2 to `HandleMessage`. Make
   T032–T034 pass.
 
 **Checkpoint**: history and live messages coexist in any order; every incomplete chunk is reported.
@@ -271,23 +279,27 @@ and ingest events with and without mappings.
   1,025th distinct hint is dropped and counted; a message normalised before the mapping existed and written while the
   merge is pending ends under the phone JID (ingest lock ordering, invariant N3); a failed merge leaves both sides
   intact, is counted `mergeFailed` and does not make ingest `failed`; a mapping that moves a LID to another phone
-  logs `lid_reassigned` with escaped JIDs and undoes nothing.
+  logs `lid_reassigned` with escaped JIDs and undoes nothing; given a startup cursor, the worker pages on from it with
+  `MappedLIDsWithData` (200 per page) between hints until the table is done, and stops at a checkpoint between
+  merges.
 - [ ] T039 [P] [US3] Write `cmd/whatsapp-mcp/reconcile_test.go` for the startup pass: before the owner opens a
   generation, mapped LID chats and group-only LID senders are merged through `MappedLIDsWithData` pages of 200; the
   phone chat's duplicate wins and names and latest times follow feature 002 (SC-004); a second startup merges nothing;
   an unmapped LID and a merge that fails are left intact and reported in `lid_reconcile`; an exhausted startup budget
-  stops the pass with `budget_exhausted` and the command still starts.
+  stops the pass with `budget_exhausted`, the command still starts, and the first generation's reconcile worker
+  receives the cursor and merges the rest without a restart.
 - [ ] T040 [US3] Run T037–T039 and record the expected failures in `verification.md`.
 
 ### Implementation for User Story 3
 
 - [ ] T041 [US3] Create `internal/wa/ingest_lid.go`: normalisation through `store.PhoneForLID` with a 2 s deadline, used
   by `HandleMessage` and the history worker before validation; the hint set ("1,024 LIDs", deduplicated), the
-  reconcile worker with its retries and checkpoints, `MergeLID` under the ingest lock, and the `lid_reassigned` log.
+  reconcile worker with its retries, checkpoints and the startup cursor continuation, `MergeLID` under the ingest lock, and the `lid_reassigned` log.
   Implement `NoteMapping`. Make T037 and T038 pass.
 - [ ] T042 [US3] Add the startup reconciliation to `cmd/whatsapp-mcp/commands.go` for `serve` and `stdio`, after the run
   guard and before `attachOwner`, under the remaining startup budget, logging `lid_reconcile` (merged, failed,
-  skipped, completed or `budget_exhausted`). A failure never stops the command. Make T039 pass.
+  skipped, completed or `budget_exhausted`), and pass a `budget_exhausted` cursor to the owner for the first
+  generation's reconcile worker. A failure never stops the command. Make T039 pass.
 
 **Checkpoint**: a person's direct and group messages land under one identity whenever WhatsApp supplies the mapping.
 
@@ -308,7 +320,7 @@ provider while ingesting repeated messages.
   real (push or business), then the message's push name, then the JID user part as `NameFallback`, each offered only
   when better or newer at the same quality; a group with a history name never triggers a lookup; a group without one
   is stored with `Group <id>` and looked up once by the counted fake for 100 messages (SC-005); a failed lookup is not
-  repeated for "10 min"; the lookup set holds "64 distinct groups" and the 65th is dropped and counted; each lookup
+  repeated for "10 min" while it is in the failure cache of "1,024 groups" (the oldest entry goes first); the lookup set holds "64 distinct groups" and the 65th is dropped and counted; each lookup
   has a "10 s" deadline and runs under `Lib`; a failed name write is terminal but the message stays stored and
   `HandleMessage` returns `true`; 10,000 distinct groups never grow the cache, the set or the worker count past their
   bounds.
@@ -318,7 +330,7 @@ provider while ingesting repeated messages.
 
 - [ ] T045 [US4] Create `internal/wa/ingest_names.go`: the name cache, the direct-chat order through
   `store.ContactNames`, observation times per research R12, the group lookup set and single worker with the failure
-  cache, and step 6 of `HandleMessage`. Make T043 pass.
+  cache (its own map of "1,024 groups"), and step 6 of `HandleMessage`. Make T043 pass.
 
 **Checkpoint**: names are stable and group lookups are bounded.
 
@@ -328,42 +340,50 @@ provider while ingesting repeated messages.
 
 **Purpose**: Abuse and privacy coverage, documentation, measurements, gates, platforms and evidence.
 
-- [ ] T046 Measure the unsafe-stop rate during history (plan open question 3): extend `internal/wa/quiet_measure_test.go`
-  with a `WA_MEASURE=1` case that stops 50 times while the simulator delivers history chunks, and record the rate and
-  failure categories in `verification.md`. The owner reviews the number before the code review.
-- [ ] T047 [P] Write `internal/wa/ingest_abuse_test.go` (spec abuse cases): oversized text, caption, names and media
+- [ ] T046 Measure stops with ingest busy (plan open question 2, research R11): add `TestQuietStopWithIngestWorkers`
+  to `internal/wa/quiet_measure_test.go` under `WA_MEASURE=1`. Run 50 stops while the simulator delivers history
+  chunks, and 50 while a group lookup and a run-time merge are each in progress. Record per case the pass rate, the
+  failure categories and the `stop_bound_exceeded` count in `verification.md` "Stops with ingest busy". The owner
+  reviews the numbers before the code review.
+- [ ] T047 Measure handler latency under history (research R3): add `TestIngestHandlerLatency` to
+  `internal/wa/quiet_measure_test.go` under `WA_MEASURE=1`. On the simulator, deliver an initial history of at least
+  20 chunks while another account sends a burst of 2,000 live messages, 20 runs. Record the handler's ingest-lock wait
+  (p50, p99, max), the number of `receive_overload` events and the messages stored, in `verification.md` "Handler
+  latency under history". Target: no `receive_overload`. A miss goes to the owner with the numbers before the code
+  review; do not raise the fork's queue or change a limit on your own.
+- [ ] T048 [P] Write `internal/wa/ingest_abuse_test.go` (spec abuse cases): oversized text, caption, names and media
   fields; malformed JIDs, timestamps and control characters; a message whose text asks to send, pair or call a
   webhook; concurrent live, history, lookup and merge pressure. Assert nothing invalid is written, no partial batch
   exists, no send or pairing call reaches the fake client, and no bound in data-model "Per-generation ingest state"
   is exceeded.
-- [ ] T048 [P] Extend `internal/wa/security_test.go` (or the store's `logsafety_test.go` pattern): with a debug-level
+- [ ] T049 [P] Extend `internal/wa/security_test.go` (or the store's `logsafety_test.go` pattern): with a debug-level
   and an info-level logger, text and captions appear only at debug; media keys, hashes, URLs and direct paths appear
   at no level; names never appear above debug; JIDs and IDs in warnings are escaped; nothing is written to stdout.
-- [ ] T049 [P] Update `OPERATIONS.md` with a "What is stored" section (message text and captions, media metadata
+- [ ] T050 [P] Update `OPERATIONS.md` with a "What is stored" section (message text and captions, media metadata
   including keys that decrypt the media, LID-to-phone links, indefinite growth, deletion in WhatsApp does not delete
   here, backups hold the same data), the new events (`ingest_failed`, `history_incomplete`, `receive_overload`,
   `lid_reconcile`, `lid_reassigned`, `ingest_stopped`), the exit-1 storage message and what the operator does, and the
   split between implemented and verified.
-- [ ] T050 [P] Check doc comments in `internal/wa/ingest*.go`, `session.go`, `owner.go`, `internal/store/lids.go`,
+- [ ] T051 [P] Check doc comments in `internal/wa/ingest*.go`, `session.go`, `owner.go`, `internal/store/lids.go`,
   `validate.go`, `contacts.go` and `device_lids.go`: no FR-, SC-, US, D, F or research IDs (constitution); no stale
   text about asynchronous acknowledgements.
-- [ ] T051 Run the full gates of `AGENTS.md` "Commands" and record each exit code read directly: `gofmt -l .`, `go vet
+- [ ] T052 Run the full gates of `AGENTS.md` "Commands" and record each exit code read directly: `gofmt -l .`, `go vet
   ./...`, `go mod verify`, `CGO_ENABLED=0 go test ./... -count=1 -timeout 30m`, the five cross-builds, `go run
   golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...`, and `go vet`, `go test` and the build of
   `./internal/wa/testdata/cmd/session-check`. Confirm `go.mod` and `go.sum` are unchanged since `88a74e5` with `git
   diff 88a74e5 -- go.mod go.sum`. Keep `TEMP` and `TMP` on `D:\tmp`.
-- [ ] T052 Run the race detector again in WSL2 on `./internal/wa ./cmd/...` (quickstart §6, `MSYS_NO_PATHCONV=1`) and
+- [ ] T053 Run the race detector again in WSL2 on `./internal/wa ./cmd/...` (quickstart §6, `MSYS_NO_PATHCONV=1`) and
   the whole suite under WSL2 with `CGO_ENABLED=0` as in `AGENTS.md`; record both as WSL2. Push the branch for CI only
   if the user asks; anything not run is "not verified".
-- [ ] T053 Check LF endings with `git ls-files --eol`; no tracked file shows `w/crlf`.
-- [ ] T054 **Permitted real-account journey, only with the owner's explicit permission for each step** (quickstart §7),
+- [ ] T054 Check LF endings with `git ls-files --eol`; no tracked file shows `w/crlf`.
+- [ ] T055 **Permitted real-account journey, only with the owner's explicit permission for each step** (quickstart §7),
   after reviewing the roadmap's shutdown follow-up: a new directory under `D:\tmp`, the binary from a named commit,
   `pair`, then `serve`; one text and one captioned image from another phone; stop; inspect the store; the owner
   unlinks the device and the directory is deleted. Record redacted results; a step not performed is "not verified".
   Do not act on a real account without that permission.
-- [ ] T055 Roll up `specs/005-message-ingest/verification.md`: the pin and its limits unchanged, the race and pass-rate
+- [ ] T056 Roll up `specs/005-message-ingest/verification.md`: the pin and its limits unchanged, the race and pass-rate
   results, the history unsafe-stop rate, platforms covered, accepted risks (library maps, no replay guarantee,
-  history after `pair`), and every "not verified" item. Update `AGENTS.md` "Current state" and this file's "Current
+  history after `pair`, no undo on a LID remap, `ErrBusy` stopping ingest), and every "not verified" item. Update `AGENTS.md` "Current state" and this file's "Current
   state". Commit the work and the evidence and run the owner-judge agent in **code** mode; add its row to the "Owner
   reviews" table and commit it.
 
@@ -379,7 +399,8 @@ provider while ingesting repeated messages.
 - **US3** (T037–T042) depends on Phase 2 (T017, T019, T021) and on US1's write path (T030); T041 also normalises in the
   history worker, so it follows T036 when US2 is done first, or adds that call when US2 lands.
 - **US4** (T043–T045) depends on Phase 2 (T018) and US1 (T030); it uses history names from US2 when present.
-- **Polish** (T046–T055) depends on all stories. T046 needs US2. T054 needs the owner's permission. T055 is last.
+- **Polish** (T046–T056) depends on all stories. T046 and T047 need US2 to US4. T055 needs the owner's permission.
+  T056 is last.
 - Within a story: tests, then the failing-observation task, then implementation.
 
 ### Parallel opportunities
@@ -389,7 +410,7 @@ provider while ingesting repeated messages.
 - US2 tests: T032, T033 and T034 touch one file and the order test: write T032 first, then T033 and T034.
 - US3 tests: T037 and T038 (one file, write in sequence) in parallel with T039.
 - After Phase 2 and US1, US3 and US4 can proceed in parallel with US2 (different files), except where noted above.
-- Polish: T047, T048, T049 and T050 together.
+- Polish: T048, T049, T050 and T051 together.
 
 ### Parallel example (Phase 2 tests)
 
@@ -405,14 +426,14 @@ Task: "Write cmd/whatsapp-mcp/ingest_cmd_test.go (T014)"
 1. **MVP = Phase 1 + Phase 2 + US1.** Live messages are stored and acknowledged only after the write; failure and
    overload are reported and stop or disconnect as designed.
 2. Add US2 for history and US3 for identities (both P1), then US4 for names.
-3. Finish with the history unsafe-stop measurement, abuse and privacy tests, documentation, gates, WSL2 runs, the
+3. Finish with the stop and handler-latency measurements, abuse and privacy tests, documentation, gates, WSL2 runs, the
    permitted real-account journey and the code review.
 4. If a measured pass rate falls below feature 004's, or a bound is reached in normal simulator traffic, stop and ask
    the owner. Do not widen a limit, the allow-list or the quiet check on your own.
 
 ## Notes
 
-- Total tasks: 55 (Setup 4, Foundational 20, US1 7, US2 5, US3 6, US4 3, Polish 10).
+- Total tasks: 56 (Setup 4, Foundational 20, US1 7, US2 5, US3 6, US4 3, Polish 11).
 - Keep each commit to one logical change; Conventional Commits that explain why; no attribution lines.
 - Tick tasks `[X]` as they are done and record results with commands, dates, counts and exit codes in
   `verification.md`.

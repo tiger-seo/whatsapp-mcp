@@ -19,16 +19,16 @@ version.
 ## 2. Ingest on synthetic events
 
 ```bash
-CGO_ENABLED=0 go test ./internal/wa -run 'Ingest|History|LID|GroupName' -count=3 -timeout 20m
-CGO_ENABLED=0 go test ./internal/store -run 'ValidateMessage|MessageFieldBytes|PhoneForLID|MappedLIDs|ContactNames' -count=1
+CGO_ENABLED=0 go test ./internal/wa -run 'TestIngest' -count=3 -timeout 20m
+CGO_ENABLED=0 go test ./internal/store -run 'TestValidateMessage|TestMessageFieldBytes|TestPhoneForLID|TestMappedLIDsWithData|TestContactNames' -count=1
 ```
 
 Expected, among others:
 
 - **Live** (US1): text, each media type with caption and metadata, a duplicate, an unsupported type and an edit store
   what the data model says and acknowledge as invariant N1 says.
-- **History** (US2): mixed order with live messages keeps the newest last activity; 2,500 messages become three
-  batches; a message without a time is rejected and its neighbours are stored; a history over 128 MiB, a full queue
+- **History** (US2): mixed order with live messages keeps the newest last activity; 600 messages become three
+  batches of 250 (history flushes); a message without a time is rejected and its neighbours are stored; a history over 128 MiB, a full queue
   and a download error each report `history_incomplete` and keep the connection.
 - **Identity** (US3): mapped and unmapped LIDs, a lookup that times out, a startup merge with a duplicate ID, a second
   startup that changes nothing, a mapping written during the run that is merged without a restart, and a mapping
@@ -42,7 +42,7 @@ Expected, among others:
 ## 3. Failure and shutdown
 
 ```bash
-CGO_ENABLED=0 go test ./internal/wa ./cmd/whatsapp-mcp -run 'IngestFail|Overload|Terminal|Stop.*Ingest|Retire.*History' -count=3 -timeout 20m
+CGO_ENABLED=0 go test ./internal/wa ./cmd/whatsapp-mcp -run 'TestIngest|TestSimulatorIngest|TestOwnerTerminal|TestQuietOrder|TestShellIngest' -count=3 -timeout 20m
 ```
 
 Expected:
@@ -61,7 +61,18 @@ Expected:
 The commands in `AGENTS.md` ("Commands"): gofmt, vet, `go mod verify`, `go test ./... -count=1 -timeout 30m`, the
 five builds, govulncheck, and the session-check helper.
 
-## 5. Quiet-stop rate with synchronous acknowledgements
+## 5. Measurements
+
+Handler latency under history (research R3) and stops with every worker busy (R11):
+
+```bash
+WA_MEASURE=1 CGO_ENABLED=0 go test ./internal/wa -run 'TestIngestHandlerLatency|TestQuietStopWithIngestWorkers' -count=1 -v -timeout 60m
+```
+
+Expected: no `receive_overload` and the recorded lock-wait percentiles; the stop pass rate and `stop_bound_exceeded`
+count with workers busy. The owner reviews both before the code review.
+
+## 5a. Quiet-stop rate with synchronous acknowledgements
 
 ```bash
 WA_MEASURE=1 CGO_ENABLED=0 go test ./internal/wa -run 'TestQuietStopPassRate' -count=1 -v -timeout 60m

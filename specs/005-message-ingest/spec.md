@@ -19,6 +19,12 @@
 - Q: After ingest stops because a message could not be saved, how should the operator resume receiving messages? → A: Stop the connected command safely; the operator fixes the problem and restarts under existing session-safety rules.
 - Q: What should happen if the receive queue is full? → A: Stop the affected connection and explicitly report the overload and a possible gap; do not assume replay or bypass the existing reconnect and quiet-stop rules. Numeric limits require separate approval after measurement.
 
+### Session 2026-11-13
+
+- Q: WhatsApp sends the initial history to the `pair` command's connection, which stops soon after it confirms the link, and the library has already acknowledged each notification it received. What happens to history that `pair` has not stored when it stops? → A: Accept the gap: `pair` keeps its current lifetime, ingests what arrives while it runs, and reports what it could not store as incomplete history. It is not recovered. A bounded wait in `pair` is deferred to the backlog.
+- Q: When WhatsApp later maps a LID to a different phone number, what happens to data already merged under the earlier phone? → A: It stays where it was merged; merges are not undone. Later messages follow the new mapping, and the change is logged.
+- Q: If the startup reconciliation runs out of its startup time budget, what happens to the mappings it has not reached? → A: The command starts, and the running session's merge worker continues through the remaining mappings in the background, within its existing limits; nothing waits for a restart.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Keep Live Messages (Priority: P1)
@@ -87,6 +93,8 @@ An owner sees useful chat names without each group message triggering another gr
 - Invalid identifiers, absent timestamps, malformed fields and unsupported message types do not create invalid message records; independent valid records remain eligible for processing.
 - A group-history participant, an own message, and a direct-message sender must each be attributed to the actual sender when supplied; unresolved identity is not invented.
 - Mapping lookup timeout or failure retains the original identity; a failure is not mistaken for proof that a mapping does not exist.
+- A LID whose mapping later points to a different phone number keeps the data already merged under the earlier phone; later messages follow the new mapping and the change is logged.
+- History that arrives while `pair` is stopping, or after it stops, is reported as incomplete and is not recovered.
 - An individual store operation can fail due to cancellation, limits or low disk; stop ingest and the connected command safely and report the incomplete record, while retaining committed earlier batches. The operator fixes the problem and restarts under existing session-safety rules.
 - Receive overload closes the affected connection and is reported with a warning that local history may have a gap; retry or replay is not guaranteed.
 - Shutdown during ingest cannot allow writes after retirement or falsely establish a quiet stop; pending work is accounted for under feature 004's existing rules.
@@ -101,7 +109,7 @@ An owner sees useful chat names without each group message triggering another gr
 - **FR-004**: Live and history duplicates MUST follow feature 002's composite identity, last-written replacement and preservation of non-empty media metadata; IDs shared by different chats MUST remain distinct.
 - **FR-005**: Chat creation and last activity MUST follow the existing atomic store rules; processing older messages MUST NOT move last activity backward (S4).
 - **FR-006**: The system MUST resolve chat and sender LIDs to phone identities when the mapping is known; on no mapping or lookup failure it MUST retain the LID and MUST NOT invent a phone number. Mapping lookups MUST have a two-second maximum wait (§3.5, P2).
-- **FR-007**: At startup, before live ingest can race the reconciliation, the system MUST reconcile mapped LID chats using feature 002's atomic, idempotent merge, including sender rewrites across chats, phone-copy precedence on duplicate IDs and its name-quality rules. It MUST also attempt that merge when a new mapping is detected during a running session. Unmapped or failed items remain intact and are reported; repeat startup retries them (P2).
+- **FR-007**: At startup, before live ingest can race the reconciliation, the system MUST reconcile mapped LID chats using feature 002's atomic, idempotent merge, including sender rewrites across chats, phone-copy precedence on duplicate IDs and its name-quality rules. It MUST also attempt that merge when a new mapping is detected during a running session. Unmapped or failed items remain intact and are reported; repeat startup retries them. Mappings the startup pass did not reach within its time budget are continued by the running session (P2).
 - **FR-008**: The system MUST consult a stored name first, use available history names for groups, and cache group-information results rather than fetch them for each message. It MUST apply feature 002's saved, real and fallback name ranking, observation time and tie-breaking rules (M7, S4).
 - **FR-009**: When no better name is available, group names fall back to `Group <id>`; direct names use the available saved contact name, then self-chosen contact name, sender name or JID user part, consistent with feature 002's quality ordering. Failed name lookup MUST NOT by itself prevent storing a valid message (§3.4).
 - **FR-010**: History processing MUST submit batches within the existing store limits of 1,000 messages and 16 MiB of aggregate field bytes, and MUST NOT buffer unbounded application-owned work. On a storage failure affecting a live message or history batch, ingest MUST stop, report the failure and incomplete record, and stop the connected command safely. The operator fixes the problem and restarts under existing session-safety rules; previously committed messages remain intact and MUST NOT be represented as a completely successful sync.
@@ -131,6 +139,7 @@ An owner sees useful chat names without each group message triggering another gr
 ## Assumptions
 
 - WhatsApp determines the history it supplies; this feature does not promise complete account history or automatic replay after a failed batch.
+- The initial history after linking is delivered while `pair` runs; what `pair` has not stored when it stops is lost and reported (clarification 2026-11-13).
 - Existing feature 002 storage limits, name precedence and merge decisions apply; the implementation plan must specify bounded ingest admission, cache lifetime, failure reporting and recovery without weakening those limits.
 - Existing feature 004 connection and quiet-stop restrictions remain in force. The receive-resource exception E003-RX-01 applies only if the owner separately approves its scope for this feature; it is not inherited automatically.
 - Acceptance against a real account is not authorized by this specification and remains unverified until separately permitted and recorded.

@@ -70,8 +70,8 @@ func (in *ingest) Counters() IngestCounters
 
 For each queued notification: `DownloadHistorySync(lib, notif, true)`; then for each conversation, in order:
 normalise the chat; offer the conversation name; for each message `ParseWebMessage`, then steps 3–4 above; add to the
-batch; flush at 1,000 messages or 16 MiB (`MessageFieldBytes`). A flush is one `StoreMessages` and one `UpdateChats`
-under the ingest lock. Checkpoints (where `Stop` is observed): before each download, between conversations, before
+batch; flush at 250 messages or 4 MiB (`MessageFieldBytes`). A flush is one `StoreMessages` and one `UpdateChats`
+under the ingest lock, which is released between flushes so a waiting live write goes first. Checkpoints (where `Stop` is observed): before each download, between conversations, before
 each flush. A store error is terminal and reports the chunk and the messages committed from it. History never calls
 `Live`.
 
@@ -79,7 +79,9 @@ each flush. A store error is terminal and reports the chunk and the messages com
 
 The group-name worker takes one group at a time: `GetGroupInfo(lib with 10 s deadline)`, then `UpdateChat` with the
 subject. A failure is cached for 10 minutes. The reconcile worker takes one hint at a time: `PhoneForLID`; visible:
-`MergeLID` under the ingest lock; not yet visible: retry up to 5 times, 1 s apart. A failed merge is logged and left
+`MergeLID` under the ingest lock; not yet visible: retry up to 5 times, 1 s apart. When the startup pass left a cursor,
+the worker also pages on from it with `MappedLIDsWithData` (200 per page), one merge at a time, between hints, until
+the table is done. A failed merge is logged and left
 for the next startup; it is not terminal (both sides stay intact). Checkpoint: between items.
 
 ### Terminal failure
@@ -116,16 +118,16 @@ bit is **not** counted there: it holds no session state and this process did not
 ## Connected commands (`serve`, `stdio`)
 
 - Before the owner opens a generation: run the startup LID reconciliation (R8) under the remaining startup budget and
-  log `lid_reconcile`. Its failure is reported and never stops the command.
+  log `lid_reconcile`. Its failure is reported and never stops the command. A pass stopped by the budget passes its
+  cursor to the first generation's reconcile worker.
 - Wait on the first of the lifecycle's stop and `owner.Terminal()`. A terminal signal requests the normal stop. After
   a clean stop the exit code is 1 and stderr carries
   `whatsapp-mcp: message storage failed; messages may be missing. Fix the cause and start again.`
   (or the existing storage-fault text for a device fault). stdout stays empty in `stdio`.
 - `pair` ingests through the same session code while its generations are connected; this is where WhatsApp sends
   the initial history. It does not wait longer than it does today: a history notification still queued or arriving
-  after its retire bit is reported as `history_incomplete`, because the library has already sent its receipt. Whether
-  `pair` should stay connected for a bounded time to receive the initial history is an open question for the design
-  review (plan).
+  after its retire bit is reported as `history_incomplete`, because the library has already sent its receipt. The
+  owner accepted this gap on 2026-11-13 (spec clarification); a bounded wait is in the backlog.
 - `status` reports nothing new offline: overload and ingest failure exist only in a running process and its log.
 
 ## Invariants
