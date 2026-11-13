@@ -68,6 +68,9 @@ type Session struct {
 	handlerWithStatus bool
 	ingestFailed      chan struct{}
 	ingestFailOnce    sync.Once
+	// overloadSeen and overloadReason record the library's receive-limit close, reported once.
+	overloadSeen   atomic.Bool
+	overloadReason atomic.Pointer[string]
 
 	mu sync.Mutex
 }
@@ -173,13 +176,17 @@ func OpenSession(cfg SessionConfig) (*Session, error) {
 	if lib == nil {
 		lib = cfg.Lifetime
 	}
-	s.ingest = newIngest(IngestConfig{
+	ingestCfg := IngestConfig{
 		Store:  cfg.Store,
 		Client: ingestClientAdapter{client},
 		Log:    cfg.Log,
 		Lib:    lib,
 		Failed: func() { s.ingestFailOnce.Do(func() { close(s.ingestFailed) }) },
-	})
+	}
+	if cfg.wrapIngestStore != nil {
+		ingestCfg.store = cfg.wrapIngestStore(cfg.Store)
+	}
+	s.ingest = newIngest(ingestCfg)
 	barrier.SetMappingObserver(s.ingest.NoteMapping)
 	s.handlerID = client.AddEventHandlerWithSuccessStatus(s.handleEvent)
 	s.handlerWithStatus = true
@@ -401,6 +408,33 @@ func (s *Session) consumeDiagnostics() {
 	}
 }
 
+// noteReceiveOverload reads the library's record of a connection it closed at a receive limit. The client belongs
+// to this generation alone, so any record is this generation's; it is logged once and reported true once.
+func (s *Session) noteReceiveOverload() bool {
+	overload, ok := s.client.LatestReceiveQueueOverload()
+	if !ok || !s.overloadSeen.CompareAndSwap(false, true) {
+		return false
+	}
+	reason := string(overload.Reason)
+	s.overloadReason.Store(&reason)
+	log := s.cfg.Log
+	if log == nil {
+		log = slog.Default()
+	}
+	log.Warn("receive limit reached; the connection was closed and messages may be missing",
+		"event", "receive_overload", "reason", reason, "epoch", s.epoch)
+	return true
+}
+
+// ReceiveOverload is the library's reason for closing this generation's connection at a receive limit; empty
+// when it did not.
+func (s *Session) ReceiveOverload() string {
+	if r := s.overloadReason.Load(); r != nil {
+		return *r
+	}
+	return ""
+}
+
 // IngestFailed closes when this generation's ingest has failed terminally.
 func (s *Session) IngestFailed() <-chan struct{} { return s.ingestFailed }
 
@@ -442,6 +476,9 @@ func (s *Session) handleEvent(raw any) bool {
 	case *events.Connected:
 		s.cfg.Dispatch(s.epoch, SessionConnected)
 	case *events.Disconnected:
+		if s.noteReceiveOverload() {
+			s.cfg.Dispatch(s.epoch, SessionReceiveOverload)
+		}
 		s.cfg.Dispatch(s.epoch, SessionDisconnected)
 	case *events.PairSuccess:
 		s.cfg.Dispatch(s.epoch, SessionPairSuccess)

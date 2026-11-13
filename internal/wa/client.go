@@ -175,6 +175,8 @@ type SessionConfig struct {
 	Library context.Context
 	// trace receives the name of each retirement step as it happens; tests only.
 	trace func(step string)
+	// wrapIngestStore, when set, wraps the store ingest writes to; tests only.
+	wrapIngestStore func(ingestStore) ingestStore
 	// Dispatch receives this generation's admitted upstream events.
 	Dispatch func(epoch uint64, event SessionEvent)
 	// Test-only transport injections; nil uses the approved defaults.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,6 +31,14 @@ type ingestClient interface {
 	GetGroupInfo(ctx context.Context, jid types.JID) (*types.GroupInfo, error)
 }
 
+// ingestStore is the part of the store that ingest uses. Tests put a wrapper around the real store to make a
+// write fail or wait.
+type ingestStore interface {
+	StoreMessage(ctx context.Context, m store.Message) error
+	StoreMessages(ctx context.Context, msgs []store.Message) error
+	UpdateChats(ctx context.Context, updates []store.ChatUpdate) error
+}
+
 // IngestConfig is the construction input of one generation's ingest component.
 type IngestConfig struct {
 	Store  *store.Store
@@ -42,6 +51,9 @@ type IngestConfig struct {
 	Live func(store.Message)
 	// Failed is called once, when ingest becomes terminal.
 	Failed func()
+
+	// store replaces Store when set; tests only.
+	store ingestStore
 }
 
 // IngestCounters are one generation's counts. They only grow.
@@ -79,6 +91,7 @@ func (s ingestState) String() string {
 type ingest struct {
 	cfg IngestConfig
 	log *slog.Logger
+	st  ingestStore
 
 	// mu guards state, halted and worker admission.
 	mu     sync.Mutex
@@ -103,7 +116,12 @@ func newIngest(cfg IngestConfig) *ingest {
 	if cfg.Lib == nil {
 		cfg.Lib = context.Background()
 	}
-	return &ingest{cfg: cfg, log: cfg.Log, stop: make(chan struct{}), workersDone: make(chan struct{})}
+	in := &ingest{cfg: cfg, log: cfg.Log, stop: make(chan struct{}), workersDone: make(chan struct{})}
+	in.st = cfg.store
+	if in.st == nil {
+		in.st = cfg.Store
+	}
+	return in
 }
 
 // State reports the current state.
@@ -122,9 +140,47 @@ func (in *ingest) HandleMessage(evt *events.Message) bool {
 		in.dropped.Add(1)
 		return false
 	}
-	in.ignored.Add(1)
+	m, ok := extractMessage(evt, in.cfg.Client.OwnJID())
+	if !ok {
+		in.ignored.Add(1)
+		return true
+	}
+	if err := store.ValidateMessage(m); err != nil {
+		// The error names the field and never repeats its value.
+		in.rejected.Add(1)
+		in.log.Debug("message rejected", "event", "message_rejected", "chat", escapeLog(m.ChatJID),
+			"message_id", escapeLog(m.ID), "reason", err.Error())
+		return true
+	}
+	in.lock.Lock()
+	err := in.st.StoreMessage(in.cfg.Lib, m)
+	in.lock.Unlock()
+	if err != nil {
+		in.fail("live", err, "chat", escapeLog(m.ChatJID), "message_id", escapeLog(m.ID))
+		return false
+	}
+	in.stored.Add(1)
+	in.logReceived(m)
+	if in.cfg.Live != nil {
+		in.cfg.Live(m)
+	}
 	return true
 }
+
+// logReceived writes a stored message at debug level, the only level at which text and captions appear. Media
+// keys, hashes, URLs and paths never appear.
+func (in *ingest) logReceived(m store.Message) {
+	if !in.log.Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	in.log.Debug("message received", "event", "message_received", "chat", escapeLog(m.ChatJID),
+		"message_id", escapeLog(m.ID), "from_me", m.FromMe, "media_type", m.MediaType, "text", m.Text,
+		"caption", m.Caption)
+}
+
+// escapeLog quotes a JID or message ID for a log line, so a control character or a forged separator in a value
+// another account chose cannot change the line's structure.
+func escapeLog(s string) string { return strconv.QuoteToASCII(s) }
 
 // NoteMapping reports a LID whose mapping the device store just changed: a new row (oldPhoneJID "") or a
 // different phone. It never blocks.

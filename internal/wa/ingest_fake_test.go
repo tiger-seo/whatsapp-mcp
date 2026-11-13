@@ -80,6 +80,11 @@ func ownJID() types.JID   { return types.NewJID(testOwnPhone, types.DefaultUserS
 func peerJID() types.JID  { return types.NewJID(testPeer, types.DefaultUserServer) }
 func groupJID() types.JID { return types.NewJID(testGroup, types.GroupServer) }
 
+// libMarker marks the rig's library context, so a fake can check which context a library call received.
+type libMarker struct{}
+
+func isLibContext(ctx context.Context) bool { v, _ := ctx.Value(libMarker{}).(bool); return v }
+
 // ingestRig is one ingest component on a temporary store with the fake client.
 type ingestRig struct {
 	in     *ingest
@@ -96,7 +101,7 @@ func newIngestRig(t *testing.T, opts ...func(*IngestConfig)) *ingestRig {
 	r := &ingestRig{st: openWADir(t), client: &fakeIngestClient{own: ownJID()}}
 	var logger *slog.Logger
 	logger, r.logs = newRecordedLogger()
-	lib, cancel := context.WithCancel(context.Background())
+	lib, cancel := context.WithCancel(context.WithValue(context.Background(), libMarker{}, true))
 	t.Cleanup(cancel)
 	cfg := IngestConfig{
 		Store:  r.st,
