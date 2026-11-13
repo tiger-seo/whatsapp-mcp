@@ -220,9 +220,9 @@ Recorded during `/speckit-plan`, answered by the owner (`tiger-seo`):
 - **Library maps accepted.** `tcTokenSenderTS`, `groupCache`, `userDevicesCache`, `sessionRecreateHistory` grow per
   distinct account or group; accepted, tracked in `docs/backlog/005-whatsmeow-per-account-maps.md`.
 - **E003-RX-01 retired** by the pin; `docs/backlog/003-whatsmeow-receive-resource-bounds.md` closed.
-- **Race-detector run in WSL2 with cgo allowed** for that run only. Not yet run: the Ubuntu VM has no gcc, and
-  installing it as root from this session was blocked by the session's permission classifier. It stays a condition
-  before `/speckit-implement` (plan, Constitution Check).
+- **Race-detector run in WSL2 with cgo allowed** for that run only. The owner installed gcc 15.2.0 in the Ubuntu VM
+  (`apt-get install gcc libc6-dev`, which also upgraded libc6 from 2.43-2ubuntu2.4 to 2.43-2ubuntu2.7); the
+  session's own attempt to install it as root was blocked by its permission classifier. Results below.
 
 ## Pinned Fork Gates
 
@@ -235,10 +235,28 @@ Recorded during `/speckit-plan`, answered by the owner (`tiger-seo`):
 - `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...`: `No vulnerabilities found.`, exit 0.
 - `go test ./... -count=1 -timeout 30m`: exit 0, 9 packages ok (`cmd/whatsapp-mcp` 134.8 s, `internal/store` 253.8 s,
   `internal/wa` 44.8 s).
-- Not run: the session-check helper's test and build, the race detector, the pass-rate measurement with
+- Not run: the session-check helper's test and build, the pass-rate measurement with
   `SynchronousAck` (not yet implemented), native Linux or macOS. No real account was used.
 - `TestQuietAllowListPin` compares with the `require` line, which still names upstream `f1b798561919`; the allow-list
   is empty, so the check passes without testing the replacement (research R15).
+
+## Race Detector (WSL2)
+
+- Date: 2026-11-13, WSL2 Ubuntu (not native Linux), gcc 15.2.0, `CGO_ENABLED=1` for these runs only,
+  `TMPDIR=/var/tmp`, `MSYS_NO_PATHCONV=1` on the Windows side. A first attempt without `MSYS_NO_PATHCONV` never ran:
+  Git Bash rewrote the `--cd /mnt/d/...` argument and WSL exited 127 with `ERROR_PATH_NOT_FOUND`.
+- Fork at `9209108`, Go 1.27.3: `go test -race ./... -count=1 -timeout 20m` exited 0; `go.mau.fi/whatsmeow` (26.0 s),
+  `appstate` (1.0 s) and `binary` (7.5 s) ok, no race reported.
+- Project at `88a74e5`, Go 1.27.4: `go test -race -p 1 ./internal/wa ./cmd/... -count=1 -timeout 40m` exited 1.
+  `internal/wa` ok (61.1 s), no race. `cmd/whatsapp-mcp` failed: `TestShellSavedSessionOutdatedHandoff` reported 4
+  data races, all on the test's own `fs` variable, written by the fake session factory on the owner's goroutine and
+  read by the polling test goroutine. A test defect from feature 003, not production code or the fork.
+- Fix: the test shares the fake session through `atomic.Pointer`. Then `go test -race -p 1 ./cmd/... -count=1
+  -timeout 40m` in WSL2 exited 0 (`cmd/whatsapp-mcp` ok, 158.5 s, no race), and on native Windows with
+  `CGO_ENABLED=0` `go test ./cmd/whatsapp-mcp -run TestShellSavedSessionOutdatedHandoff -count=3` exited 0.
+  `go vet ./cmd/...` exited 0 and `gofmt -l cmd/` printed nothing.
+- Not run under the race detector: `internal/store` and the remaining packages (outside the plan's condition, which
+  names the fork and the session packages).
 
 ## Owner Reviews
 

@@ -1,0 +1,420 @@
+# Tasks: Message Ingest
+
+**Input**: Design documents in `specs/005-message-ingest/`: spec.md, plan.md, research.md (R1–R15), data-model.md,
+contracts/ingest.md and quickstart.md.
+
+**Prerequisites**: A passing owner-judge **design** review of the committed feature directory (the hook refuses
+`/speckit-implement` without it), with the owner's answers to the plan's "Open questions for the design review"
+(T004). Constitution 3.0.0. `docs/specification.md` must be present locally (T003).
+
+**Tests**: Required (constitution VI and X, spec FR-014, SC-001 to SC-006). Write each test before the code it covers
+and observe it fail for the right reason. Unit tests use the fake `ingestClient` and a temporary store; simulator
+tests use `internal/wasim`. Use channels and barriers for timing, not sleeps. Automated tests never touch a real
+account.
+
+**Organization**: Setup, then a foundational phase that adds the store helpers, the session and owner wiring, the
+ingest skeleton and the terminal-failure path, ending with the quiet-stop pass-rate rerun under `SynchronousAck`. Then
+US1 to US4 in spec priority order, then polish and evidence.
+
+**Decisions already made (do not reopen without the user)**:
+- the dependency is `github.com/tiger-seo/whatsmeow` at `9209108` with its approved limits; no other pin, fork commit
+  or `replace` (research R1);
+- E003-RX-01 is retired; the four library maps are accepted (R2);
+- a storage failure stops ingest and the connected command; the operator restarts (spec clarifications, R9);
+- receive overload is reported and follows the existing no-reconnect rule (R10);
+- edits are not stored (R5); merges are not undone on a mapping change (R8).
+
+No commit carries attribution lines.
+
+## Current state
+
+Branch `005-message-ingest`, planning complete, tasks generated 2026-11-13. Nothing implemented. Next: commit, then the
+owner-judge **design** review, then T004. This section is ignored by the review-gate hook.
+
+## Format: `[ID] [P?] [Story] Description`
+
+- Every task has a checkbox, a sequential ID and repository-relative file paths.
+- `[P]` means different files and no dependency on an unfinished task.
+- `[US1]` to `[US4]` mark story tasks. Setup, foundational and polish tasks have no label.
+- Constraints quoted from data-model.md and contracts/ingest.md are binding.
+
+## Phase 1: Setup
+
+**Purpose**: Confirm the gates and decisions. No production code.
+
+- [X] T001 Pin the owner-approved fork in `go.mod` and `go.sum` (`replace go.mau.fi/whatsmeow =>
+  github.com/tiger-seo/whatsmeow v0.0.0-20261112064615-92091085667b`) and run the full gates. Done during planning,
+  2026-11-13, commit `88a74e5`; evidence in `specs/005-message-ingest/verification.md` "Pinned Fork Gates".
+- [X] T002 Run the race detector on the fork and on `./internal/wa ./cmd/...` in WSL2, and fix the race found in
+  `cmd/whatsapp-mcp/store_test.go`. Done 2026-11-13; evidence in `verification.md` "Race Detector (WSL2)".
+- [ ] T003 Confirm `docs/specification.md` exists locally and contains §3.4, §3.5, §8.5 (S3–S5), §8.6 (P2, P3) and §8.7
+  (M7). If it is missing, stop and ask the user for it; do not infer behaviour from code. Record the check in
+  `specs/005-message-ingest/verification.md`.
+- [ ] T004 **OWNER DECISION.** Ask the owner the three "Open questions for the design review" in
+  `specs/005-message-ingest/plan.md`: (1) accept or change the proposed limits in `data-model.md`; (2) keep `pair`
+  without a history wait (recommended) or add a bounded wait; (3) accept that a stop during a history download can
+  leave the marker unsafe, to be measured in T046. Record the answers and the date in `verification.md` "Owner
+  Decisions" and update `data-model.md` if a number changes. Only the owner ticks this task. If (2) is "add a wait",
+  stop: that changes feature 004's `pair` contract and needs a spec update first.
+
+---
+
+## Phase 2: Foundational — store helpers, wiring, skeleton and terminal failure
+
+**Purpose**: Everything every story needs: the read-only store helpers, the session's success-status handler with
+`SynchronousAck`, the ingest component's states, counters, lock, `Stop` and `Wait`, the owner's retirement hooks and
+terminal signal, and the command's exit on a terminal failure. Depends on T003 and T004.
+
+**⚠️ CRITICAL**: No story task may start before T024 (pass-rate rerun) is recorded.
+
+### Tests (write first, observe failing)
+
+- [ ] T005 [P] Write `internal/store/validate_test.go` cases for `ValidateMessage` and `MessageFieldBytes`: for each
+  field of `store.Message`, a value that `StoreMessages` rejects is rejected by `ValidateMessage` with the same field
+  name, and one that it accepts is accepted (table shared with the existing `StoreMessages` validation cases);
+  `MessageFieldBytes` equals the charge `StoreMessages` makes, so a batch of messages summing to exactly 16 MiB is
+  accepted and one byte more is `ErrResourceLimit`. Error text never contains the field value.
+- [ ] T006 [P] Write `internal/store/lids_test.go`: `PhoneForLID` returns the mapped phone JID, `ok == false` for no
+  mapping, a `*ValidationError` for a JID not on `@lid`, the caller's context error on cancel, `ErrClosed` after
+  `Close`; `MappedLIDsWithData(ctx, afterLID, limit)` returns "up to limit (1..200) mappings whose LID is greater than
+  afterLID, in key order, and that have a chat or a message sender stored under the LID", rejects limit 0 and 201,
+  skips mappings with no data, and pages through 1,000 mappings without repeats or gaps while new mappings are
+  inserted between pages.
+- [ ] T007 [P] Write `internal/store/contacts_test.go` cases for `ContactNames`: saved is full name, else first name;
+  real is push name, else business name; empty strings when absent; names over 1 KiB in the device table are
+  returned as a `ErrResourceLimit`, not truncated silently; only the current device's rows are read.
+- [ ] T008 [P] Write `internal/store/device_lids_test.go` cases: after a successful `PutLIDMapping` or
+  `PutManyLIDMappings` through the guarded device store, the registered mapping observer receives each written LID
+  JID exactly once; a failed or refused write notifies nothing; the observer is called after the write returns and
+  never while a store lock is held; a nil observer is allowed.
+- [ ] T009 [P] Extend `internal/wa/quiet_test.go` `TestQuietAllowListPin`: when `go.mod` has a `replace` for
+  `go.mau.fi/whatsmeow`, the version compared is the replacement's (research R15); add a table test of the parser on
+  `go.mod` texts with and without a replace.
+- [ ] T010 [P] Write `internal/wa/ingest_test.go` skeleton cases with the fake client (new file
+  `internal/wa/ingest_fake_test.go`): states follow data-model "Ingest state transitions" exactly (`running` →
+  `failed` on a message-store error; `running` or `failed` → `retiring` at the retire bit; `retiring` → `stopped` when
+  joined; never back to `running`); `Stop` is idempotent and never blocks; `Wait` returns when the workers return
+  and returns the context error at its deadline; `Failed` is called exactly once; counters start at zero and are
+  monotonic; a context error caused by the generation's own retirement does not make ingest `failed`.
+- [ ] T011 [P] Write `internal/wa/session_ingest_test.go`: the session registers its handler with
+  `AddEventHandlerWithSuccessStatus` and sets `SynchronousAck = true`, `ManualHistorySyncDownload = true`,
+  `DisableManualHistorySyncReceipt = false`, and leaves feature 004's settings unchanged; owner events return `true`
+  and dispatch as before; after the retire bit a message event returns `false`, increments `DroppedMessages`, does
+  not touch the store and does not increment the owner-event drop count; `IngestFailed()` closes when ingest fails.
+- [ ] T012 [P] Extend `internal/wa/quiet_order_test.go` with the ingest steps: `ingest.Stop()` happens at step 4,
+  `ingest.Wait` waits at most 2 s at step 5, workers still running are joined after step 8 and before step 9, and no
+  step of feature 004 moves (the existing assertions keep passing). `QuietStopResult.DroppedMessages` is reported and
+  never makes `Passed` false.
+- [ ] T013 [P] Write `internal/wa/owner_terminal_test.go`: `Terminal()` closes on an ingest failure and on a device
+  storage fault, once; `Health()` reports `IngestFailed` and `ReceiveOverload` (empty when none).
+- [ ] T014 [P] Write `cmd/whatsapp-mcp/ingest_cmd_test.go` with the fake owner seam: for `serve` and `stdio`, a terminal
+  signal runs the normal stop and exits 1 with exactly `whatsapp-mcp: message storage failed; messages may be
+  missing. Fix the cause and start again.` on stderr; a device storage fault keeps its existing message and also
+  stops the command (the former endless wait); stdout stays empty in `stdio`; a lifecycle stop without a terminal
+  signal behaves as before.
+- [ ] T015 Run the tests of T005–T014 and record that each fails for the expected reason (missing symbol or
+  assertion), in `specs/005-message-ingest/verification.md` "Foundational tests".
+
+### Implementation
+
+- [ ] T016 [P] Export `ValidateMessage` and `MessageFieldBytes` in `internal/store/validate.go` (and
+  `internal/store/messages.go` if the charge lives there), with `StoreMessages` calling the same code, so there is one
+  definition of valid and of size. Make T005 pass.
+- [ ] T017 [P] Add `PhoneForLID`, `MappedLIDsWithData` and the `LIDMapping` type in `internal/store/lids.go` as ordinary
+  read operations (admission, 10 s limit, typed errors), reading `whatsmeow_lid_map` for the current device only.
+  Keyset paging on `lid`; existence checks through the existing `messages_sender_jid` index and the chats primary
+  key; no schema change. Make T006 pass.
+- [ ] T018 [P] Add `ContactNames` in `internal/store/contacts.go`, reusing the contact-name expressions already in
+  `contacts.go` and `queries.go`. Make T007 pass.
+- [ ] T019 [P] Add a mapping observer to the guarded device LID store in `internal/store/device_lids.go` (set through
+  the device barrier or `LoadDevice`, one per generation), called after a successful write with each LID JID. Make
+  T008 pass.
+- [ ] T020 [P] Change `TestQuietAllowListPin` in `internal/wa/quiet_test.go` to use the `replace` target. Make T009
+  pass.
+- [ ] T021 Create `internal/wa/ingest.go`: `IngestConfig`, `newIngest`, the `ingestClient` interface (`ParseWebMessage`,
+  `DownloadHistorySync`, `GetGroupInfo`, own JID), the state machine, the per-generation ingest lock, counters
+  (`stored`, `ignored`, `rejected`, `droppedMessages`, `historyIncomplete`, `lookupsDropped`, `hintsDropped`,
+  `merged`, `mergeFailed`, each `uint64`), `Stop`, `Wait`, `Counters`, and the terminal-failure routine of
+  contracts/ingest.md (once: set `failed`, `Stop`, log `ingest_failed`, call `Failed`). `HandleMessage` returns `true`
+  for everything at this stage except the retiring and failed cases. Make T010 pass.
+- [ ] T022 Wire ingest into `internal/wa/session.go`: `SynchronousAck = true`, `AddEventHandlerWithSuccessStatus`,
+  `handleEvent` returning `bool`, message events to `HandleMessage`, the retire-bit drop counted in
+  `DroppedMessages`, the mapping observer to `NoteMapping`, `IngestFailed()`, and `Lib` derived from the library
+  context, never the work context. Make T011 pass.
+- [ ] T023 Wire ingest into `internal/wa/owner.go`: `ingest.Stop()` at step 4, a bounded 2 s `Wait` at step 5, the join
+  after step 8 with the handler callbacks, `Terminal()`, `Health().IngestFailed`, `Health().ReceiveOverload`,
+  `QuietStopResult.DroppedMessages` in the stop log with "messages may be missing" when non-zero. Then wire
+  `cmd/whatsapp-mcp/commands.go` (`serve`, `stdio`) to wait on `owner.Terminal()` beside the lifecycle and exit 1 with
+  the message of T014. Update `specs/004-shutdown-drain/contracts/quiet-stop.md`'s event-count rule only by pointing to
+  contracts/ingest.md "Revised event-count rule". Make T012–T014 pass.
+- [ ] T024 Rerun the quiet-stop pass rate with `SynchronousAck` on: `WA_MEASURE=1 CGO_ENABLED=0 go test ./internal/wa -run
+  'TestQuietStopPassRate' -count=1 -v -timeout 60m` (quickstart §5). Record per kind and failure categories in
+  `verification.md` "Pass rate with SynchronousAck" next to feature 004's recorded rates. A lower rate for any kind
+  goes to the owner before any story starts.
+
+**Checkpoint**: the session acknowledges only after handlers succeed, ingest can fail terminally and stop the command,
+and retirement still passes feature 004's order and rate.
+
+---
+
+## Phase 3: User Story 1 — Keep Live Messages (Priority: P1) 🎯 MVP
+
+**Goal**: Supported live messages, received or sent, are stored with chat, ID, sender, time, direction, text, separate
+caption and media metadata; a failed write is not acknowledged and stops the command; receive overload is reported.
+
+**Independent Test**: Deliver synthetic live events to a connected test session and inspect stored records, without a
+real account.
+
+### Tests for User Story 1 (write first, observe failing)
+
+- [ ] T025 [P] [US1] Write `internal/wa/ingest_extract_test.go`: text from `Conversation`, else
+  `ExtendedTextMessage.Text`; image, video and document with caption in `Caption` and never in `Text`; audio without a
+  caption; URL, direct path, media key, file SHA-256, encrypted SHA-256, length, MIME type and the document file name
+  copied; view-once and ephemeral wrappers and `DocumentWithCaptionMessage` stored as their inner type; an event with
+  `IsEdit`, a sticker, a reaction, a location, a poll and an empty message are ignored and counted `ignored`; an
+  eligible message with a zero time, a time outside "2000-01-01 to 2100-01-01 UTC", an empty or over-256-byte ID, a
+  sender absent or not a user or LID JID, a 32-byte field of another length or text over "256 KiB" is `rejected`,
+  never repaired, and nothing is written.
+- [ ] T026 [P] [US1] Write `internal/wa/ingest_live_test.go` with the fake client and a temporary store: an own message's
+  sender is the account's phone JID; a group message's sender is `Info.Sender` with the device part dropped; a direct
+  message's sender is the chat's user; a duplicate `(chat, ID)` leaves one row and keeps non-empty media metadata as
+  feature 002 does; the same ID in two chats gives two rows; `HandleMessage` returns `true` for stored, ignored and
+  rejected messages and `false` after a store error; after that error every later message returns `false` and is
+  counted; the `ingest_failed` warning carries the operation `live`, the error class and the escaped chat JID and
+  message ID, and no text or caption; `ErrIndeterminate` is reported as "may or may not be stored"; `Live` is called
+  once per committed live message with the stored record and never for an ignored or rejected one.
+- [ ] T027 [P] [US1] Write `internal/wa/wasim_ingest_test.go` on the simulator: a text and a captioned image sent to the
+  account are stored and acknowledged; with the store made to fail, the message is not acknowledged (assert on the
+  simulator's received acks, extending `internal/wasim` to record them if needed), the owner's `Terminal()` closes and
+  the stop passes its quiet check; a full handler queue (the fork's 2,048 items, driven by a blocked handler) logs
+  one `receive_overload` with reason `item_limit`, sets `Health().ReceiveOverload`, and no reconnect follows.
+- [ ] T028 [US1] Run T025–T027 and record the expected failures in `verification.md`.
+
+### Implementation for User Story 1
+
+- [ ] T029 [US1] Create `internal/wa/ingest_extract.go`: eligibility and field extraction from `*events.Message` into
+  `store.Message` per data-model "Message", then `store.ValidateMessage`. Make T025 pass.
+- [ ] T030 [US1] Implement live `HandleMessage` steps 1, 3, 4, 5 and 7 of contracts/ingest.md in `internal/wa/ingest.go`
+  (no LID normalisation and no name offer yet: chat and sender are stored as supplied, device part dropped). The write
+  takes the ingest lock. Make T026 pass.
+- [ ] T031 [US1] Read `client.LatestReceiveQueueOverload()` on `*events.Disconnected` in `internal/wa/session.go`, log
+  `receive_overload` once with the fork's reason and "messages may be missing", dispatch `SessionReceiveOverload`
+  before `SessionDisconnected`, and record the reason for `Health().ReceiveOverload` in `internal/wa/owner.go`. Make
+  T027 pass.
+
+**Checkpoint**: live text and media are stored and acknowledged only after the write; failure and overload are
+reported.
+
+---
+
+## Phase 4: User Story 2 — Recover Available History (Priority: P1)
+
+**Goal**: WhatsApp-supplied history is stored in bounded batches beside live messages, without moving last activity
+backward and without claiming a partial chunk as complete.
+
+**Independent Test**: Feed synthetic history conversations and live messages in varied orders and compare the
+resulting records.
+
+### Tests for User Story 2 (write first, observe failing)
+
+- [ ] T032 [P] [US2] Write `internal/wa/ingest_history_test.go` with the fake client: a history notification from the
+  account's own device is queued and `HandleMessage` returns `true`; one from another sender is ignored; the queue
+  holds "8 notifications" and the ninth is reported `history_incomplete` (`queue_full`) without a disconnect; the
+  worker calls `DownloadHistorySync` with synchronous storage and the library context; each history message goes
+  through `ParseWebMessage` and the same extraction as live, so a group participant, an own message and a direct
+  message get the senders of US1; 2,500 valid messages are written as batches of 1,000, 1,000 and 500, and messages
+  summing to more than 16 MiB of `MessageFieldBytes` are cut before the limit; a message without a timestamp is
+  rejected and its neighbours are stored; a conversation's display name or name is offered once per batch as
+  `NameReal`; history never calls `Live`.
+- [ ] T033 [P] [US2] Write failure cases in `internal/wa/ingest_history_test.go`: `ErrHistorySyncTooLarge`, a download
+  error and a parse error each report `history_incomplete` with the reason (`too_large`, `download`, `parse`), the
+  chunk order and sync type, and keep the connection and ingest `running`; a store error on the second batch keeps
+  the first batch, reports `ingest_failed` with operation `history` and the messages committed from the chunk, makes
+  ingest `failed` and claims nothing complete; a live message newer than the history keeps the chat's last activity
+  for every arrival order (SC-003).
+- [ ] T034 [P] [US2] Write retirement cases in `internal/wa/ingest_history_test.go` and `internal/wa/quiet_order_test.go`:
+  `Stop` is observed before each download, between conversations and before each flush; a worker blocked inside
+  `DownloadHistorySync` at step 5 is not cancelled by the work context, is joined after step 8, and a device write it
+  attempts after the barrier is refused and counted, so the check fails with `storage_refused` (the honest outcome,
+  R11); no message-store write happens after the worker was joined.
+- [ ] T035 [US2] Run T032–T034 and record the expected failures in `verification.md`.
+
+### Implementation for User Story 2
+
+- [ ] T036 [US2] Create `internal/wa/ingest_history.go`: the history queue ("8 notifications"), the single worker, the
+  download with synchronous storage under `Lib`, conversion through `ParseWebMessage` and `ingest_extract.go`, batches
+  cut at 1,000 messages or 16 MiB with one `StoreMessages` and one `UpdateChats` per flush under the ingest lock, the
+  checkpoints, and the `history_incomplete` and `ingest_failed` reports. Add history step 2 to `HandleMessage`. Make
+  T032–T034 pass.
+
+**Checkpoint**: history and live messages coexist in any order; every incomplete chunk is reported.
+
+---
+
+## Phase 5: User Story 3 — Unify Contact Identities (Priority: P1)
+
+**Goal**: Mapped LIDs are stored under the phone identity, unmapped ones stay LIDs, and LID data is merged at startup
+and when a mapping appears during the run.
+
+**Independent Test**: Seed synthetic LID and phone identities and overlapping messages; run startup reconciliation
+and ingest events with and without mappings.
+
+### Tests for User Story 3 (write first, observe failing)
+
+- [ ] T037 [P] [US3] Write `internal/wa/ingest_lid_test.go` normalisation cases: a mapped chat LID and a mapped sender LID
+  are replaced by the phone JID and the sender phone is filled; an unmapped LID is kept and its phone is empty; a
+  lookup that exceeds "2 s", returns an error or is cancelled keeps the LID and is not treated as "no mapping"
+  elsewhere; normalisation applies to live and history alike.
+- [ ] T038 [P] [US3] Write run-time merge cases in `internal/wa/ingest_lid_test.go`: a `NoteMapping` for a LID with stored
+  messages merges them through `MergeLID` without a restart; a mapping not yet visible is retried "5 attempts 1 s
+  apart" and merged once it commits, else dropped and counted `hintsDropped`; the hint set holds "1,024 LIDs" and a
+  1,025th distinct hint is dropped and counted; a message normalised before the mapping existed and written while the
+  merge is pending ends under the phone JID (ingest lock ordering, invariant N3); a failed merge leaves both sides
+  intact, is counted `mergeFailed` and does not make ingest `failed`; a mapping that moves a LID to another phone
+  logs `lid_reassigned` with escaped JIDs and undoes nothing.
+- [ ] T039 [P] [US3] Write `cmd/whatsapp-mcp/reconcile_test.go` for the startup pass: before the owner opens a
+  generation, mapped LID chats and group-only LID senders are merged through `MappedLIDsWithData` pages of 200; the
+  phone chat's duplicate wins and names and latest times follow feature 002 (SC-004); a second startup merges nothing;
+  an unmapped LID and a merge that fails are left intact and reported in `lid_reconcile`; an exhausted startup budget
+  stops the pass with `budget_exhausted` and the command still starts.
+- [ ] T040 [US3] Run T037–T039 and record the expected failures in `verification.md`.
+
+### Implementation for User Story 3
+
+- [ ] T041 [US3] Create `internal/wa/ingest_lid.go`: normalisation through `store.PhoneForLID` with a 2 s deadline, used
+  by `HandleMessage` and the history worker before validation; the hint set ("1,024 LIDs", deduplicated), the
+  reconcile worker with its retries and checkpoints, `MergeLID` under the ingest lock, and the `lid_reassigned` log.
+  Implement `NoteMapping`. Make T037 and T038 pass.
+- [ ] T042 [US3] Add the startup reconciliation to `cmd/whatsapp-mcp/commands.go` for `serve` and `stdio`, after the run
+  guard and before `attachOwner`, under the remaining startup budget, logging `lid_reconcile` (merged, failed,
+  skipped, completed or `budget_exhausted`). A failure never stops the command. Make T039 pass.
+
+**Checkpoint**: a person's direct and group messages land under one identity whenever WhatsApp supplies the mapping.
+
+---
+
+## Phase 6: User Story 4 — Recognize Chats Without Repeated Lookups (Priority: P2)
+
+**Goal**: Chats get the best available name, stored names come first, and a group is looked up at most once while its
+name is available.
+
+**Independent Test**: Supply stored names, synthetic contact and history names, and a counted group-information
+provider while ingesting repeated messages.
+
+### Tests for User Story 4 (write first, observe failing)
+
+- [ ] T043 [P] [US4] Write `internal/wa/ingest_names_test.go`: a stored non-empty name is read once into the "4,096
+  chats, least recently used" cache and a worse offer is never written; direct chats get saved (full or first), then
+  real (push or business), then the message's push name, then the JID user part as `NameFallback`, each offered only
+  when better or newer at the same quality; a group with a history name never triggers a lookup; a group without one
+  is stored with `Group <id>` and looked up once by the counted fake for 100 messages (SC-005); a failed lookup is not
+  repeated for "10 min"; the lookup set holds "64 distinct groups" and the 65th is dropped and counted; each lookup
+  has a "10 s" deadline and runs under `Lib`; a failed name write is terminal but the message stays stored and
+  `HandleMessage` returns `true`; 10,000 distinct groups never grow the cache, the set or the worker count past their
+  bounds.
+- [ ] T044 [US4] Run T043 and record the expected failures in `verification.md`.
+
+### Implementation for User Story 4
+
+- [ ] T045 [US4] Create `internal/wa/ingest_names.go`: the name cache, the direct-chat order through
+  `store.ContactNames`, observation times per research R12, the group lookup set and single worker with the failure
+  cache, and step 6 of `HandleMessage`. Make T043 pass.
+
+**Checkpoint**: names are stable and group lookups are bounded.
+
+---
+
+## Phase 7: Polish and Cross-Cutting Concerns
+
+**Purpose**: Abuse and privacy coverage, documentation, measurements, gates, platforms and evidence.
+
+- [ ] T046 Measure the unsafe-stop rate during history (plan open question 3): extend `internal/wa/quiet_measure_test.go`
+  with a `WA_MEASURE=1` case that stops 50 times while the simulator delivers history chunks, and record the rate and
+  failure categories in `verification.md`. The owner reviews the number before the code review.
+- [ ] T047 [P] Write `internal/wa/ingest_abuse_test.go` (spec abuse cases): oversized text, caption, names and media
+  fields; malformed JIDs, timestamps and control characters; a message whose text asks to send, pair or call a
+  webhook; concurrent live, history, lookup and merge pressure. Assert nothing invalid is written, no partial batch
+  exists, no send or pairing call reaches the fake client, and no bound in data-model "Per-generation ingest state"
+  is exceeded.
+- [ ] T048 [P] Extend `internal/wa/security_test.go` (or the store's `logsafety_test.go` pattern): with a debug-level
+  and an info-level logger, text and captions appear only at debug; media keys, hashes, URLs and direct paths appear
+  at no level; names never appear above debug; JIDs and IDs in warnings are escaped; nothing is written to stdout.
+- [ ] T049 [P] Update `OPERATIONS.md` with a "What is stored" section (message text and captions, media metadata
+  including keys that decrypt the media, LID-to-phone links, indefinite growth, deletion in WhatsApp does not delete
+  here, backups hold the same data), the new events (`ingest_failed`, `history_incomplete`, `receive_overload`,
+  `lid_reconcile`, `lid_reassigned`, `ingest_stopped`), the exit-1 storage message and what the operator does, and the
+  split between implemented and verified.
+- [ ] T050 [P] Check doc comments in `internal/wa/ingest*.go`, `session.go`, `owner.go`, `internal/store/lids.go`,
+  `validate.go`, `contacts.go` and `device_lids.go`: no FR-, SC-, US, D, F or research IDs (constitution); no stale
+  text about asynchronous acknowledgements.
+- [ ] T051 Run the full gates of `AGENTS.md` "Commands" and record each exit code read directly: `gofmt -l .`, `go vet
+  ./...`, `go mod verify`, `CGO_ENABLED=0 go test ./... -count=1 -timeout 30m`, the five cross-builds, `go run
+  golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...`, and `go vet`, `go test` and the build of
+  `./internal/wa/testdata/cmd/session-check`. Confirm `go.mod` and `go.sum` are unchanged since `88a74e5` with `git
+  diff 88a74e5 -- go.mod go.sum`. Keep `TEMP` and `TMP` on `D:\tmp`.
+- [ ] T052 Run the race detector again in WSL2 on `./internal/wa ./cmd/...` (quickstart §6, `MSYS_NO_PATHCONV=1`) and
+  the whole suite under WSL2 with `CGO_ENABLED=0` as in `AGENTS.md`; record both as WSL2. Push the branch for CI only
+  if the user asks; anything not run is "not verified".
+- [ ] T053 Check LF endings with `git ls-files --eol`; no tracked file shows `w/crlf`.
+- [ ] T054 **Permitted real-account journey, only with the owner's explicit permission for each step** (quickstart §7),
+  after reviewing the roadmap's shutdown follow-up: a new directory under `D:\tmp`, the binary from a named commit,
+  `pair`, then `serve`; one text and one captioned image from another phone; stop; inspect the store; the owner
+  unlinks the device and the directory is deleted. Record redacted results; a step not performed is "not verified".
+  Do not act on a real account without that permission.
+- [ ] T055 Roll up `specs/005-message-ingest/verification.md`: the pin and its limits unchanged, the race and pass-rate
+  results, the history unsafe-stop rate, platforms covered, accepted risks (library maps, no replay guarantee,
+  history after `pair`), and every "not verified" item. Update `AGENTS.md` "Current state" and this file's "Current
+  state". Commit the work and the evidence and run the owner-judge agent in **code** mode; add its row to the "Owner
+  reviews" table and commit it.
+
+---
+
+## Dependencies and Execution Order
+
+- **Setup** (T001–T004): T001 and T002 are done. T003 and T004 come first; **T004 is an owner gate**.
+- **Foundational** (T005–T024): tests T005–T014 in parallel, then T015; implementation T016–T020 in parallel, then T021,
+  T022, T023 in order; **T024 (pass rate) gates every story**.
+- **US1** (T025–T031) depends on Phase 2. It is the MVP.
+- **US2** (T032–T036) depends on US1's extraction (T029) and live path (T030).
+- **US3** (T037–T042) depends on Phase 2 (T017, T019, T021) and on US1's write path (T030); T041 also normalises in the
+  history worker, so it follows T036 when US2 is done first, or adds that call when US2 lands.
+- **US4** (T043–T045) depends on Phase 2 (T018) and US1 (T030); it uses history names from US2 when present.
+- **Polish** (T046–T055) depends on all stories. T046 needs US2. T054 needs the owner's permission. T055 is last.
+- Within a story: tests, then the failing-observation task, then implementation.
+
+### Parallel opportunities
+
+- Phase 2 tests: T005–T014 together (distinct files); T016–T020 together.
+- US1 tests: T025, T026 and T027 together.
+- US2 tests: T032, T033 and T034 touch one file and the order test: write T032 first, then T033 and T034.
+- US3 tests: T037 and T038 (one file, write in sequence) in parallel with T039.
+- After Phase 2 and US1, US3 and US4 can proceed in parallel with US2 (different files), except where noted above.
+- Polish: T047, T048, T049 and T050 together.
+
+### Parallel example (Phase 2 tests)
+
+```text
+Task: "Write internal/store/validate_test.go (T005)"
+Task: "Write internal/store/lids_test.go (T006)"
+Task: "Write internal/wa/ingest_test.go and ingest_fake_test.go (T010)"
+Task: "Write cmd/whatsapp-mcp/ingest_cmd_test.go (T014)"
+```
+
+## Implementation Strategy
+
+1. **MVP = Phase 1 + Phase 2 + US1.** Live messages are stored and acknowledged only after the write; failure and
+   overload are reported and stop or disconnect as designed.
+2. Add US2 for history and US3 for identities (both P1), then US4 for names.
+3. Finish with the history unsafe-stop measurement, abuse and privacy tests, documentation, gates, WSL2 runs, the
+   permitted real-account journey and the code review.
+4. If a measured pass rate falls below feature 004's, or a bound is reached in normal simulator traffic, stop and ask
+   the owner. Do not widen a limit, the allow-list or the quiet check on your own.
+
+## Notes
+
+- Total tasks: 55 (Setup 4, Foundational 20, US1 7, US2 5, US3 6, US4 3, Polish 10).
+- Keep each commit to one logical change; Conventional Commits that explain why; no attribution lines.
+- Tick tasks `[X]` as they are done and record results with commands, dates, counts and exit codes in
+  `verification.md`.
+- No task changes `go.mod` or `go.sum`, adds a setting, adds a reconnect path, adds a migration or reopens decisions
+  D1–D18.

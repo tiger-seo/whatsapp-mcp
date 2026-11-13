@@ -4,9 +4,9 @@
 
 **Input**: Feature specification from `specs/005-message-ingest/spec.md`
 
-**Status**: Phase 0 and Phase 1 complete. The constitution gate passes on the pinned fork, with one open condition
-(the race-detector run) that must be met before `/speckit-implement`. Next: `/speckit-tasks`, then the owner's design
-review.
+**Status**: Phase 0 and Phase 1 complete. The constitution gate passes on the pinned fork; its condition, the
+race-detector run, was met on 2026-11-13 (`verification.md`, "Race Detector (WSL2)"). Next: `/speckit-tasks`, then the
+owner's design review.
 
 ## Summary
 
@@ -60,17 +60,16 @@ of 10 s and its retirement order.
 | II. One binary | PASS | PASS | No new dependency, no cgo in builds; the race run is a test tool run in WSL2 with the owner's permission. |
 | III. One owner | PASS | PASS | Same store file, no migration, no working-directory paths. |
 | IV. Clean channel | PASS | PASS | Text and captions only at debug; keys and URLs never; stdout empty in `stdio` (contract). |
-| V. Secure by default | PASS, with the condition below | PASS, with the condition below | Fork bounds approved and pinned (R1); application bounds for every queue, set, cache, worker, wait and batch (data model); limits enforced on what is consumed (store charges, fork expansion counts); overload and rejected history reported (R4, R10). |
+| V. Secure by default | PASS; condition met below | PASS; condition met below | Fork bounds approved and pinned (R1); application bounds for every queue, set, cache, worker, wait and batch (data model); limits enforced on what is consumed (store charges, fork expansion counts); overload and rejected history reported (R4, R10). |
 | VI. Tested | PASS | PASS | Narrow `ingestClient` interface with a fake; store helpers tested on SQLite; quickstart scenarios. |
 | VII. MCP tools | N/A | N/A | No tool in this feature. |
 | VIII. Real accounts | PASS | PASS | No real-account step is authorized; quickstart step 7 needs permission per step. |
 | IX. Simplicity | PASS | PASS | No user-facing option; `Live` is the hand-off FR-012 requires and is `nil` here. |
 | X. Security per feature | PASS | PASS | F01, F03, F05, F09–F13 taken up (spec Security, research R9–R13); E003-RX-01 retired (R2); abuse cases in quickstart step 2. |
 
-**Condition (Principle V and the Fork Acceptance Contract)**: the race detector has not yet run on the fork or on
-this project. It needs gcc in the WSL2 Ubuntu VM, which is not installed. The run (quickstart step 6) and its result
-in `verification.md` are required before `/speckit-implement`. A reported race is a defect to fix before
-implementation, and a fix changes the pinned revision, which returns to the owner.
+**Condition (Principle V and the Fork Acceptance Contract)**: the race-detector run, met on 2026-11-13 in WSL2. The
+fork passed without a race. The project's session and command packages found one race in a feature 003 test's own
+variable, which is fixed; production code and the fork were not affected (`verification.md`, "Race Detector (WSL2)").
 
 **Accepted by the owner, not bounded**: four library maps keyed by account or group (R2; backlog
 `005-whatsmeow-per-account-maps.md`).
