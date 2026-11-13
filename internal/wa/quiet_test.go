@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -287,11 +287,10 @@ func TestQuietAllowListPin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := regexp.MustCompile(`(?m)^\s*go\.mau\.fi/whatsmeow\s+(\S+)`).FindSubmatch(mod)
-	if m == nil {
-		t.Fatal("go.mod has no go.mau.fi/whatsmeow requirement")
+	pinned, err := pinnedWhatsmeow(mod)
+	if err != nil {
+		t.Fatal(err)
 	}
-	pinned := string(m[1])
 	if len(quietAllowList) != 0 {
 		t.Logf("allow-list has %d entries", len(quietAllowList))
 	}
@@ -315,4 +314,81 @@ func TestQuietAllowListStartsEmpty(t *testing.T) {
 	if len(quietAllowList) != 0 {
 		t.Fatalf("the allow-list must start empty, has %d entries", len(quietAllowList))
 	}
+}
+
+// The allow-list is reviewed for the code that is built: when go.mod replaces whatsmeow, the replacement's
+// version, not the required one.
+func TestQuietAllowListPinParser(t *testing.T) {
+	for _, c := range []struct{ name, mod, want string }{
+		{"require only", "module x\n\nrequire (\n\tgo.mau.fi/whatsmeow v0.0.0-20261109152745-f1b798561919\n)\n", "v0.0.0-20261109152745-f1b798561919"},
+		{"single-line require", "module x\nrequire go.mau.fi/whatsmeow v0.1.0\n", "v0.1.0"},
+		{"replace with version", "module x\n\nreplace go.mau.fi/whatsmeow => github.com/tiger-seo/whatsmeow v0.0.0-20261113124132-bedcf0185245\n\nrequire (\n\tgo.mau.fi/whatsmeow v0.0.0-20261109152745-f1b798561919\n)\n", "v0.0.0-20261113124132-bedcf0185245"},
+		{"replace block", "module x\nrequire go.mau.fi/whatsmeow v0.1.0\nreplace (\n\tgo.mau.fi/whatsmeow v0.1.0 => example.com/fork v0.2.0\n)\n", "v0.2.0"},
+		{"replace of another module", "module x\nreplace go.mau.fi/util => example.com/util v9.0.0\nrequire go.mau.fi/whatsmeow v0.1.0\n", "v0.1.0"},
+		{"local replace", "module x\nreplace go.mau.fi/whatsmeow => ../whatsmeow\nrequire go.mau.fi/whatsmeow v0.1.0\n", "../whatsmeow"},
+	} {
+		got, err := pinnedWhatsmeow([]byte(c.mod))
+		if err != nil || got != c.want {
+			t.Errorf("%s: pinnedWhatsmeow = %q, %v; want %q", c.name, got, err, c.want)
+		}
+	}
+	if _, err := pinnedWhatsmeow([]byte("module x\n")); err == nil {
+		t.Error("no requirement: want an error")
+	}
+	mod, err := os.ReadFile("../../go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := pinnedWhatsmeow(mod); err != nil || !strings.HasSuffix(got, "-bedcf0185245") {
+		t.Errorf("this repository's go.mod: %q, %v; want the bedcf01 fork version", got, err)
+	}
+}
+
+// pinnedWhatsmeow returns the version of whatsmeow that is built: the target of a replace directive for
+// go.mau.fi/whatsmeow when there is one (its version, or its path for a local directory), else the required
+// version.
+func pinnedWhatsmeow(mod []byte) (string, error) {
+	const module = "go.mau.fi/whatsmeow"
+	var required, replaced string
+	block := ""
+	for _, line := range strings.Split(string(mod), "\n") {
+		if i := strings.Index(line, "//"); i >= 0 {
+			line = line[:i]
+		}
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
+		if block != "" {
+			if f[0] == ")" {
+				block = ""
+				continue
+			}
+			f = append([]string{block}, f...)
+		} else if len(f) == 2 && f[1] == "(" {
+			block = f[0]
+			continue
+		}
+		switch {
+		case f[0] == "require" && len(f) >= 3 && f[1] == module:
+			required = f[2]
+		case f[0] == "replace" && len(f) >= 4 && f[1] == module:
+			arrow := slices.Index(f, "=>")
+			if arrow < 0 || arrow+1 >= len(f) {
+				return "", fmt.Errorf("malformed replace of %s", module)
+			}
+			target := f[arrow+1:]
+			replaced = target[0]
+			if len(target) >= 2 {
+				replaced = target[1]
+			}
+		}
+	}
+	if replaced != "" {
+		return replaced, nil
+	}
+	if required == "" {
+		return "", fmt.Errorf("go.mod has no %s requirement", module)
+	}
+	return required, nil
 }
