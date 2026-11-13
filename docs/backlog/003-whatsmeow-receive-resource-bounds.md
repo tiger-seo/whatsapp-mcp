@@ -1,7 +1,7 @@
 # Backlog: upstream receive-resource bounds for feature 003
 
 - **Created:** 2026-11-02
-- **Status:** Open; temporary approved exception E003-RX-01, not resolved or parked.
+- **Status:** Closed 2026-11-13. The fork revision `tiger-seo/whatsmeow@9209108` enforces the bounds and is pinned; E003-RX-01 is retired (owner decision, `specs/005-message-ingest/research.md` R1, R2).
 - **Affected feature:** `specs/003-whatsapp-pairing-status` and later features expanding its receive workload.
 - **Owner:** Maintainer `tiger-seo`, explicitly confirmed by the user.
 - **Expiry:** 2026-12-02 at the start of the UTC date; no automatic renewal.
@@ -41,3 +41,22 @@ The soak run (T046) was done on 2026-11-08 on the old pin. The pin then moved to
 owner extended the exception to the new pin on 2026-11-09 with the same scope, expiry and controls: the 20 upstream
 commits add no receive-resource bounds, so this item stays open unchanged. Record:
 `specs/004-shutdown-drain/verification.md`, section "E003-RX-01 (implementation start)".
+
+## Update 2026-11-12: scope decision and a candidate mitigation
+
+The owner decided that the WhatsApp service and the account's own devices are not attackers (constitution 3.0.0,
+Principle V; `docs/security-review.md` F09). Both defects measured above now have a fix on the local fork branch
+`receive-bounds` (`../whatsmeow-receive-bounds`, head `9209108`): frames are limited to 16 MiB after expansion, and a
+full handler queue closes the connection and leaves a record instead of starting a goroutine per node. The same
+branch bounds the per-message retry counters and the expanded size of a history sync, which another account could
+grow. Evidence and limits of that evidence
+are in `specs/005-message-ingest/verification.md`, section "Rebuilt fork branch".
+
+## Closed 2026-11-13
+
+The owner approved revision `9209108` of branch `receive-bounds` and its limits (16 MiB per frame after expansion, 64
+nesting levels, 65,536 nodes per frame, 2,048 queued handler items, 4,096 retry counters, 128 MiB per history sync
+after decompression). The branch was pushed to `github.com/tiger-seo/whatsmeow`, and `go.mod` replaces
+`go.mau.fi/whatsmeow` with `v0.0.0-20261112064615-92091085667b`. E003-RX-01 is retired by that pin. The race-detector
+run is still open and is a condition of feature 005's gate. Four library maps that grow per account or group were
+accepted and moved to `005-whatsmeow-per-account-maps.md`.

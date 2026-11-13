@@ -6,8 +6,9 @@ changes.
 
 | Item | Created | Status | Review trigger |
 | --- | --- | --- | --- |
-| [Upstream receive-resource bounds](003-whatsmeow-receive-resource-bounds.md) | 2026-11-02 | Open; temporary exception E003-RX-01, extended to feature 004 and the pin `f1b7985` | Expires at the start of 2026-12-02 UTC; earlier on a release, an upstream fix or a resource incident |
+| [Upstream receive-resource bounds](003-whatsmeow-receive-resource-bounds.md) | 2026-11-02 | Closed 2026-11-13; fork `tiger-seo/whatsmeow@9209108` pinned, E003-RX-01 retired | – |
 | [Heavy store test wall-clock limit](003-heavy-test-wall-clock-limit.md) | 2026-11-07 | Open; cause not identified | Next nightly `heavy` failure, or before a release |
 | [Offline recovery prompt usability](003-offline-recovery-prompt-usability.md) | 2026-11-07 | Open; not started | Before the first release |
-| [The pinned whatsmeow can drop the post-pair restart request](004-whatsmeow-lost-restart-request.md) | 2026-11-10 | Open; known limitation of feature 004, fix proposed upstream (tulir/whatsmeow#1337) | When #1337 is merged or rejected, on the next pin change, or a real `pair` that ends incomplete after the phone confirmed |
+| [The pinned whatsmeow can drop the post-pair restart request](004-whatsmeow-lost-restart-request.md) | 2026-11-10 | Open; known limitation of feature 004, fix proposed upstream (tulir/whatsmeow#1337) and carried by the pinned fork since 2026-11-13 | When #1337 is merged or rejected, on the next pin change, or a real `pair` that ends incomplete after the phone confirmed |
 | [`pair` can wait without a bound after a refused early 515](004-pair-wait-after-refused-515.md) | 2026-11-10 | Open; found by code reading, not reproduced | Before the first release, or when `pair` or `waitSavedConnection` changes |
+| [Library maps that grow per account or group](005-whatsmeow-per-account-maps.md) | 2026-11-13 | Accepted by the owner; not bounded | On a pin change, a memory incident, or before a release for accounts with very many contacts or groups |

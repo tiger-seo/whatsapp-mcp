@@ -41,7 +41,10 @@ func (l *appStopLog) snapshot() []string {
 // recordingAppState passes every call through and records the ones that fail.
 type recordingAppState struct {
 	wastore.AppStateStore
-	log *appStopLog
+	log     *appStopLog
+	mu      sync.Mutex
+	gate    <-chan struct{}
+	entered chan<- struct{}
 }
 
 func (r *recordingAppState) note(op, name string, err error) {
@@ -51,6 +54,14 @@ func (r *recordingAppState) note(op, name string, err error) {
 }
 
 func (r *recordingAppState) GetAppStateVersion(ctx context.Context, name string) (uint64, [128]byte, error) {
+	r.mu.Lock()
+	gate, entered := r.gate, r.entered
+	r.gate, r.entered = nil, nil
+	r.mu.Unlock()
+	if gate != nil {
+		close(entered)
+		<-gate
+	}
 	v, h, err := r.AppStateStore.GetAppStateVersion(ctx, name)
 	r.note("GetAppStateVersion", name, err)
 	return v, h, err
@@ -155,15 +166,25 @@ func stopDuringQueuedFetches(t *testing.T) queuedFetchStop {
 	log := &appStopLog{}
 	logger, mem := newMemLog()
 	var sess *Session
+	var appState *recordingAppState
+	readEntered, readRelease := make(chan struct{}), make(chan struct{})
+	var releaseRead sync.Once
+	defer releaseRead.Do(func() { close(readRelease) })
 	o := NewOwner(OwnerConfig{
 		Log: logger, Store: st, Versions: bundledProvider(ctx), ShellStartupBudget: true,
-		trace: func(step string) { log.add("step " + step) },
+		trace: func(step string) {
+			log.add("step " + step)
+			if step == "barrier_retired" {
+				releaseRead.Do(func() { close(readRelease) })
+			}
+		},
 		Sessions: func(cfg SessionConfig) (SessionHandle, error) {
 			cfg.PreLoginHTTP = srv.Client()
 			cfg.WebsocketHTTP = srv.Client()
 			s, err := OpenSession(cfg)
 			if err == nil {
-				s.dev.AppState = &recordingAppState{AppStateStore: s.dev.AppState, log: log}
+				appState = &recordingAppState{AppStateStore: s.dev.AppState, log: log}
+				s.dev.AppState = appState
 				sess = s
 			}
 			return s, err
@@ -208,12 +229,24 @@ func stopDuringQueuedFetches(t *testing.T) queuedFetchStop {
 	case <-ctx.Done():
 		t.Fatal("no app-state request reached the server")
 	}
+	appState.mu.Lock()
+	appState.gate, appState.entered = readRelease, readEntered
+	appState.mu.Unlock()
 	// One fetch holds the library's lock while its request waits; the other four notifications' fetches must be
 	// queued on that lock before the stop begins.
 	waitFor(t, func() bool { return queuedAppStateFetches() >= 4 })
 	log.add("stop begins")
 	o.BeginStop()
-	<-o.Done()
+	select {
+	case <-o.Done():
+	case <-ctx.Done():
+		t.Fatal("stop did not finish before timeout")
+	}
+	select {
+	case <-readEntered:
+	default:
+		t.Error("no queued app-state version read entered the gate")
+	}
 	h := o.Health()
 	res := queuedFetchStop{reason: "passed", refusedReads: sess.barrier.RefusedReads()}
 	if !h.QuietPassed {

@@ -4,6 +4,8 @@ go 1.27.0
 
 toolchain go1.27.4
 
+replace go.mau.fi/whatsmeow => github.com/tiger-seo/whatsmeow v0.0.0-20261112064615-92091085667b
+
 require (
 	github.com/coder/websocket v1.8.15
 	github.com/gofrs/flock v0.13.1

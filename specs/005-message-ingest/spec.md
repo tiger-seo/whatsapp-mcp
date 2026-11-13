@@ -17,6 +17,7 @@
 - Q: What should happen when a live message or history batch cannot be saved because storage is full or temporarily unavailable? → A: Stop ingest, report the failure and incomplete record, and require operator intervention; previously committed messages remain.
 - Q: When a phone-number mapping becomes known during a running session, when should earlier messages stored under that person's LID be merged? → A: Merge when the new mapping is detected and also reconcile at startup.
 - Q: After ingest stops because a message could not be saved, how should the operator resume receiving messages? → A: Stop the connected command safely; the operator fixes the problem and restarts under existing session-safety rules.
+- Q: What should happen if the receive queue is full? → A: Stop the affected connection and explicitly report the overload and a possible gap; do not assume replay or bypass the existing reconnect and quiet-stop rules. Numeric limits require separate approval after measurement.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -87,6 +88,7 @@ An owner sees useful chat names without each group message triggering another gr
 - A group-history participant, an own message, and a direct-message sender must each be attributed to the actual sender when supplied; unresolved identity is not invented.
 - Mapping lookup timeout or failure retains the original identity; a failure is not mistaken for proof that a mapping does not exist.
 - An individual store operation can fail due to cancellation, limits or low disk; stop ingest and the connected command safely and report the incomplete record, while retaining committed earlier batches. The operator fixes the problem and restarts under existing session-safety rules.
+- Receive overload closes the affected connection and is reported with a warning that local history may have a gap; retry or replay is not guaranteed.
 - Shutdown during ingest cannot allow writes after retirement or falsely establish a quiet stop; pending work is accounted for under feature 004's existing rules.
 
 ## Requirements *(mandatory)*
