@@ -15,6 +15,8 @@ import (
 
 	"github.com/tiger-seo/whatsapp-mcp/internal/store"
 	"github.com/tiger-seo/whatsapp-mcp/internal/wasim"
+	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waHistorySync"
 	wastore "go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 )
@@ -566,5 +568,73 @@ func TestQuietStopReportsDroppedMessagesWithoutFailing(t *testing.T) {
 	}
 	if res.DroppedMessages != 3 {
 		t.Fatalf("DroppedMessages = %d, want 3", res.DroppedMessages)
+	}
+}
+
+// A history worker still inside the library's download at step 5 is left to the fence and the barrier: the work
+// context does not cancel it, it is joined after the barrier and before the library context, and the device write
+// it attempts after the barrier is refused and counted, so the check reports storage_refused. No message is written
+// after the join.
+func TestHistoryWorkerInsideTheLibraryIsJoinedAfterTheBarrier(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+	steps := &stepLog{}
+	var sess *Session
+	var gen *genState
+	entered, release := make(chan struct{}), make(chan struct{})
+	writeErr := make(chan error, 1)
+	o, g, s, _, _, _ := startSavedRunWith(t, ctx, func(step string) {
+		steps.add(step)
+		if step == "barrier_retired" {
+			close(release)
+		}
+	})
+	sess, gen = s, g
+	f := &faultyStore{ingestStore: sess.ingest.st}
+	sess.ingest.st = f
+	sess.ingest.cfg.Client = &fakeIngestClient{own: ownJID(), download: func(ctx context.Context, _ *waE2E.HistorySyncNotification, _ bool) (*waHistorySync.HistorySync, error) {
+		close(entered)
+		<-release
+		if ctx.Err() != nil {
+			writeErr <- fmt.Errorf("the download context was cancelled before the join: %w", ctx.Err())
+			return nil, ctx.Err()
+		}
+		// The library's synchronous storage of a history chunk writes LID mappings to the device store.
+		lid, pn := types.NewJID("123456789", types.HiddenUserServer), types.NewJID("490000000077", types.DefaultUserServer)
+		writeErr <- sess.dev.LIDs.PutLIDMapping(ctx, lid, pn)
+		return historyOf(conversation(peerJID(), "", webText("LATE", "x", histTime))), nil
+	}}
+	if !sess.handleEvent(historyNotice(1)) {
+		t.Fatal("the history notification returned false")
+	}
+	within(t, entered, "the download to start")
+	o.BeginStop()
+	within(t, o.Done(), "the stop")
+	if gen.work.Err() == nil {
+		t.Fatal("the work context was not cancelled")
+	}
+	var err error
+	select {
+	case err = <-writeErr:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the held download never resumed")
+	}
+	if err == nil {
+		t.Fatal("a device write after the barrier succeeded")
+	} else if strings.Contains(err.Error(), "download context was cancelled") {
+		t.Fatal(err)
+	}
+	if err := checkRetirementOrder(steps.get()); err != nil {
+		t.Fatalf("order %v: %v", steps.get(), err)
+	}
+	if got := sess.barrier.Refused(); got == 0 {
+		t.Fatal("the refused device write was not counted")
+	}
+	if f.writes != 0 {
+		t.Fatalf("%d message writes after Stop, want none", f.writes)
+	}
+	sess.observer = cleanObserver
+	if res := sess.QuietStop(ctx, time.Second); res.Passed || res.Reason != QuietStorageRefused {
+		t.Fatalf("result = %+v, want storage_refused", res)
 	}
 }

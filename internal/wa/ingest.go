@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -54,6 +55,8 @@ type IngestConfig struct {
 
 	// store replaces Store when set; tests only.
 	store ingestStore
+	// afterHistory is called when the history worker finished a notification; tests only.
+	afterHistory func()
 }
 
 // IngestCounters are one generation's counts. They only grow.
@@ -102,8 +105,12 @@ type ingest struct {
 	workersDone chan struct{}
 	workers     sync.WaitGroup
 
-	// lock is the ingest lock.
-	lock sync.Mutex
+	// lock is the ingest lock, a one-slot channel: waiting senders are served in order. liveWaiting counts live
+	// writes waiting for it; a worker gives way to them before each flush or merge.
+	lock        chan struct{}
+	liveWaiting atomic.Int32
+	// histQ holds history notifications for the worker; nil until the first one. Guarded by mu.
+	histQ chan *waE2E.HistorySyncNotification
 
 	stored, ignored, rejected, unavailable, dropped, historyIncomplete atomic.Uint64
 	lookupsDropped, hintsDropped, merged, mergeFailed                  atomic.Uint64
@@ -116,7 +123,7 @@ func newIngest(cfg IngestConfig) *ingest {
 	if cfg.Lib == nil {
 		cfg.Lib = context.Background()
 	}
-	in := &ingest{cfg: cfg, log: cfg.Log, stop: make(chan struct{}), workersDone: make(chan struct{})}
+	in := &ingest{cfg: cfg, log: cfg.Log, stop: make(chan struct{}), workersDone: make(chan struct{}), lock: make(chan struct{}, 1)}
 	in.st = cfg.store
 	if in.st == nil {
 		in.st = cfg.Store
@@ -140,6 +147,11 @@ func (in *ingest) HandleMessage(evt *events.Message) bool {
 		in.dropped.Add(1)
 		return false
 	}
+	if n := historyNotification(evt); n != nil && evt.Info.IsFromMe {
+		// The notification carries no message of its own, so it is acknowledged once queued or reported.
+		in.enqueueHistory(n)
+		return true
+	}
 	m, ok := extractMessage(evt, in.cfg.Client.OwnJID())
 	if !ok {
 		in.ignored.Add(1)
@@ -152,9 +164,9 @@ func (in *ingest) HandleMessage(evt *events.Message) bool {
 			"message_id", escapeLog(m.ID), "reason", err.Error())
 		return true
 	}
-	in.lock.Lock()
+	in.lockForLive()
 	err := in.st.StoreMessage(in.cfg.Lib, m)
-	in.lock.Unlock()
+	in.unlock()
 	if err != nil {
 		in.fail("live", err, "chat", escapeLog(m.ChatJID), "message_id", escapeLog(m.ID))
 		return false
@@ -166,6 +178,28 @@ func (in *ingest) HandleMessage(evt *events.Message) bool {
 	}
 	return true
 }
+
+// lockForLive takes the ingest lock for a live write. A worker that holds it lets this write go before its next
+// step.
+func (in *ingest) lockForLive() {
+	in.liveWaiting.Add(1)
+	in.lock <- struct{}{}
+	in.liveWaiting.Add(-1)
+}
+
+// lockForWorker takes the ingest lock for a history flush or a merge, after every live write waiting for it.
+func (in *ingest) lockForWorker() {
+	for {
+		in.lock <- struct{}{}
+		if in.liveWaiting.Load() == 0 {
+			return
+		}
+		<-in.lock
+		runtime.Gosched()
+	}
+}
+
+func (in *ingest) unlock() { <-in.lock }
 
 // logReceived writes a stored message at debug level, the only level at which text and captions appear. Media
 // keys, hashes, URLs and paths never appear.
