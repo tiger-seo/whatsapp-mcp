@@ -11,16 +11,20 @@ the dependency limits were approved separately (R1).
 ## R1. Dependency revision
 
 **Decision**: Pin `go.mau.fi/whatsmeow` through `replace go.mau.fi/whatsmeow => github.com/tiger-seo/whatsmeow
-v0.0.0-20261113120547-d83e19ef5083`, which is branch `receive-bounds` at `d83e19e`, pushed to the owner's fork on
-2026-11-13. It was first pinned at `9209108`; the first design review found that `SynchronousAck` sent a phone
-re-request for any undecryptable message, and the owner approved `d83e19e`, which gates it (plan, contract item 8). The `require` line keeps upstream `f1b798561919`, the base the fork was reviewed against. The owner approved
+v0.0.0-20261113124132-bedcf0185245`, which is branch `receive-bounds` at `bedcf01`, pushed to the owner's fork on
+2026-11-13. It was first pinned at `9209108`. The first design review found that `SynchronousAck` sent a phone
+re-request for any undecryptable message, and the owner approved `d83e19e`, which gates it (plan, contract item 8);
+the second found the same for the `unavailable` placeholder another account causes with a view-once message, and the
+owner approved `bedcf01` (contract item 9). The `require` line keeps upstream `f1b798561919`, the base the fork was reviewed against. The owner approved
 this revision and its limits on 2026-11-13: 16 MiB per frame after expansion, 64 nesting levels, 65,536 nodes per
 frame, 2,048 queued handler items, 4,096 retry counters and 128 MiB per history sync after decompression. None has
 been compared with real traffic.
 
 **Rationale**: The constitution requires an exact version verified against `go.sum`; a directory replacement is
-neither. The fork's ten commits over `f1b7985` are the Fork Acceptance Contract's eight plus `c05eb84` (the change
-proposed upstream as tulir/whatsmeow#1337, identical to `ce09515`) and `be96244`. The pin therefore also carries the
+neither. The fork has twelve commits over `f1b7985` (`git rev-list --count f1b7985..bedcf01`): the Fork
+Acceptance Contract's `be96244`, `54a9501`, `8e61d2a`, `6cabab6`, `a654373`, `9209108`, `d83e19e` and `bedcf01`; three
+defect fixes outside the gate, `4a01445`, `8f99711` and `01da9e4`; and `c05eb84` (the change proposed upstream as
+tulir/whatsmeow#1337, identical to `ce09515`). The pin therefore also carries the
 fix for backlog item `004-whatsmeow-lost-restart-request.md`.
 
 **Alternatives**: Keep the local directory (not immutable, rejected by the owner). Wait for upstream (no receive
@@ -52,8 +56,9 @@ behaviour the owner chose. No application queue is added in front of it, so ther
 
 **What else moves inline**: `SynchronousAck` affects more than the message acknowledgement. The plan lists every
 site ("What `SynchronousAck` changes in the pin"): retry receipts, the `unavailable` placeholder request and
-`server_sync` app-state fetches also run on the handler goroutine. The first design review found the phone re-request
-among them, which `d83e19e` gates.
+`server_sync` app-state fetches also run on the handler goroutine. The design reviews found two phone requests among
+them that another account could cause; `d83e19e` and `bedcf01` gate both, so with this configuration nothing is sent
+to the user's phone and the handler never waits for such a send.
 
 **Consequences**: The library has already decrypted the message and advanced the Signal session before the handler
 runs. A message that is not acknowledged is not guaranteed to be delivered again: on redelivery the library may see
@@ -68,6 +73,11 @@ history flushes are cut at **250 messages or 4 MiB** of field bytes (proposed; w
 are rare (one per newly mapped identity with stored data) and the startup pass runs before any connection. The design
 is accepted only if a simulator run of an initial history sync with a concurrent live burst shows no
 `receive_overload` and a bounded lock wait for the handler (tasks, "Handler latency under history").
+
+**Later option**: the library's decrypted-event buffer (`EnableDecryptedEventBuffer`; the guarded store already wires
+`dev.EventBuffer`) would redeliver the stored plaintext of an unacknowledged message instead of dropping it as an old
+counter. It stores plaintext in the database and starts a cleanup goroutine, a privacy and stop-order trade-off, so it
+is not used here; it is the candidate if failed writes ever need replay.
 
 **Alternatives**: An application queue and worker (an extra bound, an extra drain and no better guarantee).
 Asynchronous acknowledgement (the server is told "delivered" before the write, so a failed write is silent loss).
@@ -115,7 +125,9 @@ any message for which `ParseWebMessage` returned an ID different from `webMsg.Ke
 replaces the ID and the content with the edited ones without setting `IsEdit` (`client.go:1172-1175` in the pin),
 which would otherwise overwrite the original message. View-once and ephemeral wrappers and `DocumentWithCaptionMessage` are unwrapped by the
 library and are stored as their inner type, as the earlier implementation did. A placeholder resend is stored like a
-live message.
+live message. An `unavailable` placeholder (an `UndecryptableMessage` with `IsUnavailable`) has no content; it is
+acknowledged, not fetched from the phone (contract item 9), counted `unavailable` and reported in `ingest_stopped`, so
+a view-once message from another account is a known, counted absence.
 
 **Rationale**: One path keeps the sender rules identical: `ParseWebMessage` sets the sender from `Key.FromMe`
 (own JID), `Key.Participant` or `Participant` (group), else the chat. An edit stored under its own stanza ID would
@@ -163,10 +175,11 @@ it dispatches the event, so a mapped sender is found on its first message.
   of **1,024** LIDs (proposed). The set is deduplicated; a full set drops the hint and counts it (the next startup
   covers it). A reconcile worker takes hints, re-reads the mapping with `PhoneForLID` and, when it is visible, merges.
   A hint whose mapping is not yet visible (the write was inside an outer transaction that has not committed) is
-  retried up to **5** times, 1 s apart, and then dropped and counted.
+  retried up to **5** times, 1 s apart, observing `Stop` between attempts, and then dropped and counted.
 - **Ordering**: every message write, history batch and merge takes one per-generation ingest lock. A message whose
   chat or sender is still an unmapped LID after normalisation is looked up again **under the lock**, just before the
-  write (for history, once per distinct LID in the flush, at most 250). So a mapping committed and merged between the
+  write (for history, once per distinct LID in the flush, at most 250, all under **one** 2 s deadline; a LID not
+  re-looked-up in time is written as a LID and merged at the next startup). So a mapping committed and merged between the
   first lookup and the write is seen, and the message is written under the phone JID, never under the LID after its
   merge.
 

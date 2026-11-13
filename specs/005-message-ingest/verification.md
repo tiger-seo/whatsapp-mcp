@@ -292,6 +292,35 @@ Recorded during `/speckit-plan`, answered by the owner (`tiger-seo`):
   `appstate` 1.1 s, `binary` 10.0 s); project, `go test -race -p 1 ./internal/wa ./cmd/... -count=1 -timeout 40m`
   exited 0 (`internal/wa` 64.5 s, `cmd/whatsapp-mcp` 166.5 s). No `DATA RACE` in either log.
 
+## Fork Placeholder Gate
+
+- **Finding**: the second design review (`1b1d91f`, CONCERNS) found that the `unavailable` placeholder request
+  (`message.go:325-336`) is caused by any account, for example by sending a view-once message
+  (`UnavailableTypeViewOnce = "view_once"`, `types/events/events.go:292`), and with `SynchronousAck` runs a full send
+  on the handler. Confirmed by reading the source on 2026-11-13.
+- **Owner decisions, 2026-11-13 (`tiger-seo`)**: gate it in the fork (contract item 9, a new pin); keep the roadmap's
+  real-account history check and record the `pair` gap (T056); fix every low finding and run a third design review.
+- **Fork commit** `bedcf018524509697b73299a224ee82b5fdeec1c` on `receive-bounds` ("message: respect
+  AutomaticMessageRerequestFromPhone for unavailable placeholders"), pushed to `github.com/tiger-seo/whatsmeow`.
+  `git rev-list --count f1b7985..bedcf01` is 12.
+- Fork, native Windows, Go 1.27.4, `CGO_ENABLED=0`, each exit code read directly:
+  - without the `message.go` change, `go test . -run TestUnavailablePlaceholderDoesNotRerequestFromPhoneUnlessEnabled
+    -count=1 -v` exited 1: `syncAck=true` failed its assertion (request attempted) and `syncAck=false` panicked in
+    `preparePeerMessageNode` from `immediateRequestMessageFromPhone`;
+  - with it, the three phone-request tests passed `-count=10`; `gofmt -l .` printed nothing; `go vet ./...` exit 0;
+    `go test ./... -count=3 -timeout 20m` exit 0 (root, `appstate`, `binary`); `go build ./...` exit 0 for the five
+    targets.
+- **Pin**: `go.mod` replaces with `github.com/tiger-seo/whatsmeow v0.0.0-20261113124132-bedcf0185245`; `go.sum`
+  updated by `go mod tidy`.
+- Project gates on that pin, native Windows, `CGO_ENABLED=0`: `gofmt -l .` printed nothing; `go vet ./...` exit 0;
+  `go mod verify` `all modules verified`; the five `go build ./cmd/whatsapp-mcp` targets each exit 0; govulncheck
+  v1.9.0 `No vulnerabilities found.`; `go test ./... -count=1 -timeout 30m` exit 0, 9 packages ok (`cmd/whatsapp-mcp`
+  131.7 s, `internal/store` 326.9 s, `internal/wa` 43.3 s).
+- Race detector, WSL2 Ubuntu (not native Linux), gcc 15.2.0, `CGO_ENABLED=1` for these runs only: fork
+  `go test -race ./... -count=1 -timeout 20m` exit 0 (root 31.6 s, `appstate` 1.0 s, `binary` 7.8 s); project
+  `go test -race -p 1 ./internal/wa ./cmd/... -count=1 -timeout 40m` exit 0 (`internal/wa` 60.7 s,
+  `cmd/whatsapp-mcp` 166.0 s). No `DATA RACE` in the log.
+
 ## Owner Reviews
 
 | Stage | Date | Commit | Verdict | Owner decision |

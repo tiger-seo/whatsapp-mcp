@@ -20,8 +20,9 @@ s.handlerID = client.AddEventHandlerWithSuccessStatus(s.handleEvent) // returns 
 
 `EnableAutoReconnect`, `InitialAutoReconnect`, `DisableLoginAutoReconnect`, `AutomaticMessageRerequestFromPhone`
 (false) and the fenced HTTP clients are unchanged. Everything `SynchronousAck` moves onto the handler is listed in
-plan.md, "What `SynchronousAck` changes in the pin"; with the pin `d83e19e`, an undecryptable message from another
-account causes a retry receipt and an acknowledgement, and no message to the phone.
+plan.md, "What `SynchronousAck` changes in the pin"; with the pin `bedcf01`, an undecryptable message from another
+account causes a retry receipt and an acknowledgement, an `unavailable` placeholder causes an acknowledgement, and
+neither sends a message to the phone.
 
 ## Ingest component
 
@@ -65,11 +66,12 @@ func (in *ingest) Counters() IngestCounters
    message): count `ignored`, return `true`.
 4. Normalise chat and sender (2 s per lookup), build the `store.Message`, and check it with `store.ValidateMessage`.
    Invalid: count `rejected`, return `true`.
-5. Under the ingest lock: look up again any chat or sender that is still an unmapped LID, then `StoreMessage`. On
-   error: become terminal (below) and return `false`.
+5. Under the ingest lock: look up again any chat or sender that is still an unmapped LID (one 2 s deadline for the
+   message; a LID not resolved in time stays a LID), then `StoreMessage`. On error: become terminal (below) and return
+   `false`.
 6. Offer the chat name (R12): cached comparison first, at most one `UpdateChat` when the offer is better; a group
-   without a usable name goes to the lookup set. A failed name write is terminal like a failed message write, but
-   the message itself is already stored, so return `true`.
+   without a usable name goes to the lookup set. A failed name write is terminal like a failed message write
+   (`ingest_failed` with operation `name`), but the message itself is already stored, so return `true`.
 7. Call `Live` if set. Return `true`.
 
 ### History worker
@@ -77,7 +79,8 @@ func (in *ingest) Counters() IngestCounters
 For each queued notification: `DownloadHistorySync(lib, notif, true)`; then for each conversation, in order:
 normalise the chat; offer the conversation name; for each message `ParseWebMessage`, skip it as not eligible when
 the parsed ID differs from `webMsg.Key.ID`, then steps 3–4 above; add to the batch; flush at 250 messages or 4 MiB (`MessageFieldBytes`). A flush is one `StoreMessages` and one `UpdateChats`
-under the ingest lock, after the same re-lookup of the flush's distinct unmapped LIDs, and the lock is released
+under the ingest lock, after the same re-lookup of the flush's distinct unmapped LIDs under one 2 s deadline, and
+the lock is released
 between flushes so a waiting live write goes first. At `Stop`, every notification still queued is reported as
 `history_incomplete` (`stopped`). Checkpoints (where `Stop` is observed): before each download, between conversations, before
 each flush. A store error is terminal and reports the chunk and the messages committed from it. History never calls
@@ -87,7 +90,8 @@ each flush. A store error is terminal and reports the chunk and the messages com
 
 The group-name worker takes one group at a time: `GetGroupInfo(lib with 10 s deadline)`, then `UpdateChat` with the
 subject. A failure is cached for 10 minutes. The reconcile worker takes one hint at a time: `PhoneForLID`; visible:
-`MergeLID` under the ingest lock; not yet visible: retry up to 5 times, 1 s apart. When the startup pass left a cursor,
+`MergeLID` under the ingest lock; not yet visible: retry up to 5 times, 1 s apart, observing `Stop` between
+attempts. A failed merge logs `lid_merge_failed`. When the startup pass left a cursor,
 the worker also pages on from it with `MappedLIDsWithData` (200 per page), one merge at a time, between hints, until
 the table is done. A failed merge is logged and left
 for the next startup; it is not terminal (both sides stay intact). Checkpoint: between items.
@@ -103,6 +107,9 @@ A context error caused by this generation's own retirement is not a failure.
   LID store wrapper's mapping changes to `NoteMapping`.
 - A history notification event that arrives after the retire bit is reported as `history_incomplete` (`stopped`) as
   well as counted in `droppedMessages`.
+- `*events.UndecryptableMessage` with `IsUnavailable` is counted `unavailable` and returns `true` (the library then
+  acknowledges the placeholder and, with `AutomaticMessageRerequestFromPhone` false, sends nothing to the phone).
+  Other undecryptable messages return `true` and keep the library's retry receipt.
 - `handleEvent` returns `bool`. Owner events keep their mapping to `Dispatch` and return `true`. `*events.Message`
   goes to `HandleMessage`, and its result is returned. While the retire bit is set, a message event is counted in
   `droppedMessages` and returns `false`; other events keep feature 004's counting.

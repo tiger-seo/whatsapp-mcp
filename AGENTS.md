@@ -69,11 +69,11 @@ Add the row it ends with to the "Owner reviews" table in `specs/NNN-*/verificati
 ## Current state
 
 Features 001–004 are merged (004, shutdown drain: pull request #11, 2026-11-10). Feature 005, message ingest, is in
-planning on branch `005-message-ingest`: plan, design and tasks are done; the first design review returned BLOCK, its
-findings are addressed, and the second design review is next. The resume point of a feature in progress is
+planning on branch `005-message-ingest`: plan, design and tasks are done; the first design review returned BLOCK and
+the second CONCERNS; their findings are addressed, and the third design review is next. The resume point of a feature in progress is
 the `## Current state` section of its `tasks.md`. Since 2026-11-13 `go.mod` replaces whatsmeow with the owner's fork
-`github.com/tiger-seo/whatsmeow` at `d83e19e` (branch `receive-bounds`), which enforces the receive bounds, keeps
-synchronous acknowledgements from sending phone re-requests, and carries
+`github.com/tiger-seo/whatsmeow` at `bedcf01` (branch `receive-bounds`), which enforces the receive bounds, sends
+nothing to the user's phone on another account's behalf, and carries
 the lost-515 fix proposed upstream as tulir/whatsmeow#1337; E003-RX-01 is retired.
 
 ## Commands

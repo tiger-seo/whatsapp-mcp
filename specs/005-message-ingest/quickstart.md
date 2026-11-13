@@ -13,7 +13,7 @@ grep -n 'whatsmeow' go.mod
 ```
 
 Expected: `all modules verified`; `go.mod` replaces `go.mau.fi/whatsmeow` with
-`github.com/tiger-seo/whatsmeow v0.0.0-20261113120547-d83e19ef5083`. `TestQuietAllowListPin` compares against that
+`github.com/tiger-seo/whatsmeow v0.0.0-20261113124132-bedcf0185245`. `TestQuietAllowListPin` compares against that
 version.
 
 ## 2. Ingest on synthetic events
@@ -78,8 +78,8 @@ count with workers busy. The owner reviews both before the code review.
 WA_MEASURE=1 CGO_ENABLED=0 go test ./internal/wa -run 'TestQuietStopPassRate' -count=1 -v -timeout 60m
 ```
 
-Expected: at least feature 004's recorded pass rate for each kind of stop. A lower rate goes to the owner before the
-code review.
+Expected: at least feature 004's recorded pass rate for each kind of stop. A lower rate goes to the owner before any
+user story starts (task T025).
 
 ## 6. Race detector (WSL2, cgo for this run only)
 
@@ -95,6 +95,6 @@ Expected: no race reported, exit 0.
 ## 7. Real account (only with permission for each step)
 
 Not part of automated validation. With the owner's permission for each step, and after reviewing the roadmap's
-shutdown follow-up: a new data directory under `D:\tmp`, the binary from a named commit, `pair`, then `serve`; send
+shutdown follow-up: a new data directory under `D:\tmp`, the binary from a named commit, `pair` (record its `history_incomplete` counts by reason), then `serve` (record any history it receives); send
 one text and one captioned image from another phone; stop; inspect the store; the owner unlinks the device and the
 directory is deleted. Record redacted results; a step not run is "not verified".

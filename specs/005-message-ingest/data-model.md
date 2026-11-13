@@ -86,7 +86,8 @@ All are ordinary store operations: admission, the 10 s limit, `ErrClosed` after 
 | LID hint set | 1,024 LIDs (*proposed*); 1 worker; 5 attempts 1 s apart (*proposed*) | the hint is dropped and counted; startup reconciles it |
 | Reconcile cursor | one LID: where an unfinished startup pass stopped; the worker pages on from it, 200 per page, between hints | – |
 | Ingest lock | one per generation | – (serialises message writes, history batches and merges) |
-| Counters | `stored`, `ignored`, `rejected`, `droppedMessages`, `historyIncomplete`, `lookupsDropped`, `hintsDropped`, `merged`, `mergeFailed` | `uint64`, logged at stop and on terminal failure |
+| Counters | `stored`, `ignored`, `rejected`, `unavailable`, `droppedMessages`, `historyIncomplete`, `lookupsDropped`, `hintsDropped`, `merged`, `mergeFailed` | `uint64`, logged at stop and on terminal failure |
+| Re-lookup under the ingest lock | one 2 s deadline per message write or history flush, at most 250 distinct LIDs | the remaining LIDs are written as LIDs; startup merges them |
 
 ## Ingest state transitions (one generation)
 
@@ -103,10 +104,11 @@ retiring ──(workers and callbacks joined)────▶ stopped
 
 | Event (`event` key) | Level | Fields |
 | --- | --- | --- |
-| `ingest_failed` | warn | operation (`live`, `history`, `merge`), error class, chat JID and message ID escaped, or history chunk order and sync type; dropped count |
-| `history_incomplete` | warn | reason (`queue_full`, `download`, `too_large`, `parse`, `storage`), chunk order, sync type, messages committed from this chunk |
+| `ingest_failed` | warn | operation (`live`, `history`, `name`), error class, chat JID and message ID escaped, or history chunk order and sync type; dropped count. Terminal. |
+| `history_incomplete` | warn | reason (`queue_full`, `download`, `too_large`, `parse`, `stopped`), chunk order, sync type. A store failure during history is `ingest_failed` with operation `history`, which also carries the messages committed from the chunk. |
+| `lid_merge_failed` | warn | LID and phone JID escaped, error class. Not terminal; retried at the next startup. |
 | `receive_overload` | warn | reason from the fork, "messages may be missing" |
 | `lid_reconcile` | info | merged, failed, skipped, completed or `budget_exhausted` |
 | `lid_reassigned` | info | LID, old and new phone JID, escaped |
-| `ingest_stopped` | info | the counters above |
+| `ingest_stopped` | info | the counters above, including `unavailable` (placeholders not fetched) |
 | message received | debug | text and caption appear only here |

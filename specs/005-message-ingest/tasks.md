@@ -17,7 +17,7 @@ ingest skeleton and the terminal-failure path, ending with the quiet-stop pass-r
 US1 to US4 in spec priority order, then polish and evidence.
 
 **Decisions already made (do not reopen without the user)**:
-- the dependency is `github.com/tiger-seo/whatsmeow` at `d83e19e` (`9209108` plus the phone re-request gate) with
+- the dependency is `github.com/tiger-seo/whatsmeow` at `bedcf01` (`9209108` plus the two phone-request gates) with
   its approved limits; no other pin, fork commit or `replace` (research R1, plan contract item 8);
 - a device storage fault keeps feature 003's behaviour; only an ingest failure stops the command (backlog
   `005-device-fault-command-wait.md`);
@@ -34,9 +34,10 @@ No commit carries attribution lines.
 ## Current state
 
 Branch `005-message-ingest`, planning complete, tasks generated and the cross-artifact analysis applied on 2026-11-13
-(three owner decisions recorded in the spec's clarifications). The first design review (`61a63f4`) returned BLOCK;
-the owner approved fork commit `d83e19e` (phone re-request gate) and the findings are addressed in the documents and
-the tasks below. Nothing implemented. Next: the second owner-judge **design** review, then T003 and T004. This section is ignored by the review-gate hook.
+(three owner decisions recorded in the spec's clarifications). The first design review (`61a63f4`) returned BLOCK
+and the second (`1b1d91f`) CONCERNS; the owner approved fork commits `d83e19e` and `bedcf01` (the two phone-request
+gates) and kept the roadmap's history check, and the findings are addressed in the documents and the tasks below.
+Nothing implemented. Next: the third owner-judge **design** review, then T003 and T004. This section is ignored by the review-gate hook.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -55,20 +56,22 @@ the tasks below. Nothing implemented. Next: the second owner-judge **design** re
 
 - [X] T001 Pin the owner-approved fork in `go.mod` and `go.sum` and run the full gates. Done during planning,
   2026-11-13: first `9209108` (commit `88a74e5`), then `d83e19e` (`replace go.mau.fi/whatsmeow =>
-  github.com/tiger-seo/whatsmeow v0.0.0-20261113120547-d83e19ef5083`) after the first design review; evidence in
-  `specs/005-message-ingest/verification.md` "Pinned Fork Gates" and "Fork Re-request Gate".
+  github.com/tiger-seo/whatsmeow v0.0.0-20261113120547-d83e19ef5083`) after the first design review, then `bedcf01`
+  (`v0.0.0-20261113124132-bedcf0185245`) after the second; evidence in
+  `specs/005-message-ingest/verification.md` "Pinned Fork Gates", "Fork Re-request Gate" and "Fork Placeholder Gate".
 - [X] T002 Run the race detector on the fork and on `./internal/wa ./cmd/...` in WSL2, and fix the race found in
   `cmd/whatsapp-mcp/store_test.go`. Done 2026-11-13; evidence in `verification.md` "Race Detector (WSL2)".
 - [ ] T003 Confirm `docs/specification.md` exists locally and contains §3.4, §3.5, §8.5 (S3–S5), §8.6 (P2, P3) and §8.7
   (M7). If it is missing, stop and ask the user for it; do not infer behaviour from code. Record the check in
   `specs/005-message-ingest/verification.md`.
-- [ ] T004 **OWNER DECISION.** Ask the owner the four "Open questions for the design review" in
+- [ ] T004 **OWNER DECISION.** Ask the owner the three "Open questions for the design review" in
   `specs/005-message-ingest/plan.md`: (1) accept or change the proposed limits in `data-model.md`; (2) accept that a
-  stop during a history download can leave the marker unsafe, to be measured in T047; (3) keep or gate the phone
-  request the library sends for a server `unavailable` placeholder (a gate is a fork change and a new contract item);
-  (4) accept the 16 MiB / 10 s media-client limits for history downloads or change them. Record the answers and the date
+  stop during a history download can leave the marker unsafe (which means offline recovery, unlinking on the phone
+  and pairing again), to be measured in T047, including a `pair`-shaped stop; (3) accept the 16 MiB / 10 s
+  media-client limits for history downloads or change them. Record the answers and the date
   in `verification.md` "Owner Decisions" and update `data-model.md` if a number changes. Only the owner ticks this
-  task. The `pair` history gap, LID remapping and the budget handover were decided on 2026-11-13 and are in the spec.
+  task. The `pair` history gap, LID remapping, the budget handover, the placeholder gate and the history check in T056
+  were decided on 2026-11-13 and are in the spec, the plan and this file.
 
 ---
 
@@ -114,7 +117,8 @@ terminal signal, and the command's exit on a terminal failure. Depends on T003 a
   `AddEventHandlerWithSuccessStatus` and sets `SynchronousAck = true`, `ManualHistorySyncDownload = true`,
   `DisableManualHistorySyncReceipt = false`, and leaves feature 004's settings unchanged; owner events return `true`
   and dispatch as before; after the retire bit a message event returns `false`, increments `DroppedMessages`, does
-  not touch the store and does not increment the owner-event drop count; `IngestFailed()` closes when ingest fails.
+  not touch the store and does not increment the owner-event drop count; an `UndecryptableMessage` with
+  `IsUnavailable` returns `true` and increments `unavailable`; `IngestFailed()` closes when ingest fails.
 - [ ] T012 [P] Extend `internal/wa/quiet_order_test.go` with the ingest steps: `ingest.Stop()` happens at step 4,
   `ingest.Wait` waits at most 2 s at step 5, workers still running are joined after step 8 and before step 9, and no
   step of feature 004 moves (the existing assertions keep passing). `QuietStopResult.DroppedMessages` is reported and
@@ -147,7 +151,7 @@ terminal signal, and the command's exit on a terminal failure. Depends on T003 a
   pass.
 - [ ] T021 Create `internal/wa/ingest.go`: `IngestConfig`, `newIngest`, the `ingestClient` interface (`ParseWebMessage`,
   `DownloadHistorySync`, `GetGroupInfo`, own JID), the state machine, the per-generation ingest lock, counters
-  (`stored`, `ignored`, `rejected`, `droppedMessages`, `historyIncomplete`, `lookupsDropped`, `hintsDropped`,
+  (`stored`, `ignored`, `rejected`, `unavailable`, `droppedMessages`, `historyIncomplete`, `lookupsDropped`, `hintsDropped`,
   `merged`, `mergeFailed`, each `uint64`), `Stop`, `Wait`, `Counters`, and the terminal-failure routine of
   contracts/ingest.md (once: set `failed`, `Stop`, log `ingest_failed`, call `Failed`). `HandleMessage` returns `true`
   for everything at this stage except the retiring and failed cases. Make T010 pass.
@@ -209,7 +213,9 @@ real account.
   account are stored and acknowledged; with the store made to fail, the message is not acknowledged (assert on the
   simulator's received acks, extending `internal/wasim` to record them if needed), the owner's `Terminal()` closes and
   the stop passes its quiet check; a stanza from another account that cannot be decrypted produces one retry receipt
-  and one acknowledgement and **no** message to the account's own phone (assert on every node the simulator receives); a full handler queue (the fork's 2,048 items, driven by a blocked handler) logs
+  and one acknowledgement and **no** message to the account's own phone, and an `unavailable` placeholder of type
+  `view_once` produces one acknowledgement, **no** message to the phone and an `unavailable` count of 1 (assert on
+  every node the simulator receives); a full handler queue (the fork's 2,048 items, driven by a blocked handler) logs
   one `receive_overload` with reason `item_limit`, sets `Health().ReceiveOverload`, and no reconnect follows.
 - [ ] T029 [US1] Run T026–T028 and record the expected failures in `verification.md`.
 
@@ -293,7 +299,10 @@ and ingest events with and without mappings.
   elsewhere; normalisation applies to live and history alike.
 - [ ] T039 [P] [US3] Write run-time merge cases in `internal/wa/ingest_lid_test.go`: a `NoteMapping` for a LID with stored
   messages merges them through `MergeLID` without a restart; a mapping not yet visible is retried "5 attempts 1 s
-  apart" and merged once it commits, else dropped and counted `hintsDropped`; the hint set holds "1,024 LIDs" and a
+  apart" and merged once it commits, else dropped and counted `hintsDropped`, and `Stop` during those retries ends the
+  worker within one attempt; a failed merge logs `lid_merge_failed`; a flush with 250 distinct unmapped LIDs and a slow
+  store re-looks them up under one 2 s deadline, writes those not resolved in time as LIDs, and holds the ingest lock
+  no longer than that deadline plus the write; the hint set holds "1,024 LIDs" and a
   1,025th distinct hint is dropped and counted; a message normalised before the mapping existed and written while the
   merge is pending ends under the phone JID (ingest lock ordering, invariant N3); a message normalised before the
   mapping existed, whose mapping is written **and merged** before the message takes the lock, is still written under
@@ -344,7 +353,8 @@ provider while ingesting repeated messages.
   when better or newer at the same quality; a group with a history name never triggers a lookup; a group without one
   is stored with `Group <id>` and looked up once by the counted fake for 100 messages (SC-005); a failed lookup is not
   repeated for "10 min" while it is in the failure cache of "1,024 groups" (the oldest entry goes first); the lookup set holds "64 distinct groups" and the 65th is dropped and counted; each lookup
-  has a "10 s" deadline and runs under `Lib`; a failed name write is terminal but the message stays stored and
+  has a "10 s" deadline and runs under `Lib`; a failed name write is terminal (`ingest_failed` with operation
+  `name`) but the message stays stored and
   `HandleMessage` returns `true`; 10,000 distinct groups never grow the cache, the set or the worker count past their
   bounds.
 - [ ] T045 [US4] Run T044 and record the expected failures in `verification.md`.
@@ -366,13 +376,14 @@ provider while ingesting repeated messages.
 - [ ] T047 Measure stops with ingest busy (plan open question 2, research R11): add `TestQuietStopWithIngestWorkers`
   to `internal/wa/quiet_measure_test.go` under `WA_MEASURE=1`. Run 50 stops while the simulator delivers history
   chunks, 50 while a group lookup and a run-time merge are each in progress, and 50 while a live message is inside
-  the handler (two slow LID lookups and a slow store write). Record per case the pass rate, the
+  the handler (two slow LID lookups and a slow store write), and 50 `pair`-shaped stops at the follow-up confirmation
+  while the first history notification is being downloaded. Record per case the pass rate, the
   failure categories and the `stop_bound_exceeded` count in `verification.md` "Stops with ingest busy". The owner
   reviews the numbers before the code review.
 - [ ] T048 Measure handler latency under history (research R3): add `TestIngestHandlerLatency` to
   `internal/wa/quiet_measure_test.go` under `WA_MEASURE=1`. On the simulator, deliver an initial history of at least
   20 chunks while other accounts send a burst of 2,000 live messages, half of them LID-addressed with a phone
-  `SenderAlt` (so the library repeats mapping upserts), 20 runs. Record the handler's ingest-lock wait
+  `SenderAlt` (so the library repeats mapping upserts), with 100 `view_once` placeholders mixed in, 20 runs. Record the handler's ingest-lock wait
   (p50, p99, max), the number of `receive_overload` events and the messages stored, in `verification.md` "Handler
   latency under history". Target: no `receive_overload`. A miss goes to the owner with the numbers before the code
   review; do not raise the fork's queue or change a limit on your own.
@@ -395,7 +406,7 @@ provider while ingesting repeated messages.
 - [ ] T053 Run the full gates of `AGENTS.md` "Commands" and record each exit code read directly: `gofmt -l .`, `go vet
   ./...`, `go mod verify`, `CGO_ENABLED=0 go test ./... -count=1 -timeout 30m`, the five cross-builds, `go run
   golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...`, and `go vet`, `go test` and the build of
-  `./internal/wa/testdata/cmd/session-check`. Confirm `go.mod` and `go.sum` still pin `d83e19e` and are unchanged since
+  `./internal/wa/testdata/cmd/session-check`. Confirm `go.mod` and `go.sum` still pin `bedcf01` and are unchanged since
   the commit that pinned it (`git log -1 --format=%h -- go.mod`, then `git diff <that> -- go.mod go.sum`). Keep `TEMP` and `TMP` on `D:\tmp`.
 - [ ] T054 Run the race detector again in WSL2 on `./internal/wa ./cmd/...` (quickstart §6, `MSYS_NO_PATHCONV=1`) and
   the whole suite under WSL2 with `CGO_ENABLED=0` as in `AGENTS.md`; record both as WSL2. Push the branch for CI only
@@ -403,14 +414,16 @@ provider while ingesting repeated messages.
 - [ ] T055 Check LF endings with `git ls-files --eol`; no tracked file shows `w/crlf`.
 - [ ] T056 **Permitted real-account journey, only with the owner's explicit permission for each step** (quickstart §7),
   after reviewing the roadmap's shutdown follow-up: a new directory under `D:\tmp`, the binary from a named commit,
-  `pair`, then `serve`; one text and one captioned image from another phone, and a live message from a contact who
-  is addressed by LID (roadmap); stop; inspect the store; the owner
+  `pair`, recording its `history_incomplete` counts by reason and the history it stored; then `serve`, recording any
+  history it receives; one text and one captioned image from another phone, and a live message from a contact who is
+  addressed by LID (roadmap: "pair, let history sync complete, and check chats, messages and captions"); stop; inspect
+  the store; the owner
   unlinks the device and the directory is deleted. Record redacted results; a step not performed is "not verified".
   Do not act on a real account without that permission.
 - [ ] T057 Roll up `specs/005-message-ingest/verification.md`: the pin and its limits unchanged, the race and pass-rate
   results, the history unsafe-stop rate, platforms covered, accepted risks (library maps, no replay guarantee,
-  history after `pair`, no undo on a LID remap, `ErrBusy` stopping ingest, the `unavailable` placeholder request as
-  decided at T004), and every "not verified" item. Update `AGENTS.md` "Current state" and this file's "Current
+  history after `pair` with T056's measured counts, no undo on a LID remap, `ErrBusy` stopping ingest,
+  `unavailable` placeholders not fetched), and every "not verified" item. Update `AGENTS.md` "Current state" and this file's "Current
   state". Commit the work and the evidence and run the owner-judge agent in **code** mode; add its row to the "Owner
   reviews" table and commit it.
 

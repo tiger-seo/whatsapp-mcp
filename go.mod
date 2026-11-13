@@ -4,7 +4,7 @@ go 1.27.0
 
 toolchain go1.27.4
 
-replace go.mau.fi/whatsmeow => github.com/tiger-seo/whatsmeow v0.0.0-20261113120547-d83e19ef5083
+replace go.mau.fi/whatsmeow => github.com/tiger-seo/whatsmeow v0.0.0-20261113124132-bedcf0185245
 
 require (
 	github.com/coder/websocket v1.8.15
