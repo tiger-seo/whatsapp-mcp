@@ -262,3 +262,4 @@ Recorded during `/speckit-plan`, answered by the owner (`tiger-seo`):
 
 | Stage | Date | Commit | Verdict | Owner decision |
 | --- | --- | --- | --- | --- |
+| design | 2026-11-13 | 61a63f4 | BLOCK | |
