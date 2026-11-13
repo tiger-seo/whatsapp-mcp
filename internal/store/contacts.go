@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 )
 
 // entryName is one device-store entry's name in the order full, first, push, business; empty when it has none.
@@ -83,4 +84,36 @@ func (s *Store) SearchContacts(ctx context.Context, query string, p Page) ([]Con
 		return nil, err
 	}
 	return out, nil
+}
+
+// ContactNames returns the current device's contact-table names for jid: saved is the full name, else the first
+// name; real is the push name, else the business name. Both are empty when there is no entry or no device. A name
+// longer than the store's name limit is a resource-limit error, never a shortened name.
+func (s *Store) ContactNames(ctx context.Context, jid string) (saved, real string, err error) {
+	j, err := parseJID("jid", jid, []string{serverUser, serverLID}, false)
+	if err != nil {
+		return "", "", s.report(newOpID(), err)
+	}
+	err = s.snapshot(ctx, "ContactNames", func(ctx context.Context, q querier) error {
+		var sv, rl sql.NullString
+		err := q.QueryRowContext(ctx, `
+			SELECT coalesce(nullif(full_name, ''), nullif(first_name, ''), ''),
+			       coalesce(nullif(push_name, ''), nullif(business_name, ''), '')
+			FROM whatsmeow_contacts WHERE our_jid = `+currentDevice+` AND their_jid = ?`, j.String()).Scan(&sv, &rl)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if len(sv.String) > maxNameBytes || len(rl.String) > maxNameBytes {
+			return limitErr("name bytes")
+		}
+		saved, real = sv.String, rl.String
+		return nil
+	})
+	if err != nil {
+		return "", "", err
+	}
+	return saved, real, nil
 }

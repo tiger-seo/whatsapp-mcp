@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -182,4 +183,102 @@ func FuzzValidateMessage(f *testing.F) {
 			t.Fatalf("canonical chat JID %q does not round-trip: %v", sm.chatJID, err)
 		}
 	})
+}
+
+// messageFieldCases holds, for each field of Message, one value StoreMessages accepts and one it rejects.
+func messageFieldCases() []struct {
+	field     string
+	good, bad func(*Message)
+} {
+	hash := func(n int) []byte { return make([]byte, n) }
+	length := func(n int64) *int64 { return &n }
+	return []struct {
+		field     string
+		good, bad func(*Message)
+	}{
+		{"chat_jid", func(m *Message) { m.ChatJID = "100000000002@lid" }, func(m *Message) { m.ChatJID = "1:2@s.whatsapp.net" }},
+		{"id", func(m *Message) { m.ID = strings.Repeat("i", maxIDBytes) }, func(m *Message) { m.ID = "" }},
+		{"sender_jid", func(m *Message) { m.SenderJID = "491511234567:4@s.whatsapp.net" }, func(m *Message) { m.SenderJID = groupG }},
+		{"time", func(m *Message) { m.Time = minTime }, func(m *Message) { m.Time = time.Time{} }},
+		{"text", func(m *Message) { m.Text = strings.Repeat("t", maxTextBytes) }, func(m *Message) { m.Text = strings.Repeat("t", maxTextBytes+1) }},
+		{"caption", func(m *Message) { m.Caption = strings.Repeat("c", maxCaptionBytes) }, func(m *Message) { m.Caption = "a\xffb" }},
+		{"media_type", func(m *Message) { m.MediaType = "audio" }, func(m *Message) { m.MediaType = "sticker" }},
+		{"media_url", func(m *Message) { m.Media.URL = strings.Repeat("u", maxURLBytes) }, func(m *Message) { m.Media.URL = strings.Repeat("u", maxURLBytes+1) }},
+		{"media_direct_path", func(m *Message) { m.Media.DirectPath = "/p" }, func(m *Message) { m.Media.DirectPath = strings.Repeat("p", maxPathBytes+1) }},
+		{"media_key", func(m *Message) { m.Media.MediaKey = hash(32) }, func(m *Message) { m.Media.MediaKey = hash(31) }},
+		{"file_sha256", func(m *Message) { m.Media.FileSHA256 = hash(32) }, func(m *Message) { m.Media.FileSHA256 = hash(33) }},
+		{"file_enc_sha256", func(m *Message) { m.Media.FileEncSHA256 = hash(32) }, func(m *Message) { m.Media.FileEncSHA256 = hash(1) }},
+		{"file_length", func(m *Message) { m.Media.FileLength = length(maxFileLength) }, func(m *Message) { m.Media.FileLength = length(-1) }},
+		{"mime_type", func(m *Message) { m.Media.MIMEType = "image/jpeg" }, func(m *Message) { m.Media.MIMEType = strings.Repeat("m", maxMIMEBytes+1) }},
+		{"file_name", func(m *Message) { m.Media.FileName = "a.pdf" }, func(m *Message) { m.Media.FileName = strings.Repeat("f", maxFileNameBytes+1) }},
+	}
+}
+
+// ValidateMessage gives the same verdict, with the same field, as StoreMessages for every field of Message, and
+// its error never repeats the value.
+func TestValidateMessage(t *testing.T) {
+	st, _ := openTest(t, newDataDir(t))
+	ctx := t.Context()
+	for i, c := range messageFieldCases() {
+		good := msg(groupG, fmt.Sprintf("good%d", i), alice, at(i))
+		c.good(&good)
+		if err := ValidateMessage(good); err != nil {
+			t.Errorf("%s: ValidateMessage rejected an accepted value: %v", c.field, err)
+		}
+		if err := st.StoreMessages(ctx, []Message{good}); err != nil {
+			t.Errorf("%s: StoreMessages rejected the good value: %v", c.field, err)
+		}
+		bad := msg(groupG, fmt.Sprintf("bad%d", i), alice, at(i))
+		c.bad(&bad)
+		verr := ValidateMessage(bad)
+		wantInvalid(t, verr, c.field)
+		serr := st.StoreMessages(ctx, []Message{bad})
+		wantInvalid(t, serr, c.field)
+		if verr != nil && serr != nil && verr.Error() != serr.Error() {
+			t.Errorf("%s: ValidateMessage says %q, StoreMessages %q", c.field, verr, serr)
+		}
+		if verr != nil && bad.Text != "" && strings.Contains(verr.Error(), bad.Text) {
+			t.Errorf("%s: error repeats the text", c.field)
+		}
+	}
+	secret := Message{ChatJID: "secret-value", ID: "x", SenderJID: alice, Time: at(0)}
+	if err := ValidateMessage(secret); err == nil || strings.Contains(err.Error(), "secret-value") {
+		t.Errorf("error = %v; want a rejection that does not repeat the value", err)
+	}
+}
+
+// MessageFieldBytes is exactly what StoreMessages charges: messages summing to 16 MiB are accepted and one byte
+// more is a resource limit.
+func TestMessageFieldBytes(t *testing.T) {
+	st, _ := openTest(t, newDataDir(t))
+	ctx := t.Context()
+	m := msg(groupG, "id", alice, at(0), withCaption("cap"))
+	m.MediaType, m.Media.URL, m.Media.MediaKey = "image", "https://u", make([]byte, 32)
+	_, charged, err := m.validate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := MessageFieldBytes(m); got != charged {
+		t.Errorf("MessageFieldBytes = %d, StoreMessages charges %d", got, charged)
+	}
+	batch := func(extra int) []Message {
+		var out []Message
+		total := 0
+		for i := 0; total < maxBatchBytes; i++ {
+			m := msg(groupG, fmt.Sprintf("fb%d", i), alice, at(i), withText(strings.Repeat("x", maxTextBytes)))
+			if n := MessageFieldBytes(m); total+n > maxBatchBytes {
+				m.Text = strings.Repeat("x", maxTextBytes-(total+n-maxBatchBytes))
+			}
+			total += MessageFieldBytes(m)
+			out = append(out, m)
+		}
+		out[len(out)-1].Text += strings.Repeat("y", extra)
+		return out
+	}
+	if err := st.StoreMessages(ctx, batch(0)); err != nil {
+		t.Errorf("exactly 16 MiB by MessageFieldBytes: %v", err)
+	}
+	if err := st.StoreMessages(ctx, batch(1)); !errors.Is(err, ErrResourceLimit) {
+		t.Errorf("one byte more: %v, want ErrResourceLimit", err)
+	}
 }
