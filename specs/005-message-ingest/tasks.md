@@ -33,14 +33,24 @@ No commit carries attribution lines.
 
 ## Current state
 
-Branch `005-message-ingest`, planning complete, tasks generated and the cross-artifact analysis applied on 2026-11-13
-(three owner decisions recorded in the spec's clarifications). The first design review (`61a63f4`) returned BLOCK
-and the second (`1b1d91f`) CONCERNS; the owner approved fork commits `d83e19e` and `bedcf01` (the two phone-request
-gates) and kept the roadmap's history check, and the findings are addressed in the documents and the tasks below.
-The third review (`84dfa32`) returned PASS with three lows; the owner answered T004 and decided the placeholder
-scope, and those edits are applied. T003 and T004 are done (T004 ticked at the owner's request, 2026-11-13). The fourth design review (`a040210`) returned PASS with one wording
-low (T004 still names the plan heading "Open questions"; the heading is now "Questions for the design review"; left
-unchanged so the PASS stays current). Nothing implemented. Next: `/speckit-implement`. This section is ignored by the review-gate hook.
+Resume point, 2026-11-13. Branch `005-message-ingest`. Nothing implemented yet. **Next: `/speckit-implement`, starting
+at Phase 2 (T005).** The MVP is Phase 2 plus US1 (T005–T033).
+
+- **Design**: passed at `a040210` after four owner-judge rounds (BLOCK, CONCERNS, PASS, PASS; table in
+  `verification.md`). Its one remaining low: T004 names the plan heading "Open questions", which is now "Questions for
+  the design review"; left unchanged so the PASS stays current.
+- **Setup done**: T001 (fork pinned at `bedcf01`), T002 (race runs), T003 (spec sections), T004 (owner answers: limits
+  accepted, unsafe stops during history accepted with T047's rate coming back, 16 MiB / 10 s history downloads kept).
+- **Decided, do not reopen**: see "Decisions already made" above, the spec's clarifications of 2026-11-10 and
+  2026-11-13, and plan.md's Fork Acceptance Contract (items 1–9).
+- **Owner checkpoints during implementation**: T025 (pass rate with `SynchronousAck`) gates every story; T047 and
+  T048 measurements return to the owner before the code review; T056 needs permission for each real-account step.
+- **Environment**: the gates are in `AGENTS.md` "Commands". A `wsl --cd /mnt/...` call from Git Bash needs
+  `MSYS_NO_PATHCONV=1`, or WSL exits 127 with `ERROR_PATH_NOT_FOUND`. gcc is installed in WSL Ubuntu for the race runs
+  (T053). The fork's source is `D:\projects-mou\whatsmeow-receive-bounds`, branch `receive-bounds`; any fork change
+  is a pin change and needs the owner.
+
+This section is ignored by the review-gate hook.
 
 ## Format: `[ID] [P?] [Story] Description`
 
