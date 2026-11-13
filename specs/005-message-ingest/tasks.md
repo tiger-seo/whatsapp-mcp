@@ -38,9 +38,9 @@ Branch `005-message-ingest`, planning complete, tasks generated and the cross-ar
 and the second (`1b1d91f`) CONCERNS; the owner approved fork commits `d83e19e` and `bedcf01` (the two phone-request
 gates) and kept the roadmap's history check, and the findings are addressed in the documents and the tasks below.
 The third review (`84dfa32`) returned PASS with three lows; the owner answered T004 and decided the placeholder
-scope, and those edits are applied. T003 is done; T004 waits for the owner's tick. The fourth design review (`a040210`) returned PASS with one wording
+scope, and those edits are applied. T003 and T004 are done (T004 ticked at the owner's request, 2026-11-13). The fourth design review (`a040210`) returned PASS with one wording
 low (T004 still names the plan heading "Open questions"; the heading is now "Questions for the design review"; left
-unchanged so the PASS stays current). Nothing implemented. Next: the owner ticks T004, then `/speckit-implement`. This section is ignored by the review-gate hook.
+unchanged so the PASS stays current). Nothing implemented. Next: `/speckit-implement`. This section is ignored by the review-gate hook.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -67,7 +67,7 @@ unchanged so the PASS stays current). Nothing implemented. Next: the owner ticks
 - [X] T003 Confirm `docs/specification.md` exists locally and contains §3.4, §3.5, §8.5 (S3–S5), §8.6 (P2, P3) and §8.7
   (M7). If it is missing, stop and ask the user for it; do not infer behaviour from code. Record the check in
   `specs/005-message-ingest/verification.md`.
-- [ ] T004 **OWNER DECISION.** Ask the owner the three "Open questions for the design review" in
+- [X] T004 **OWNER DECISION.** Ask the owner the three "Open questions for the design review" in
   `specs/005-message-ingest/plan.md`: (1) accept or change the proposed limits in `data-model.md`; (2) accept that a
   stop during a history download can leave the marker unsafe (which means offline recovery, unlinking on the phone
   and pairing again), to be measured in T047, including a `pair`-shaped stop; (3) accept the 16 MiB / 10 s
