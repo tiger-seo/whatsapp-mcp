@@ -287,6 +287,10 @@ Recorded during `/speckit-plan`, answered by the owner (`tiger-seo`):
 - **Inventory**: every site in the pin that reads `SynchronousAck` is listed in plan.md, "What `SynchronousAck` changes
   in the pin". One more account action found there, the phone request for a server `unavailable` placeholder
   (`message.go:334`), is not gated in either mode and is put to the owner at T004.
+- Race detector on the new pin, WSL2 Ubuntu (not native Linux), gcc 15.2.0, `CGO_ENABLED=1` for these runs only,
+  `MSYS_NO_PATHCONV=1`: fork at `d83e19e`, `go test -race ./... -count=1 -timeout 20m` exited 0 (root 32.2 s,
+  `appstate` 1.1 s, `binary` 10.0 s); project, `go test -race -p 1 ./internal/wa ./cmd/... -count=1 -timeout 40m`
+  exited 0 (`internal/wa` 64.5 s, `cmd/whatsapp-mcp` 166.5 s). No `DATA RACE` in either log.
 
 ## Owner Reviews
 
