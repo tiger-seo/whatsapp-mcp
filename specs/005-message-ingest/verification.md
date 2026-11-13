@@ -258,6 +258,36 @@ Recorded during `/speckit-plan`, answered by the owner (`tiger-seo`):
 - Not run under the race detector: `internal/store` and the remaining packages (outside the plan's condition, which
   names the fork and the session packages).
 
+## Fork Re-request Gate
+
+- **Finding**: the first design review (`61a63f4`, BLOCK) found that with `SynchronousAck` the first retry receipt for
+  an undecryptable message calls `immediateRequestMessageFromPhone` without checking
+  `AutomaticMessageRerequestFromPhone`, while the asynchronous path checks it (`retry.go:441` and `:507-509` at
+  `9209108`). Confirmed by reading the source on 2026-11-13.
+- **Owner decision, 2026-11-13 (`tiger-seo`)**: gate it in the fork, as a new Fork Acceptance Contract item (8) and a
+  new pin.
+- **Fork commit** `d83e19ef5083f76ca86ffdddd4bcb6511c7e3981` on `receive-bounds` ("retry: respect
+  AutomaticMessageRerequestFromPhone with synchronous acks"), pushed to `github.com/tiger-seo/whatsmeow`. It adds
+  `phoneRerequestEnabled()`, used by the delayed and the immediate request, and
+  `retry_phone_rerequest_test.go`.
+- Fork, native Windows, Go 1.27.4, `CGO_ENABLED=0`, each exit code read directly:
+  - without the `retry.go` change, `go test . -run TestRetryReceiptDoesNotRerequestFromPhoneUnlessEnabled -count=1`
+    exited 1: `syncAck=true` attempted the peer send (nil-pointer panic in `preparePeerMessageNode`, because the test
+    client has no session store);
+  - with it, `go test . -run 'TestRetryReceiptDoesNotRerequestFromPhoneUnlessEnabled|TestPhoneRerequestEnabled'
+    -count=10` exited 0;
+  - `gofmt -l .` printed nothing; `go vet ./...` exited 0; `go test ./... -count=3 -timeout 20m` exited 0 (root,
+    `appstate`, `binary`); `go build ./...` exited 0 for the five targets.
+- **Pin**: `go.mod` replaces with `github.com/tiger-seo/whatsmeow v0.0.0-20261113120547-d83e19ef5083`; `go.sum`
+  updated by `go mod tidy`.
+- Project gates on that pin, native Windows, `CGO_ENABLED=0`: `gofmt -l .` printed nothing (exit 0); `go vet ./...`
+  exit 0; `go mod verify` `all modules verified`, exit 0; the five `go build ./cmd/whatsapp-mcp` targets each exit 0;
+  govulncheck v1.9.0 `No vulnerabilities found.`, exit 0; `go test ./... -count=1 -timeout 30m` exit 0, 9 packages ok
+  (`cmd/whatsapp-mcp` 133.2 s, `internal/store` 313.6 s, `internal/wa` 44.6 s).
+- **Inventory**: every site in the pin that reads `SynchronousAck` is listed in plan.md, "What `SynchronousAck` changes
+  in the pin". One more account action found there, the phone request for a server `unavailable` placeholder
+  (`message.go:334`), is not gated in either mode and is put to the owner at T004.
+
 ## Owner Reviews
 
 | Stage | Date | Commit | Verdict | Owner decision |

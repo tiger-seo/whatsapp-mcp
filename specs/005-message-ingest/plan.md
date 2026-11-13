@@ -5,8 +5,9 @@
 **Input**: Feature specification from `specs/005-message-ingest/spec.md`
 
 **Status**: Phase 0 and Phase 1 complete; tasks generated and the cross-artifact analysis of 2026-11-13 applied. The
-constitution gate passes on the pinned fork; its condition, the race-detector run, was met on 2026-11-13
-(`verification.md`, "Race Detector (WSL2)"). Next: the owner's design review.
+first design review (`61a63f4`) returned BLOCK; its findings are addressed below, including a ninth fork commit the
+owner approved (`d83e19e`, contract item 8). The race-detector condition is met for `9209108` and is rerun for
+`d83e19e` (`verification.md`). Next: the second design review.
 
 ## Summary
 
@@ -16,7 +17,8 @@ per message. Live messages are stored inside the library's event handler, with a
 successful write. History is downloaded and stored by one bounded worker per generation. A message-store failure stops
 the connected command with a report; a receive overload is reported as a possible gap. Ingest joins feature 004's
 retirement order without moving any step. The library is the owner-approved fork revision
-`tiger-seo/whatsmeow@9209108`, which enforces the receive bounds E003-RX-01 had deferred.
+`tiger-seo/whatsmeow@d83e19e`, which enforces the receive bounds E003-RX-01 had deferred and keeps synchronous
+acknowledgements from sending phone re-requests.
 
 ## Technical Context
 
@@ -24,8 +26,8 @@ retirement order without moving any step. The library is the owner-approved fork
 race-detector run in WSL2 that the owner allowed.
 
 **Primary Dependencies**: `go.mau.fi/whatsmeow`, required at upstream `f1b798561919` and replaced by
-`github.com/tiger-seo/whatsmeow v0.0.0-20261112064615-92091085667b` (branch `receive-bounds`, commit `9209108`,
-approved by the owner on 2026-11-13, research R1); `modernc.org/sqlite` through `internal/store`. No new dependency.
+`github.com/tiger-seo/whatsmeow v0.0.0-20261113120547-d83e19ef5083` (branch `receive-bounds`, commit `d83e19e`: `9209108`
+plus the re-request gate, both approved by the owner on 2026-11-13, research R1); `modernc.org/sqlite` through `internal/store`. No new dependency.
 
 **Storage**: The existing `whatsapp.db`; no migration. Four read-only store helpers and two exported validation
 helpers (data model).
@@ -81,7 +83,8 @@ needed. No other High finding is enabled by this feature without a decision.
 
 ## Fork Acceptance Contract
 
-Approved by the owner on 2026-11-13 for revision `9209108`. The fork bounds what another WhatsApp account can drive in
+Approved by the owner on 2026-11-13 for revision `9209108`; item 8 approved the same day after the first design
+review, which moves the pin to `d83e19e`. The fork bounds what another WhatsApp account can drive in
 the client library. The list is closed: a new item needs an owner decision, not a review finding.
 
 1. **Frame size.** One frame is limited after expansion, on the bytes actually produced. (`be96244`)
@@ -95,13 +98,32 @@ the client library. The list is closed: a new item needs an owner decision, not 
 5. **History expansion.** A history sync is limited after decompression, on the bytes actually produced. The library
    returns an error; it does not close the connection. (`a654373`)
 6. **Work per message.** Handling a message from another account starts no goroutine that can wait on storage or the
-   socket. Push-name and business-name updates run inside the handler (`9209108`); acknowledgements and retry
-   receipts run inside it through `SynchronousAck` (contract).
-7. **No regression.** Apart from item 6 and `c05eb84` (the stream-error fix proposed upstream as #1337), the branch
-   changes no acknowledgement, retry, history, reconnect or shutdown behaviour of upstream.
+   socket. Push-name and business-name updates run inside the handler (`9209108`). With `SynchronousAck`, the
+   acknowledgement, receipt and retry-receipt work listed in "What `SynchronousAck` changes in the pin" runs inside it
+   too.
+7. **No regression.** Apart from items 6 and 8 and `c05eb84` (the stream-error fix proposed upstream as #1337), the
+   branch changes no acknowledgement, retry, history, reconnect or shutdown behaviour of upstream.
+8. **No phone re-request unless enabled.** The first retry receipt for an undecryptable message asks the user's phone
+   for it only when `AutomaticMessageRerequestFromPhone` is set, with synchronous acks as with asynchronous ones.
+   Another account can make any stanza undecryptable, so without this the account would send a peer message on a
+   stranger's behalf, and the handler would wait for it. (`d83e19e`)
 
 Also on the branch and not part of the gate: waiter cleanup after a timeout (`4a01445`), an error instead of a panic
 on short app-state values (`8f99711`), and a panicking handler counted as failed (`01da9e4`).
+
+### What `SynchronousAck` changes in the pin
+
+Inventory of every site in `d83e19e` that reads the setting (`grep SynchronousAck\|backgroundIfAsyncAck`), made after
+the first design review. Each moves work from a new goroutine onto the handler goroutine, so the handler waits for it.
+
+| Site | Trigger and author | With `SynchronousAck` | Bearing on this design |
+| --- | --- | --- | --- |
+| `message.go:504` | every decrypted message | ack, nack or delivery receipt sent after the handlers, skipped when a handler failed | the intended change (R3) |
+| `message.go:441-449`, `retry.go:514` | an undecryptable stanza; any account | nack (`msmsg`) or retry receipt and ack inline; the phone re-request only when `AutomaticMessageRerequestFromPhone` is set (`d83e19e`; false here, so none) | contract item 8; retry receipts are capped per message ID |
+| `message.go:334` | an `unavailable` placeholder; written by the server | phone request and ack inline; the request is **not** gated by any setting, as upstream and as feature 004 already did in a goroutine | an account action on a server stanza; owner question 3 |
+| `receipt.go:37` | a retry receipt from another account | `tryHandleRetryReceipt` inline; it resends only messages this client sent, and this feature sends none | none now; relevant to the send features |
+| `receipt.go:121` (`maybeDeferredAck`) | receipts and notifications | ack after dispatch, skipped when dispatch failed | handler returns `true` for these |
+| `notification.go:484` | `server_sync` app-state notification; written by the server | `FetchAppState` runs inline instead of in a goroutine | feature 004's queued-fetch stop test must be adapted (tasks); the handler waits for each fetch |
 
 Application side, fixed by this design: `SynchronousAck = true`; `ManualHistorySyncDownload = true`; history downloads
 through the fenced media client (16 MiB, 10 s per response); the overload record is read and reported (R10); history
@@ -113,6 +135,11 @@ over the limit is reported as incomplete (R4).
    measurement.
 2. **Unsafe stops during history.** A stop while the history worker is inside a library call can leave the marker
    unsafe (R11). The rate is measured, not estimated.
+3. **The `unavailable` placeholder request.** A server `unavailable` placeholder makes the library ask the phone for
+   the message, with no setting to turn it off (inventory above). Feature 004 already did this in a goroutine; it now
+   runs inline. Keep it (it is how such messages are recovered), or gate it in the fork as well (a new contract item).
+4. **History download limits.** History blobs are downloaded through the media client: 16 MiB and 10 s per response.
+   A normal chunk on a slow link may be reported as incomplete. Real chunk sizes have not been measured.
 
 Settled on 2026-11-13 and recorded in the spec's clarifications: the history gap after `pair` is accepted (a bounded
 wait is in the backlog), merges are not undone when a LID is remapped, and a startup pass stopped by its budget is

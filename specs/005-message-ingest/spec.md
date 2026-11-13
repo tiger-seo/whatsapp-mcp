@@ -141,7 +141,7 @@ An owner sees useful chat names without each group message triggering another gr
 - WhatsApp determines the history it supplies; this feature does not promise complete account history or automatic replay after a failed batch.
 - The initial history after linking is delivered while `pair` runs; what `pair` has not stored when it stops is lost and reported (clarification 2026-11-13).
 - Existing feature 002 storage limits, name precedence and merge decisions apply; the implementation plan must specify bounded ingest admission, cache lifetime, failure reporting and recovery without weakening those limits.
-- Existing feature 004 connection and quiet-stop restrictions remain in force. The receive-resource exception E003-RX-01 applies only if the owner separately approves its scope for this feature; it is not inherited automatically.
+- Existing feature 004 connection and quiet-stop restrictions remain in force. The receive-resource exception E003-RX-01 was retired on 2026-11-13, when the owner-approved fork that enforces those bounds was pinned (plan, Fork Acceptance Contract).
 - Acceptance against a real account is not authorized by this specification and remains unverified until separately permitted and recorded.
 
 ## Security

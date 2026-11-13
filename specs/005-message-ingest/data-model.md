@@ -23,8 +23,10 @@ new read-only store helpers. Numbers marked *proposed* are settled in the design
 
 `SenderPhone` is derived by the store from a phone `SenderJID`; it stays empty for an unmapped LID.
 
-A message is **eligible** when it has text or a recognised media type and is not an edit (`IsEdit`). Every other
-message is ignored without a write. An eligible message that fails `store.ValidateMessage` is **rejected**: skipped,
+A message is **eligible** when its chat is a user, group or LID JID, it has text or a recognised media type, it is
+not an edit (`IsEdit`), its raw content is not a bare `ProtocolMessage`, and, in history, `ParseWebMessage` kept the
+ID of `webMsg.Key.ID`. Every other message, including status broadcasts and newsletters, is ignored without a
+write. An eligible message that fails `store.ValidateMessage` is **rejected**: skipped,
 counted, never repaired.
 
 ### Chat (`store.ChatUpdate`)

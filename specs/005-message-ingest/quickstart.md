@@ -13,7 +13,7 @@ grep -n 'whatsmeow' go.mod
 ```
 
 Expected: `all modules verified`; `go.mod` replaces `go.mau.fi/whatsmeow` with
-`github.com/tiger-seo/whatsmeow v0.0.0-20261112064615-92091085667b`. `TestQuietAllowListPin` compares against that
+`github.com/tiger-seo/whatsmeow v0.0.0-20261113120547-d83e19ef5083`. `TestQuietAllowListPin` compares against that
 version.
 
 ## 2. Ingest on synthetic events

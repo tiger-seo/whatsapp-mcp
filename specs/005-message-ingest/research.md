@@ -11,8 +11,9 @@ the dependency limits were approved separately (R1).
 ## R1. Dependency revision
 
 **Decision**: Pin `go.mau.fi/whatsmeow` through `replace go.mau.fi/whatsmeow => github.com/tiger-seo/whatsmeow
-v0.0.0-20261112064615-92091085667b`, which is branch `receive-bounds` at `9209108`, pushed to the owner's fork on
-2026-11-13. The `require` line keeps upstream `f1b798561919`, the base the fork was reviewed against. The owner approved
+v0.0.0-20261113120547-d83e19ef5083`, which is branch `receive-bounds` at `d83e19e`, pushed to the owner's fork on
+2026-11-13. It was first pinned at `9209108`; the first design review found that `SynchronousAck` sent a phone
+re-request for any undecryptable message, and the owner approved `d83e19e`, which gates it (plan, contract item 8). The `require` line keeps upstream `f1b798561919`, the base the fork was reviewed against. The owner approved
 this revision and its limits on 2026-11-13: 16 MiB per frame after expansion, 64 nesting levels, 65,536 nodes per
 frame, 2,048 queued handler items, 4,096 retry counters and 128 MiB per history sync after decompression. None has
 been compared with real traffic.
@@ -49,6 +50,11 @@ acknowledged. The single handler goroutine gives one ordering for every live wri
 bounded queue (2,048 items), whose overflow closes the connection with a record, which is the fail-closed overload
 behaviour the owner chose. No application queue is added in front of it, so there is nothing more to bound.
 
+**What else moves inline**: `SynchronousAck` affects more than the message acknowledgement. The plan lists every
+site ("What `SynchronousAck` changes in the pin"): retry receipts, the `unavailable` placeholder request and
+`server_sync` app-state fetches also run on the handler goroutine. The first design review found the phone re-request
+among them, which `d83e19e` gates.
+
 **Consequences**: The library has already decrypted the message and advanced the Signal session before the handler
 runs. A message that is not acknowledged is not guaranteed to be delivered again: on redelivery the library may see
 an old counter and drop it. A failed write is therefore reported as a possible gap, never as "will be retried".
@@ -80,6 +86,9 @@ The initial history after linking arrives on `pair`'s connection. `pair` keeps i
 when it stops is reported and lost (owner decision 2026-11-13, spec clarification). A bounded wait in `pair` is in
 the backlog (`005-pair-initial-history-wait.md`).
 
+At retirement, every notification still in the queue, and every history notification that arrives after the retire
+bit, is reported as `history_incomplete` (reason `stopped`); the library sent its receipt when it arrived.
+
 A full queue, a download error, `ErrHistorySyncTooLarge` and a parse error each report an incomplete history (chunk
 order and sync type, never content) and do not close the connection. A message-store failure during history is a
 storage failure (R9).
@@ -101,7 +110,10 @@ the next attempt succeeds; the receipt does not claim local persistence and is n
 and then go through the same extraction as live messages. Extraction keeps: text from `Conversation` or
 `ExtendedTextMessage.Text`; image, video, audio and document with caption (image, video, document only), URL, direct
 path, media key, both hashes, length, MIME type and the document file name. Events marked `IsEdit`, and every other
-content type, are not stored. View-once and ephemeral wrappers and `DocumentWithCaptionMessage` are unwrapped by the
+content type, are not stored. So is any message whose raw content is a bare `ProtocolMessage`, and, in history,
+any message for which `ParseWebMessage` returned an ID different from `webMsg.Key.ID`: for a bare `MESSAGE_EDIT` it
+replaces the ID and the content with the edited ones without setting `IsEdit` (`client.go:1172-1175` in the pin),
+which would otherwise overwrite the original message. View-once and ephemeral wrappers and `DocumentWithCaptionMessage` are unwrapped by the
 library and are stored as their inner type, as the earlier implementation did. A placeholder resend is stored like a
 live message.
 
@@ -145,13 +157,18 @@ it dispatches the event, so a mapped sender is found on its first message.
   failed and skipped. The pass stops when the startup budget (10 minutes, shared with the store's open) runs out,
   reports how far it got (`budget_exhausted`) and hands its cursor, the last LID it reached, to the first session's
   reconcile worker, which continues paging from there between hints (owner decision 2026-11-13).
-- **During a run**, the device LID store wrapper reports each LID whose mapping it wrote to a per-generation hint set
+- **During a run**, the device LID store wrapper reports each LID whose mapping it **changed** (a new row, or a
+  different phone; an unchanged upsert reports nothing), with the previous phone if there was one, to a per-generation
+  hint set
   of **1,024** LIDs (proposed). The set is deduplicated; a full set drops the hint and counts it (the next startup
   covers it). A reconcile worker takes hints, re-reads the mapping with `PhoneForLID` and, when it is visible, merges.
   A hint whose mapping is not yet visible (the write was inside an outer transaction that has not committed) is
   retried up to **5** times, 1 s apart, and then dropped and counted.
-- **Ordering**: every message write, history batch and merge takes one per-generation ingest lock, so a message
-  normalised before a mapping became known is written before the merge that cleans it up, never after.
+- **Ordering**: every message write, history batch and merge takes one per-generation ingest lock. A message whose
+  chat or sender is still an unmapped LID after normalisation is looked up again **under the lock**, just before the
+  write (for history, once per distinct LID in the flush, at most 250). So a mapping committed and merged between the
+  first lookup and the write is seen, and the message is written under the phone JID, never under the LID after its
+  merge.
 
 A failed merge leaves both sides intact; it is retried at the next startup. A mapping that later points a LID at a
 different phone is not undone: data merged earlier stays where it went, later writes follow the new mapping, and the
@@ -182,8 +199,10 @@ generation's own stop) makes ingest **terminal** for the generation:
    storage failed; messages may be missing. Fix the cause and start again.` on stderr.
 
 The quiet-stop check is unchanged: an ingest failure is not a device-store fault, so a clean stop can still clear the
-marker. The same terminal signal fixes the research finding that `serve` and `stdio` kept waiting after a device
-storage fault.
+marker. A device storage fault does not use this signal: making it stop `serve` and `stdio` would change feature
+003 behaviour that the spec does not cover, so it is in the backlog (`005-device-fault-command-wait.md`). `pair`
+also watches the signal: an ingest failure while it runs prints the same storage message after its link outcome
+and makes it exit 1.
 
 **Rationale**: This is the clarified behaviour (stop, report, operator fixes, restart under existing rules). Exit 1
 lets a supervisor see the failure.
@@ -232,7 +251,8 @@ measured with every worker busy, not assumed harmless (tasks, the stop measureme
 - **Stored name first**: a per-generation name cache of **4,096** chats (proposed, least recently used) holds the best
   stored quality and name. A miss reads the chat once.
 - **Direct chats**: from the device contact table, read through the message store: full name or first name
-  (`NameSaved`), then push name or business name (`NameReal`), then the message's push name (`NameReal`), then the
+  (`NameSaved`), then push name or business name (`NameReal`), then the message's push name (`NameReal`, only for a
+  message not from the account itself, whose push name is the owner's), then the
   JID user part (`NameFallback`). An offer is written only when it is better than, or newer at the same quality
   than, the cached one; feature 002's rule decides in the store.
 - **Groups**: the history conversation's display name or name (`NameReal`); otherwise the cached stored name;

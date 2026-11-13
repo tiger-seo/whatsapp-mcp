@@ -18,7 +18,10 @@ client.ManualHistorySyncDownload = true // unchanged; the history worker downloa
 s.handlerID = client.AddEventHandlerWithSuccessStatus(s.handleEvent) // returns bool
 ```
 
-`EnableAutoReconnect`, `InitialAutoReconnect`, `DisableLoginAutoReconnect` and the fenced HTTP clients are unchanged.
+`EnableAutoReconnect`, `InitialAutoReconnect`, `DisableLoginAutoReconnect`, `AutomaticMessageRerequestFromPhone`
+(false) and the fenced HTTP clients are unchanged. Everything `SynchronousAck` moves onto the handler is listed in
+plan.md, "What `SynchronousAck` changes in the pin"; with the pin `d83e19e`, an undecryptable message from another
+account causes a retry receipt and an acknowledgement, and no message to the phone.
 
 ## Ingest component
 
@@ -38,8 +41,9 @@ func newIngest(cfg IngestConfig) *ingest
 // should have been stored was not (the library then sends no acknowledgement).
 func (in *ingest) HandleMessage(evt *events.Message) bool
 
-// NoteMapping reports a LID whose mapping the device store just wrote. Never blocks.
-func (in *ingest) NoteMapping(lidJID string)
+// NoteMapping reports a LID whose mapping the device store just changed: a new row, or a different phone. An
+// unchanged upsert is not reported. oldPhoneJID is "" for a new row. Never blocks.
+func (in *ingest) NoteMapping(lidJID, oldPhoneJID, newPhoneJID string)
 
 // Stop tells the workers to stop at their next checkpoint and refuses new work. Idempotent; never blocks.
 func (in *ingest) Stop()
@@ -57,10 +61,12 @@ func (in *ingest) Counters() IngestCounters
 1. Retiring or failed: count `droppedMessages`, return `false`.
 2. A history notification from the account's own device: enqueue it (queue of 8). Full: report
    `history_incomplete` (`queue_full`). Return `true`, because the notification itself carries no message to store.
-3. Not eligible (no text, no recognised media, or an edit): count `ignored`, return `true`.
+3. Not eligible (data-model "eligible": chat server, no text or recognised media, an edit, a bare protocol
+   message): count `ignored`, return `true`.
 4. Normalise chat and sender (2 s per lookup), build the `store.Message`, and check it with `store.ValidateMessage`.
    Invalid: count `rejected`, return `true`.
-5. Under the ingest lock: `StoreMessage`. On error: become terminal (below) and return `false`.
+5. Under the ingest lock: look up again any chat or sender that is still an unmapped LID, then `StoreMessage`. On
+   error: become terminal (below) and return `false`.
 6. Offer the chat name (R12): cached comparison first, at most one `UpdateChat` when the offer is better; a group
    without a usable name goes to the lookup set. A failed name write is terminal like a failed message write, but
    the message itself is already stored, so return `true`.
@@ -69,9 +75,11 @@ func (in *ingest) Counters() IngestCounters
 ### History worker
 
 For each queued notification: `DownloadHistorySync(lib, notif, true)`; then for each conversation, in order:
-normalise the chat; offer the conversation name; for each message `ParseWebMessage`, then steps 3–4 above; add to the
-batch; flush at 250 messages or 4 MiB (`MessageFieldBytes`). A flush is one `StoreMessages` and one `UpdateChats`
-under the ingest lock, which is released between flushes so a waiting live write goes first. Checkpoints (where `Stop` is observed): before each download, between conversations, before
+normalise the chat; offer the conversation name; for each message `ParseWebMessage`, skip it as not eligible when
+the parsed ID differs from `webMsg.Key.ID`, then steps 3–4 above; add to the batch; flush at 250 messages or 4 MiB (`MessageFieldBytes`). A flush is one `StoreMessages` and one `UpdateChats`
+under the ingest lock, after the same re-lookup of the flush's distinct unmapped LIDs, and the lock is released
+between flushes so a waiting live write goes first. At `Stop`, every notification still queued is reported as
+`history_incomplete` (`stopped`). Checkpoints (where `Stop` is observed): before each download, between conversations, before
 each flush. A store error is terminal and reports the chunk and the messages committed from it. History never calls
 `Live`.
 
@@ -92,7 +100,9 @@ A context error caused by this generation's own retirement is not a failure.
 ## Session adapter
 
 - Creates the ingest component in `OpenSession`, with `Lib` derived from the library context, and wires the device
-  LID store wrapper's successful mapping writes to `NoteMapping`.
+  LID store wrapper's mapping changes to `NoteMapping`.
+- A history notification event that arrives after the retire bit is reported as `history_incomplete` (`stopped`) as
+  well as counted in `droppedMessages`.
 - `handleEvent` returns `bool`. Owner events keep their mapping to `Dispatch` and return `true`. `*events.Message`
   goes to `HandleMessage`, and its result is returned. While the retire bit is set, a message event is counted in
   `droppedMessages` and returns `false`; other events keep feature 004's counting.
@@ -106,7 +116,8 @@ A context error caused by this generation's own retirement is not a failure.
   `ingest.Wait` for up to 2 s beside the repair pass. Whatever is still running is joined after step 8, before step 9,
   together with the handler callbacks. No step moves.
 - `Health()` gains `ReceiveOverload string` (the fork's reason, empty when none) and `IngestFailed bool`.
-- `Terminal() <-chan struct{}` is closed on the first of: ingest failure, a device storage fault.
+- `Terminal() <-chan struct{}` is closed on an ingest failure. A device storage fault keeps feature 003's behaviour
+  (backlog `005-device-fault-command-wait.md`).
 - `QuietStopResult` gains `DroppedMessages uint64`. It is reported, and does not fail the check.
 
 ### Revised event-count rule
@@ -123,11 +134,12 @@ bit is **not** counted there: it holds no session state and this process did not
 - Wait on the first of the lifecycle's stop and `owner.Terminal()`. A terminal signal requests the normal stop. After
   a clean stop the exit code is 1 and stderr carries
   `whatsapp-mcp: message storage failed; messages may be missing. Fix the cause and start again.`
-  (or the existing storage-fault text for a device fault). stdout stays empty in `stdio`.
+  stdout stays empty in `stdio`.
 - `pair` ingests through the same session code while its generations are connected; this is where WhatsApp sends
   the initial history. It does not wait longer than it does today: a history notification still queued or arriving
   after its retire bit is reported as `history_incomplete`, because the library has already sent its receipt. The
-  owner accepted this gap on 2026-11-13 (spec clarification); a bounded wait is in the backlog.
+  owner accepted this gap on 2026-11-13 (spec clarification); a bounded wait is in the backlog. `pair` also waits on
+  `owner.Terminal()`: an ingest failure prints the storage message after the link outcome, and `pair` exits 1.
 - `status` reports nothing new offline: overload and ingest failure exist only in a running process and its log.
 
 ## Invariants
