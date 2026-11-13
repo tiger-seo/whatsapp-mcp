@@ -321,6 +321,24 @@ Recorded during `/speckit-plan`, answered by the owner (`tiger-seo`):
   `go test -race -p 1 ./internal/wa ./cmd/... -count=1 -timeout 40m` exit 0 (`internal/wa` 60.7 s,
   `cmd/whatsapp-mcp` 166.0 s). No `DATA RACE` in the log.
 
+## Owner Decisions 2026-11-13 (after the third design review)
+
+- **Placeholder scope**: the fork gate (`bedcf01`) covers every `unavailable` placeholder type, including the
+  ordinary one (type "") that upstream used to recover from the phone. The owner keeps the gate: placeholders are
+  counted and reported, not recovered; recorded as a spec clarification; an opt-in request is in the backlog
+  (`005-placeholder-phone-request.md`); T056 records the real `unavailable` count.
+- **T004 answers** (`tiger-seo`): (1) the proposed application limits in `data-model.md` are accepted as proposed;
+  (2) a stop during a history download may leave the marker unsafe, and T047's measured rate, including the
+  `pair`-shaped case, returns to the owner before the code review; (3) history downloads keep the media client's
+  16 MiB and 10 s per response. No number in `data-model.md` changes. The owner ticks T004.
+- **Low findings of the third review** applied in the same batch: the placeholder decision in the spec, R9 no longer
+  calls a failed merge terminal, T051 and invariant N6 name `lid_merge_failed` and the `unavailable` count.
+
+## Specification Check (T003)
+
+- Date: 2026-11-13. `docs/specification.md` is present locally. Found: §3.4 (line 131), §3.5 (169), §8.5 (542) with
+  S3 (553), S4 (559) and S5 (562), §8.6 (567) with P2 (572) and P3 (573), §8.7 (584) with M7 (633).
+
 ## Owner Reviews
 
 | Stage | Date | Commit | Verdict | Owner decision |

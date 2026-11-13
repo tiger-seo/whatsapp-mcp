@@ -37,7 +37,9 @@ Branch `005-message-ingest`, planning complete, tasks generated and the cross-ar
 (three owner decisions recorded in the spec's clarifications). The first design review (`61a63f4`) returned BLOCK
 and the second (`1b1d91f`) CONCERNS; the owner approved fork commits `d83e19e` and `bedcf01` (the two phone-request
 gates) and kept the roadmap's history check, and the findings are addressed in the documents and the tasks below.
-Nothing implemented. Next: the third owner-judge **design** review, then T003 and T004. This section is ignored by the review-gate hook.
+The third review (`84dfa32`) returned PASS with three lows; the owner answered T004 and decided the placeholder
+scope, and those edits are applied. T003 is done; T004 waits for the owner's tick. Nothing implemented. Next: a fourth
+owner-judge **design** review of these edits, then `/speckit-implement`. This section is ignored by the review-gate hook.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -61,7 +63,7 @@ Nothing implemented. Next: the third owner-judge **design** review, then T003 an
   `specs/005-message-ingest/verification.md` "Pinned Fork Gates", "Fork Re-request Gate" and "Fork Placeholder Gate".
 - [X] T002 Run the race detector on the fork and on `./internal/wa ./cmd/...` in WSL2, and fix the race found in
   `cmd/whatsapp-mcp/store_test.go`. Done 2026-11-13; evidence in `verification.md` "Race Detector (WSL2)".
-- [ ] T003 Confirm `docs/specification.md` exists locally and contains §3.4, §3.5, §8.5 (S3–S5), §8.6 (P2, P3) and §8.7
+- [X] T003 Confirm `docs/specification.md` exists locally and contains §3.4, §3.5, §8.5 (S3–S5), §8.6 (P2, P3) and §8.7
   (M7). If it is missing, stop and ask the user for it; do not infer behaviour from code. Record the check in
   `specs/005-message-ingest/verification.md`.
 - [ ] T004 **OWNER DECISION.** Ask the owner the three "Open questions for the design review" in
@@ -398,7 +400,8 @@ provider while ingesting repeated messages.
 - [ ] T051 [P] Update `OPERATIONS.md` with a "What is stored" section (message text and captions, media metadata
   including keys that decrypt the media, LID-to-phone links, indefinite growth, deletion in WhatsApp does not delete
   here, backups hold the same data), the new events (`ingest_failed`, `history_incomplete`, `receive_overload`,
-  `lid_reconcile`, `lid_reassigned`, `ingest_stopped`), the exit-1 storage message and what the operator does, and the
+  `lid_reconcile`, `lid_reassigned`, `lid_merge_failed`, `ingest_stopped` with its `unavailable` count, which is why a
+  view-once or other placeholder message is missing), the exit-1 storage message and what the operator does, and the
   split between implemented and verified.
 - [ ] T052 [P] Check doc comments in `internal/wa/ingest*.go`, `session.go`, `owner.go`, `internal/store/lids.go`,
   `validate.go`, `contacts.go` and `device_lids.go`: no FR-, SC-, US, D, F or research IDs (constitution); no stale
@@ -414,7 +417,8 @@ provider while ingesting repeated messages.
 - [ ] T055 Check LF endings with `git ls-files --eol`; no tracked file shows `w/crlf`.
 - [ ] T056 **Permitted real-account journey, only with the owner's explicit permission for each step** (quickstart §7),
   after reviewing the roadmap's shutdown follow-up: a new directory under `D:\tmp`, the binary from a named commit,
-  `pair`, recording its `history_incomplete` counts by reason and the history it stored; then `serve`, recording any
+  `pair`, recording its `history_incomplete` counts by reason, the history it stored and its `unavailable` count; then
+  `serve`, recording its `unavailable` count and any
   history it receives; one text and one captioned image from another phone, and a live message from a contact who is
   addressed by LID (roadmap: "pair, let history sync complete, and check chats, messages and captions"); stop; inspect
   the store; the owner

@@ -159,5 +159,5 @@ bit is **not** counted there: it holds no session state and this process did not
 - N5: No application-owned queue, set, cache or worker of this feature exceeds its bound in
   [data-model.md](../data-model.md).
 - N6: Every loss or doubt is reported (`ingest_failed`, `history_incomplete`, `receive_overload`,
-  `DroppedMessages`); none is reported as success.
+  `lid_merge_failed`, `DroppedMessages`, the `unavailable` count in `ingest_stopped`); none is reported as success.
 - N7: Feature 004's invariants I1–I9 hold unchanged.

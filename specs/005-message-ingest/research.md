@@ -126,8 +126,12 @@ replaces the ID and the content with the edited ones without setting `IsEdit` (`
 which would otherwise overwrite the original message. View-once and ephemeral wrappers and `DocumentWithCaptionMessage` are unwrapped by the
 library and are stored as their inner type, as the earlier implementation did. A placeholder resend is stored like a
 live message. An `unavailable` placeholder (an `UndecryptableMessage` with `IsUnavailable`) has no content; it is
-acknowledged, not fetched from the phone (contract item 9), counted `unavailable` and reported in `ingest_stopped`, so
-a view-once message from another account is a known, counted absence.
+acknowledged, not fetched from the phone (contract item 9), counted `unavailable` and reported in `ingest_stopped`.
+This covers every placeholder type: view-once, and the ordinary one (type "") the server sends when the sender's
+device did not encrypt the message for this device. Before `bedcf01` the library recovered the ordinary kind from the
+phone; that recovery is given up, because any account can cause a placeholder (spec clarification 2026-11-13; an
+opt-in, bounded request is in the backlog, `005-placeholder-phone-request.md`). Every such message is a known,
+counted absence.
 
 **Rationale**: One path keeps the sender rules identical: `ParseWebMessage` sets the sender from `Key.FromMe`
 (own JID), `Key.Participant` or `Participant` (group), else the chat. An edit stored under its own stanza ID would
@@ -197,9 +201,10 @@ hint). Scanning `messages.sender_jid` for `@lid` (walks the whole index when few
 
 ## R9. Storage failure and the connected command
 
-**Decision**: A message-store error on a live write, a history batch or a merge-triggered write (`ErrDiskLow`,
+**Decision**: A message-store error on a live write, a history batch or a chat-name write (`ErrDiskLow`,
 `ErrResourceLimit`, `ErrBusy`, `ErrIndeterminate`, `*StorageError`, `ErrClosed` or a context error that is not the
-generation's own stop) makes ingest **terminal** for the generation:
+generation's own stop) makes ingest **terminal** for the generation. A failed run-time `MergeLID` is not terminal:
+it leaves both sides intact, logs `lid_merge_failed` and is retried at the next startup (R8):
 
 1. the handler returns `false` (no acknowledgement) and every later message event is dropped unacknowledged and
    counted;

@@ -15,3 +15,4 @@ changes.
 | [Let `pair` receive the initial history](005-pair-initial-history-wait.md) | 2026-11-13 | Deferred by the owner; gap accepted for feature 005 | A real `pair` whose initial history is mostly incomplete, or before the first release |
 | [Store admission pressure can stop ingest](005-store-busy-stops-ingest.md) | 2026-11-13 | Open; planning input for feature 006 | Planning of feature 006, or an `ingest_failed` with class `busy` |
 | [`serve` and `stdio` keep waiting after a device storage fault](005-device-fault-command-wait.md) | 2026-11-13 | Open; moved out of feature 005 | The next feature that changes the connected commands' lifecycle, or a real run that stays up after a fault |
+| [Recover "unavailable" placeholder messages from the phone](005-placeholder-phone-request.md) | 2026-11-13 | Deferred by the owner; placeholders counted, not recovered | The send-approval decision (F01), a high `unavailable` count in a real run, or before the first release |

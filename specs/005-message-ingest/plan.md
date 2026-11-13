@@ -5,9 +5,10 @@
 **Input**: Feature specification from `specs/005-message-ingest/spec.md`
 
 **Status**: Phase 0 and Phase 1 complete; tasks generated and the cross-artifact analysis of 2026-11-13 applied. The
-first design review (`61a63f4`) returned BLOCK and the second (`1b1d91f`) CONCERNS; their findings are addressed
-below, including two fork commits the owner approved (`d83e19e` and `bedcf01`, contract items 8 and 9). The
-race-detector condition is met for each pin (`verification.md`). Next: the third design review.
+first design review (`61a63f4`) returned BLOCK, the second (`1b1d91f`) CONCERNS and the third (`84dfa32`) PASS with
+three low findings; those, the owner's T004 answers and the placeholder decision are applied, including two fork
+commits the owner approved (`d83e19e` and `bedcf01`, contract items 8 and 9). The race-detector condition is met for
+each pin (`verification.md`). Next: a fourth design review of these edits, then `/speckit-implement`.
 
 ## Summary
 
@@ -134,20 +135,24 @@ Application side, fixed by this design: `SynchronousAck = true`; `ManualHistoryS
 through the fenced media client (16 MiB, 10 s per response); the overload record is read and reported (R10); history
 over the limit is reported as incomplete (R4).
 
-## Open questions for the design review
+## Questions for the design review (answered by the owner, 2026-11-13, T004)
 
 1. **Proposed application limits** in [data-model.md](data-model.md). They follow from the design, not from
-   measurement.
+   measurement. **Accepted as proposed**; a measurement in T047 or T048 that misses its target returns to the owner
+   before the code review.
 2. **Unsafe stops during history.** A stop while the history worker is inside a library call can leave the marker
-   unsafe (R11). The rate is measured, not estimated.
+   unsafe (R11). The rate is measured, not estimated. **Accepted**; T047's rate, including the `pair`-shaped case,
+   returns to the owner before the code review.
 3. **History download limits.** History blobs are downloaded through the media client: 16 MiB and 10 s per response.
-   A normal chunk on a slow link may be reported as incomplete. Real chunk sizes have not been measured.
+   A normal chunk on a slow link may be reported as incomplete. Real chunk sizes have not been measured. **Kept**; a
+   chunk that misses them is reported (`download`), and T056 records real chunk sizes.
 
 Settled on 2026-11-13 and recorded in the spec's clarifications: the history gap after `pair` is accepted (a bounded
 wait is in the backlog), merges are not undone when a LID is remapped, and a startup pass stopped by its budget is
 continued by the running session. Settled after the second design review: the `unavailable` placeholder request is
-gated in the fork (contract item 9), and the real-account check keeps the roadmap's history step and records the gap
-(T056).
+gated in the fork (contract item 9) for every placeholder type, and the real-account check keeps the roadmap's history
+step and records the gap (T056). Settled after the third design review: giving up recovery of ordinary placeholders is
+accepted and recorded in the spec's clarifications; an opt-in request is in the backlog.
 
 ## Project Structure
 

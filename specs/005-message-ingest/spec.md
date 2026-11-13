@@ -24,6 +24,7 @@
 - Q: WhatsApp sends the initial history to the `pair` command's connection, which stops soon after it confirms the link, and the library has already acknowledged each notification it received. What happens to history that `pair` has not stored when it stops? → A: Accept the gap: `pair` keeps its current lifetime, ingests what arrives while it runs, and reports what it could not store as incomplete history. It is not recovered. A bounded wait in `pair` is deferred to the backlog.
 - Q: When WhatsApp later maps a LID to a different phone number, what happens to data already merged under the earlier phone? → A: It stays where it was merged; merges are not undone. Later messages follow the new mapping, and the change is logged.
 - Q: If the startup reconciliation runs out of its startup time budget, what happens to the mappings it has not reached? → A: The command starts, and the running session's merge worker continues through the remaining mappings in the background, within its existing limits; nothing waits for a restart.
+- Q: When WhatsApp sends this device an "unavailable" placeholder instead of a message (for a view-once message, or when the sender's device did not encrypt the message for this device), should the account ask the user's phone for the message? → A: No. Any account can cause a placeholder, so the account never sends a request on its behalf. Every placeholder, of any type, is acknowledged, counted and reported; its message is not recovered. An opt-in, bounded request is deferred to the backlog.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -95,6 +96,7 @@ An owner sees useful chat names without each group message triggering another gr
 - Mapping lookup timeout or failure retains the original identity; a failure is not mistaken for proof that a mapping does not exist.
 - A LID whose mapping later points to a different phone number keeps the data already merged under the earlier phone; later messages follow the new mapping and the change is logged.
 - History that arrives while `pair` is stopping, or after it stops, is reported as incomplete and is not recovered.
+- An "unavailable" placeholder is counted and reported; its message is not stored and is not requested from the phone.
 - An individual store operation can fail due to cancellation, limits or low disk; stop ingest and the connected command safely and report the incomplete record, while retaining committed earlier batches. The operator fixes the problem and restarts under existing session-safety rules.
 - Receive overload closes the affected connection and is reported with a warning that local history may have a gap; retry or replay is not guaranteed.
 - Shutdown during ingest cannot allow writes after retirement or falsely establish a quiet stop; pending work is accounted for under feature 004's existing rules.
