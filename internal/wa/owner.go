@@ -49,6 +49,9 @@ type OwnerConfig struct {
 	// StopBound is the whole orderly stop, from BeginStop to the decision to clear the marker. The command passes
 	// the shutdown timeout it already uses (10 s); zero means that value. It is not a setting.
 	StopBound time.Duration
+	// ReconcileFrom is where an unfinished startup LID reconciliation stopped; the first generation's ingest
+	// continues from it. nil when the pass completed.
+	ReconcileFrom *LIDCursor
 
 	// drainBound replaces barrierDrainBound; tests only.
 	drainBound time.Duration
@@ -64,11 +67,13 @@ type OwnerConfig struct {
 // Exactly one attempt is in flight at any time, and every attempt holds its slot until the call and
 // the generation access have drained.
 type connectionOwner struct {
-	cfg    OwnerConfig
-	log    *slog.Logger
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
+	cfg OwnerConfig
+	// reconcileFrom is handed to the first generation and then cleared; guarded by mu.
+	reconcileFrom *LIDCursor
+	log           *slog.Logger
+	ctx           context.Context
+	cancel        context.CancelFunc
+	done          chan struct{}
 
 	stopOnce sync.Once
 
@@ -182,6 +187,8 @@ func NewOwner(cfg OwnerConfig) *connectionOwner {
 		updateCh:   make(chan struct{}),
 		subs:       make(map[uint64]func(Event)),
 		terminal:   make(chan struct{}),
+
+		reconcileFrom: cfg.ReconcileFrom,
 	}
 	return o
 }
@@ -278,7 +285,10 @@ func (o *connectionOwner) openGeneration() (*genState, error) {
 		trace:      o.cfg.trace,
 		Dispatch:   o.dispatch,
 		RepairSlot: o.repairSlot,
+		// Only the first generation continues the startup pass; a later one has nothing left to continue.
+		ReconcileFrom: o.reconcileFrom,
 	}
+	o.reconcileFrom = nil
 	o.mu.Unlock()
 	factory := o.cfg.Sessions
 	if factory == nil {

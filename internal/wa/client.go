@@ -182,6 +182,8 @@ type SessionConfig struct {
 	// Test-only transport injections; nil uses the approved defaults.
 	PreLoginHTTP  *http.Client
 	WebsocketHTTP *http.Client
+	// ReconcileFrom is the cursor of an unfinished startup LID reconciliation, for the first generation only.
+	ReconcileFrom *LIDCursor
 	// RepairSlot is the owner-wide slot for owner-invoked app-state calls; nil gives the session its own.
 	RepairSlot chan struct{}
 }

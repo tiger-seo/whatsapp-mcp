@@ -142,6 +142,9 @@ func (in *ingest) historyConversation(c *historyChunk, conv *waHistorySync.Conve
 	if len(name) > maxChatNameBytes || !utf8.ValidString(name) {
 		name = ""
 	}
+	// The chat is looked up once per conversation and each sender once per conversation.
+	normChat := in.normaliseJID(chat.ToNonAD().String())
+	senders := map[string]string{}
 	unparsed := 0
 	for _, hm := range conv.GetMessages() {
 		web := hm.GetMessage()
@@ -163,6 +166,17 @@ func (in *ingest) historyConversation(c *historyChunk, conv *waHistorySync.Conve
 		if !ok {
 			in.ignored.Add(1)
 			continue
+		}
+		if m.ChatJID == chat.ToNonAD().String() {
+			m.ChatJID = normChat
+		}
+		if isLID(m.SenderJID) {
+			norm, ok := senders[m.SenderJID]
+			if !ok {
+				norm = in.normaliseJID(m.SenderJID)
+				senders[m.SenderJID] = norm
+			}
+			m.SenderJID = norm
 		}
 		if err := store.ValidateMessage(m); err != nil {
 			in.rejected.Add(1)
@@ -191,7 +205,11 @@ func (in *ingest) flushHistory(c *historyChunk) bool {
 		in.reportHistoryIncomplete("stopped", c.n)
 		return false
 	}
+	if in.beforeWriteLock != nil {
+		in.beforeWriteLock()
+	}
 	in.lockForWorker()
+	in.relookup(c.batch, c.names)
 	err := in.st.StoreMessages(in.cfg.Lib, c.batch)
 	if err == nil {
 		c.committed += len(c.batch)

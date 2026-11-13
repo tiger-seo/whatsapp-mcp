@@ -182,12 +182,17 @@ func OpenSession(cfg SessionConfig) (*Session, error) {
 		Log:    cfg.Log,
 		Lib:    lib,
 		Failed: func() { s.ingestFailOnce.Do(func() { close(s.ingestFailed) }) },
+
+		ReconcileFrom: cfg.ReconcileFrom,
 	}
 	if cfg.wrapIngestStore != nil {
 		ingestCfg.store = cfg.wrapIngestStore(cfg.Store)
 	}
 	s.ingest = newIngest(ingestCfg)
 	barrier.SetMappingObserver(s.ingest.NoteMapping)
+	if cfg.ReconcileFrom != nil {
+		s.ingest.startReconcile()
+	}
 	s.handlerID = client.AddEventHandlerWithSuccessStatus(s.handleEvent)
 	s.handlerWithStatus = true
 	go s.consumeDiagnostics()

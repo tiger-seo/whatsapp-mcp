@@ -38,6 +38,9 @@ type ingestStore interface {
 	StoreMessage(ctx context.Context, m store.Message) error
 	StoreMessages(ctx context.Context, msgs []store.Message) error
 	UpdateChats(ctx context.Context, updates []store.ChatUpdate) error
+	PhoneForLID(ctx context.Context, lidJID string) (string, bool, error)
+	MappedLIDsWithData(ctx context.Context, afterLID string, limit int) ([]store.LIDMapping, error)
+	MergeLID(ctx context.Context, lidJID, phoneJID string) error
 }
 
 // IngestConfig is the construction input of one generation's ingest component.
@@ -52,6 +55,9 @@ type IngestConfig struct {
 	Live func(store.Message)
 	// Failed is called once, when ingest becomes terminal.
 	Failed func()
+	// ReconcileFrom, when set, is where the startup LID reconciliation stopped; the reconcile worker pages on
+	// from it between hints.
+	ReconcileFrom *LIDCursor
 
 	// store replaces Store when set; tests only.
 	store ingestStore
@@ -111,6 +117,19 @@ type ingest struct {
 	liveWaiting atomic.Int32
 	// histQ holds history notifications for the worker; nil until the first one. Guarded by mu.
 	histQ chan *waE2E.HistorySyncNotification
+	// hints is the set of LIDs waiting for a merge and hintCh their order; reconcileStarted marks the worker.
+	// Guarded by mu.
+	hints            map[string]struct{}
+	hintCh           chan string
+	reconcileStarted bool
+	hintAttempts     atomic.Int32
+	// lidLookup and hintRetry are the lookup deadline and the hint retry delay; tests shorten them.
+	lidLookup, hintRetry time.Duration
+	// lockedAt is when the current holder took the ingest lock; maxLockHold the longest hold, in nanoseconds.
+	lockedAt    time.Time
+	maxLockHold atomic.Int64
+	// beforeWriteLock runs before a message write or flush takes the ingest lock; tests only.
+	beforeWriteLock func()
 
 	stored, ignored, rejected, unavailable, dropped, historyIncomplete atomic.Uint64
 	lookupsDropped, hintsDropped, merged, mergeFailed                  atomic.Uint64
@@ -123,7 +142,9 @@ func newIngest(cfg IngestConfig) *ingest {
 	if cfg.Lib == nil {
 		cfg.Lib = context.Background()
 	}
-	in := &ingest{cfg: cfg, log: cfg.Log, stop: make(chan struct{}), workersDone: make(chan struct{}), lock: make(chan struct{}, 1)}
+	in := &ingest{cfg: cfg, log: cfg.Log, stop: make(chan struct{}), workersDone: make(chan struct{}), lock: make(chan struct{}, 1),
+		hints: map[string]struct{}{}, hintCh: make(chan string, hintSetSize),
+		lidLookup: lidLookupTimeout, hintRetry: hintRetryDelay}
 	in.st = cfg.store
 	if in.st == nil {
 		in.st = cfg.Store
@@ -157,6 +178,8 @@ func (in *ingest) HandleMessage(evt *events.Message) bool {
 		in.ignored.Add(1)
 		return true
 	}
+	m.ChatJID = in.normaliseJID(m.ChatJID)
+	m.SenderJID = in.normaliseJID(m.SenderJID)
 	if err := store.ValidateMessage(m); err != nil {
 		// The error names the field and never repeats its value.
 		in.rejected.Add(1)
@@ -164,7 +187,13 @@ func (in *ingest) HandleMessage(evt *events.Message) bool {
 			"message_id", escapeLog(m.ID), "reason", err.Error())
 		return true
 	}
+	if in.beforeWriteLock != nil {
+		in.beforeWriteLock()
+	}
 	in.lockForLive()
+	batch := []store.Message{m}
+	in.relookup(batch, nil)
+	m = batch[0]
 	err := in.st.StoreMessage(in.cfg.Lib, m)
 	in.unlock()
 	if err != nil {
@@ -185,6 +214,7 @@ func (in *ingest) lockForLive() {
 	in.liveWaiting.Add(1)
 	in.lock <- struct{}{}
 	in.liveWaiting.Add(-1)
+	in.lockedAt = time.Now()
 }
 
 // lockForWorker takes the ingest lock for a history flush or a merge, after every live write waiting for it.
@@ -192,6 +222,7 @@ func (in *ingest) lockForWorker() {
 	for {
 		in.lock <- struct{}{}
 		if in.liveWaiting.Load() == 0 {
+			in.lockedAt = time.Now()
 			return
 		}
 		<-in.lock
@@ -199,7 +230,16 @@ func (in *ingest) lockForWorker() {
 	}
 }
 
-func (in *ingest) unlock() { <-in.lock }
+func (in *ingest) unlock() {
+	held := int64(time.Since(in.lockedAt))
+	for {
+		prev := in.maxLockHold.Load()
+		if held <= prev || in.maxLockHold.CompareAndSwap(prev, held) {
+			break
+		}
+	}
+	<-in.lock
+}
 
 // logReceived writes a stored message at debug level, the only level at which text and captions appear. Media
 // keys, hashes, URLs and paths never appear.
@@ -215,10 +255,6 @@ func (in *ingest) logReceived(m store.Message) {
 // escapeLog quotes a JID or message ID for a log line, so a control character or a forged separator in a value
 // another account chose cannot change the line's structure.
 func escapeLog(s string) string { return strconv.QuoteToASCII(s) }
-
-// NoteMapping reports a LID whose mapping the device store just changed: a new row (oldPhoneJID "") or a
-// different phone. It never blocks.
-func (in *ingest) NoteMapping(lidJID, oldPhoneJID, newPhoneJID string) {}
 
 // NoteUnavailable counts a placeholder the server sent instead of a message; its content is not fetched.
 func (in *ingest) NoteUnavailable() { in.unavailable.Add(1) }
