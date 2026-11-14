@@ -14,7 +14,7 @@ require (
 	go.mau.fi/util v0.11.0
 	go.mau.fi/whatsmeow v0.0.0-20261109152745-f1b798561919
 	golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2
-	golang.org/x/sys v0.49.0
+	golang.org/x/sys v0.50.0
 	golang.org/x/text v0.43.0
 	google.golang.org/protobuf v1.36.12
 	modernc.org/libc v1.80.1
