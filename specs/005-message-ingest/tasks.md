@@ -33,10 +33,10 @@ No commit carries attribution lines.
 
 ## Current state
 
-Resume point, 2026-11-14. Branch `005-message-ingest`. All tasks are done and committed; the code is at `b6d8727` and
+Merged 2026-11-14 as pull request #19 (squash commit `4e143db`; CI green). Nothing is left to resume. All tasks are done; the code was at `b6d8727` and
 all gates are green on it (`verification.md` "Gates on the final code commit"). T056 ran three real-account sessions
 (cleaned up); the late contact re-read (option B) is not observed on a real account. The owner-judge code review passed at
-`cbce833`. **Next: the pull request review and merge, if the owner asks.**
+`cbce833`. Open lows and the unobserved real-account re-read are listed in `verification.md`.
 
 - **Design**: passed at `a040210` after four owner-judge rounds (BLOCK, CONCERNS, PASS, PASS; table in
   `verification.md`). Its one remaining low: T004 names the plan heading "Open questions", which is now "Questions for
