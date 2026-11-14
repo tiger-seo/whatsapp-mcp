@@ -161,7 +161,11 @@ func OpenSession(cfg SessionConfig) (*Session, error) {
 	client.ManualHistorySyncDownload = true
 	// All three HTTP clients dial through this generation's fence, so none can reach the network after it closes.
 	// The media and app-state client keeps the direct bounded transport: no environment proxy, no decompression.
-	s.mediaClient = newBoundedHTTPClient(10*time.Second, 16<<20, s.fence.RoundTripper(newDirectTransport()))
+	var mediaBase http.RoundTripper = newDirectTransport()
+	if cfg.MediaHTTP != nil {
+		mediaBase = cfg.MediaHTTP.Transport
+	}
+	s.mediaClient = newBoundedHTTPClient(10*time.Second, 16<<20, s.fence.RoundTripper(mediaBase))
 	client.SetMediaHTTPClient(s.mediaClient)
 	client.SetPreLoginHTTPClient(s.fence.HTTPClient(cfg.PreLoginHTTP))
 	client.SetWebsocketHTTPClient(s.fence.HTTPClient(cfg.WebsocketHTTP))

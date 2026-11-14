@@ -51,6 +51,9 @@ func DeviceKeysOf(dev *wastore.Device) DeviceKeys {
 type Peer struct {
 	JID      types.JID
 	PushName string
+	// Category, when set, is the category attribute of the stanzas the peer sends ("peer" for the account's own
+	// phone, as in a history notification).
+	Category string
 	store    *memSignalStore
 }
 
@@ -99,6 +102,9 @@ func (p *Peer) MessageNode(ctx context.Context, to DeviceKeys, id string, ts tim
 	attrs := waBinary.Attrs{"from": p.JID, "id": id, "t": strconv.FormatInt(ts.Unix(), 10), "type": "text"}
 	if p.PushName != "" {
 		attrs["notify"] = p.PushName
+	}
+	if p.Category != "" {
+		attrs["category"] = p.Category
 	}
 	return waBinary.Node{Tag: "message", Attrs: attrs, Content: []waBinary.Node{{
 		Tag: "enc", Attrs: waBinary.Attrs{"v": "2", "type": encType}, Content: ciphertext.Serialize(),

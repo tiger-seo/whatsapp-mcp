@@ -45,6 +45,7 @@ type Server struct {
 	restore  func()
 
 	accepted chan *Conn
+	media    media
 
 	dials      atomic.Int64
 	handshakes atomic.Int64
@@ -162,6 +163,9 @@ func (s *Server) fail(err error) {
 }
 
 func (s *Server) serveWebsocket(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet && s.serveMedia(w, r) {
+		return
+	}
 	s.dials.Add(1)
 	if status := int(s.refuseWith.Load()); status != 0 {
 		http.Error(w, "refused by the simulator", status)

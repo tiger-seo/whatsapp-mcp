@@ -142,6 +142,10 @@ func (c *Conn) readLoop(ctx context.Context) {
 				_ = c.Send(ctx, *reply)
 			}
 		}
+		if reply := mediaConnReply(node); !answered && reply != nil {
+			answered = true
+			_ = c.Send(ctx, *reply)
+		}
 		if !answered && c.autoAck.Load() && node.Tag == "iq" {
 			if kind, _ := node.Attrs["type"].(string); kind == "get" || kind == "set" {
 				if id, ok := node.Attrs["id"].(string); ok {

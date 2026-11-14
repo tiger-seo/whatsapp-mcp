@@ -56,6 +56,7 @@ func newOwnerRigWith(t *testing.T, adjust func(*OwnerConfig)) *ownerRig {
 		Sessions: func(cfg SessionConfig) (SessionHandle, error) {
 			cfg.PreLoginHTTP = r.srv.Client()
 			cfg.WebsocketHTTP = r.srv.Client()
+			cfg.MediaHTTP = r.srv.Client()
 			s, err := OpenSession(cfg)
 			if err != nil {
 				return nil, err
