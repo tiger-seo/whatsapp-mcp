@@ -817,3 +817,31 @@ operator guide (see the next section). Tree on `e88252f` plus these changes, Win
   no failing test.
 - `go test ./internal/wa ./cmd/... ./internal/store -count=1 -timeout 30m`: exit 0 (wa 71.9 s, cmd 127.8 s, store 286.8 s).
   The full gates, the WSL2 runs and a re-review follow after the OPERATIONS.md change.
+
+### Second real-account run (T056), 2026-11-14
+
+Same account and phone, device unlinked and linked again, binary built from `c67a0e9`
+(`D:\tmp\whatsapp-mcp-c67a0e9.exe`, `-dirty` only for the uncommitted `.claude/settings.json` plugin setting), new
+empty data directory `D:\tmp\wa-005-real2`. The owner ran `pair` and `serve`; every inspection was of a copy of
+`whatsapp.db`, counts only.
+
+- **`pair`**: linked; both stop checks passed (260 ms and 476 ms, 0 dropped); `ingest_stopped` `stored=0 history_incomplete=0
+  merged=1`. As in the first run no history arrived during `pair`. Inspection: `status` exit 0; 0 chats, 0 messages,
+  1 LID link.
+- **`serve`**, 03:56:58 to 04:11:44 UTC (about 15 minutes): history arrived within 2 s of connecting.
+  `lid_reconcile` 0 merged; `ingest_stopped`: `stored=308 ignored=48 rejected=0 unavailable=0 dropped=0
+  history_incomplete=0 lookups_dropped=0 hints_dropped=0 merged=36 merge_failed=0`; `quiet_stop_passed` after 276 ms,
+  0 dropped; exit message "serve: stopped. The saved session can be reused."
+- **Database after `serve`**: `status` exit 0; 301 messages in 6 chats (5 direct, 1 group), 167 received and 134 sent from
+  the phone, 12 images (4 with a caption), 258 contacts (241 with a saved name), 37 LID links, no LID chat or LID sender.
+  The 7 extra writes (308 against 301 rows) are again duplicates absorbed by the upsert; their cause is still unknown.
+- **Naming**: the defect of the first run is fixed: **no chat is unnamed** (0 of 6 at quality 0, against 4 of 6). But 4
+  of the 5 direct chats have a saved name in the contact table and are stored lower: 3 at "real" and 1 at "fallback"
+  (the number). Cause (inferred from the table contents and the timing): names for history chats are chosen at the first
+  history flush, about a second after connecting, before the device's contact sync has stored the saved names, and the
+  contact table is read once per chat per generation, so that early read is final until the next start. In the first
+  run the one chat that was named from a live message minutes later got the saved name. The group kept its real
+  name from history. This is the limitation already listed under accepted risks ("a contact saved while the process
+  runs is picked up at the next start"), larger than assumed because it also covers the seconds after connecting.
+- **Not verified again**: a live message from a LID-addressed contact (no live message in a LID chat; the owner's test
+  messages were to their own chat), a view-once placeholder, a real group lookup, and a stop during a history chunk.
