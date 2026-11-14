@@ -863,3 +863,15 @@ functions, `CGO_ENABLED=0`, Windows 10: `go test ./internal/wa -run TestIngestNa
 After the implementation (`internal/wa/ingest_names.go`: a bounded queue, 3 re-reads at 60 s, 5 min and 30 min, 8 chats per
 message or flush, no goroutine, no lock held during the reads): `go test ./internal/wa -run TestIngest -count=1` exit 0 (22.6 s).
 `contracts/ingest.md` (step 6) and `data-model.md` (state table) are updated. The full gates follow on the final commit.
+
+### Gates on the final code commit `0f4cb6b` (2026-11-14)
+
+The code is that of `b6d8727`; `0f4cb6b` only adds `OPERATIONS.md`. Exit codes read from the commands themselves.
+
+- Windows 10, `CGO_ENABLED=0`: `gofmt -l .` prints nothing; `go vet ./...` 0; `go mod verify` 0; five cross-builds
+  (windows/amd64, linux/amd64, linux/arm64, darwin/amd64, darwin/arm64) 0 each; session-check helper vet, build and test 0;
+  `govulncheck@v1.9.0 ./...` 0, no vulnerabilities; `go test ./... -count=1 -timeout 30m` exit 0 (cmd 128.0 s, store 259.0 s, wa 70.6 s).
+- WSL2 Ubuntu (not native Linux): `CGO_ENABLED=1 go test -race ./internal/wa ./cmd/... -count=1 -timeout 40m` exit 0
+  (wa 173.9 s, cmd 170.2 s); `CGO_ENABLED=0 go test -p 1 ./... -count=1 -timeout 30m` exit 0 (store 216.6 s, wa 57.9 s);
+  `WA_MEASURE=1 go test ./internal/wa -run TestQuietStopPassRate -count=1 -v` exit 0, no failing subtest.
+- Not run: macOS, native Linux, CI.
