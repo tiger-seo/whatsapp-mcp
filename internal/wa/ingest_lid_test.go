@@ -325,8 +325,9 @@ func TestIngestLIDRelookupOfAFlushHasOneDeadline(t *testing.T) {
 	if n := messageCount(t, h.st); n != 250 {
 		t.Fatalf("%d stored, want all 250 under their LIDs", n)
 	}
-	// One lookup deadline per LID under the lock would hold it 250 times 10 ms; the flush has one deadline.
-	if held := time.Duration(h.in.maxLockHold.Load()); held > time.Second+h.in.lidLookup {
+	// One lookup deadline per LID under the lock would hold it 250 times 10 ms, 2.5 s, before the write; the flush has
+	// one deadline. The write itself takes about 1.1 s under the race detector, so the limit sits between.
+	if held := time.Duration(h.in.maxLockHold.Load()); held > 1800*time.Millisecond {
 		t.Fatalf("the lock was held %v for one flush; the re-lookup has one deadline of %v", held, h.in.lidLookup)
 	}
 }
