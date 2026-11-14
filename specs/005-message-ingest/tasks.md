@@ -411,16 +411,16 @@ provider while ingesting repeated messages.
   webhook; concurrent live, history, lookup and merge pressure. Assert nothing invalid is written, no partial batch
   exists, no send or pairing call reaches the fake client, and no bound in data-model "Per-generation ingest state"
   is exceeded.
-- [ ] T050 [P] Extend `internal/wa/security_test.go` (or the store's `logsafety_test.go` pattern): with a debug-level
+- [X] T050 [P] Extend `internal/wa/security_test.go` (or the store's `logsafety_test.go` pattern): with a debug-level
   and an info-level logger, text and captions appear only at debug; media keys, hashes, URLs and direct paths appear
   at no level; names never appear above debug; JIDs and IDs in warnings are escaped; nothing is written to stdout.
-- [ ] T051 [P] Update `OPERATIONS.md` with a "What is stored" section (message text and captions, media metadata
+- [X] T051 [P] Update `OPERATIONS.md` with a "What is stored" section (message text and captions, media metadata
   including keys that decrypt the media, LID-to-phone links, indefinite growth, deletion in WhatsApp does not delete
   here, backups hold the same data), the new events (`ingest_failed`, `history_incomplete`, `receive_overload`,
   `lid_reconcile`, `lid_reassigned`, `lid_merge_failed`, `ingest_stopped` with its `unavailable` count, which is why a
   view-once or other placeholder message is missing), the exit-1 storage message and what the operator does, and the
   split between implemented and verified.
-- [ ] T052 [P] Check doc comments in `internal/wa/ingest*.go`, `session.go`, `owner.go`, `internal/store/lids.go`,
+- [X] T052 [P] Check doc comments in `internal/wa/ingest*.go`, `session.go`, `owner.go`, `internal/store/lids.go`,
   `validate.go`, `contacts.go` and `device_lids.go`: no FR-, SC-, US, D, F or research IDs (constitution); no stale
   text about asynchronous acknowledgements.
 - [ ] T053 Run the full gates of `AGENTS.md` "Commands" and record each exit code read directly: `gofmt -l .`, `go vet

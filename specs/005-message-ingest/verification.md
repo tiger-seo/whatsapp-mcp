@@ -583,3 +583,29 @@ bound it names.
   of 64 is tested in `ingest_names_test.go`.
 - **Not run**: the race detector (T054, WSL2). Disk exhaustion and callbacks racing retirement are covered by
   earlier tests (`TestIngestLiveStoreErrorIsTerminal`, the quiet-order and stop tests), not repeated here.
+
+## Log secrecy, OPERATIONS.md and comments (T050–T052)
+
+2026-11-14, Windows 10, `CGO_ENABLED=0`, tree on `8ba8933`.
+
+- **T050**: `internal/wa/security_test.go` gains `TestIngestLogsKeepContentAtDebugAndNeverLogMediaMaterial` (debug and
+  info) and `TestIngestLogsEscapeAttackerChosenIdentifiers`; `go test ./internal/wa -run TestIngestLogs -count=1
+  -v`: exit 0, 3 test runs passed. One scenario (text, a captioned image, a group with a lookup, a name, a rejected
+  oversized message, a failed history download, a failed write, a stop) runs through a real text handler at each
+  level. Checked: stdout stays empty; media keys, hashes, URLs and direct paths appear in no form (raw, hex, base64
+  standard, URL and raw, decimal list) at either level; text and captions appear at debug (the test fails if not,
+  so it cannot pass blind) and not at info; push names and group subjects do not appear at info; the scenario reached
+  `history_incomplete`, `ingest_failed` and `ingest_stopped`; a message ID containing a quote, a space and a forged
+  `event=` is logged as its quoted ASCII form and produces no extra record. Names are also absent at debug today,
+  which the test does not require. As for the abuse tests, these pass on code that already behaved this way.
+- **T051**: `OPERATIONS.md` has a new "Message ingest (feature 005)" section: what is stored (text, captions, media
+  metadata with the keys that decrypt media, names, LID links, history), what is not (and the `unavailable`
+  count), unbounded growth, deletion in WhatsApp not deleting here, backups, what the program sends, the events
+  (`ingest_failed`, `history_incomplete`, `receive_overload`, `lid_reconcile`, `lid_reassigned`, `lid_merge_failed`,
+  `ingest_stopped`), the exit-1 storage message and what to do, the 6% unsafe stops during history, and a
+  "What has been checked" list that keeps "not verified" apart, including that nothing was run on a real account.
+- **T052**: a search of the listed files (and every Go file under `internal` and `cmd`) for requirement, success,
+  decision and research IDs found two research references in the T047/T048 measurement comments; both were removed.
+  No stale text about asynchronous acknowledgements remains (`SynchronousAck` is set in `session.go`). After the
+  change `gofmt -l .` printed nothing, `go vet ./internal/wa` passed and `go test ./internal/wa ./cmd/...
+  -count=1` exit 0 (wa 64.6 s, cmd 124.4 s).
