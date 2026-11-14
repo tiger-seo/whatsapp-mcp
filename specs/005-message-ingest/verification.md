@@ -392,6 +392,11 @@ yet committed), pin `bedcf01`. `WA_MEASURE=1 CGO_ENABLED=0 go test ./internal/wa
 
 No kind is lower than feature 004's recorded rate, so the gate before the user stories is met.
 
+**Rerun on the code after US1–US3**, 2026-11-14, Windows 10, `CGO_ENABLED=0`, commit `14531fd`, pin `bedcf01`. Same
+command (`WA_MEASURE=1 CGO_ENABLED=0 go test ./internal/wa -run TestQuietStopPassRate -count=1 -v -timeout 60m`),
+exit 0 read from the command itself (62.5 s). Subtests: pair 50 of 50, stdio 50 of 50, serve 50 of 50 (150 `PASS`
+lines, 0 `FAIL`); each pair run covers both of its checks. No kind is lower than feature 004's 50 of 50.
+
 ## US1 tests and implementation (T029–T032)
 
 - **Expected failures (T029)**, 2026-11-13, Windows 10, `CGO_ENABLED=0`. `go test -count=1 -run
@@ -473,3 +478,108 @@ No kind is lower than feature 004's recorded rate, so the gate before the user s
 | design | 2026-11-13 | 1b1d91f | CONCERNS | Fix all and review again (2026-11-13): placeholder gated in the fork (`bedcf01`), roadmap history check kept; fixed at 84dfa32 |
 | design | 2026-11-13 | 84dfa32 | PASS | |
 | design | 2026-11-13 | a040210 | PASS | |
+
+## US4 tests and implementation (T044–T046)
+
+- **Owner decision, 2026-11-14**: the name cache needs the stored name's quality and no store read returned it, so a
+  fifth read-only helper, `Store.ChatName`, was added (plan, data model, `contracts/ingest.md` step 6, R12 and tasks
+  T044/T046 updated). The alternative, offering once per chat per generation, would have looked up every group that
+  already has a name again after each restart.
+- **Expected failures (T045)**, 2026-11-14, Windows 10, `CGO_ENABLED=0`, before any implementation. `go test
+  ./internal/store -run 'TestChatName|TestEveryMethodAfterClose' -count=1`: exit 1, `st.ChatName undefined`.
+  `go vet ./internal/wa`: exit 1, `ingestStore has no method ChatName`, `ingest.now`, `newFailureCache`,
+  `failureCacheSize`, `failureTTL`, `namePending`, `nameCacheLen` undefined.
+- **Implementation (T046)**, 2026-11-14, Windows 10, `CGO_ENABLED=0`, working tree on `14531fd` (not committed):
+  `Store.ChatName` (`internal/store/chats.go`), `internal/wa/ingest_names.go` (name cache of 4,096 chats, direct-chat
+  order, group lookup set of 64 with one worker, failure cache of 1,024 groups for 10 minutes), step 6 in
+  `HandleMessage`, and history flushes raising cached names. The contact table is read once per chat per
+  generation, so a contact saved later is picked up at the next generation.
+  - `go test ./internal/wa -run 'TestIngestName|TestIngestGroup|TestIngestFailed|TestFailureCache|TestIngestLookupSet'
+    -count=1 -v`: exit 0, 11 tests passed. `go test ./internal/store -run 'TestChatName|TestEveryMethodAfterClose'
+    -count=1`: exit 0.
+  - `gofmt -l .` printed nothing, `go vet ./...` exit 0, `go test ./... -count=1 -timeout 30m` exit 0 (cmd 132.3 s,
+    store 311.5 s, wa 67.0 s, wasim 3.6 s; the other packages passed). The suite ran twice in one command, the
+    first time through a pipe, which also passed in every package.
+  - Not run: the five cross-builds, `govulncheck`, the race detector in WSL2 and the quiet-stop pass-rate rerun
+    after US4.
+
+## Stops with ingest busy (T047)
+
+2026-11-14, Windows 10, Go 1.27.4, `CGO_ENABLED=0`, `TEMP` on `D:	mp`, working tree on `14531fd` with the US4 work
+(not committed). `WA_MEASURE=1 CGO_ENABLED=0 go test ./internal/wa -run TestQuietStopWithIngestWorkers -count=1 -v
+-timeout 60m`: exit 0 (501.5 s). 50 stops per case, each through the production owner and the simulator. The
+simulator was extended for this: it answers the media-connection query, serves an encrypted history blob over HTTP
+(`internal/wasim/history.go`), and a test-only `SessionConfig.MediaHTTP` points the download client at it, so a history
+chunk is downloaded, decrypted and stored by the real library path. "In flight" counts runs where the work was still
+running when the stop began.
+
+| Case | Runs | Passed | Rate | In flight at the stop | Failures | `stop_bound_exceeded` | Marker not clean | Stop time p50 / max |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| history chunks (6 chunks of 1,000 messages; a third of the stops while the first download is held, the rest after 0–120 ms) | 50 | 47 | 94.0% | 50 | `storage_refused` 3 | 0 | 3 | 123 ms / 224 ms |
+| group lookup (held at the simulator) and run-time merge (held in the store), both in progress | 50 | 50 | 100.0% | 50 | none | 0 | 0 | 7.106 s / 7.150 s |
+| live message inside the handler (two slow LID lookups of 250 ms, a 400 ms write) | 50 | 50 | 100.0% | 50 | none | 0 | 0 | 1.080 s / 1.265 s |
+| `pair`-shaped stop at the follow-up confirmation, first history download held | 50 | 50 | 100.0% | 50 | none | 0 | 0 | 159 ms / 169 ms |
+
+- **History**: 3 of 50 stops during history ended `storage_refused` and left the unsafe marker, as research R11
+  predicted for a worker still inside a library call at the barrier. The owner accepted this at T004 with the rate
+  coming back; it comes back here. The marker's next-start handling is feature 003's repair, unchanged.
+- **Group lookup and merge**: every stop passed, but each took about 7.1 s of the 10 s stop bound, because the
+  simulator never answers the held group query and the worker is joined after the fence. A real server that stops
+  answering would behave the same. No stop exceeded the bound in these runs; the margin is about 2.9 s.
+- Feature 004's rate for a stop without ingest work is 50 of 50 (T025 above).
+
+## Handler latency under history (T048)
+
+2026-11-14, same machine and tree. `WA_MEASURE=1 CGO_ENABLED=0 go test ./internal/wa -run TestIngestHandlerLatency
+-count=1 -v -timeout 60m`: exit 0 (374.0 s). 20 runs. Each run: 20 history chunks (250 messages each) interleaved
+with a burst of 2,000 stanzas from two other accounts, at full simulator speed: 1,000 texts by phone number, 900 by
+LID with a phone `sender_pn` (so the library repeats mapping upserts) and 100 `view_once` placeholders.
+
+| Measure | Result |
+| --- | --- |
+| Handler waits for the ingest lock (38,000 live writes) | p50 below the clock's resolution (0 s), p99 0 s, max 90.6 ms |
+| Longest wait per run | p50 65.8 ms, max 90.6 ms |
+| `receive_overload` events | 0 in 20 runs |
+| Runs that did not finish storing | 0 |
+| Messages stored | 138,000 of 138,000 (1,900 live and 5,000 history per run) |
+| `unavailable` placeholders counted | 100 per run |
+| Run time p50 / max | 20.3 s / 22.1 s |
+
+Target met: no `receive_overload`. The wait is measured by a test-only hook in `lockForLive`. Not measured: a real
+account's rate or message mix; the simulator sends as fast as the connection takes frames.
+
+Owner review: these two tables go to the owner before the code review (T047, T048).
+
+**Owner decision, 2026-11-14**: accepted both results above for the code review. (1) 3 of 50 stops during history
+(6%) ending `storage_refused` with the unsafe marker, as research R11 predicted; the marker is handled by feature 003's
+repair at the next start. (2) A stop of about 7.1 s of the 10 s bound while a group lookup never gets an answer, a
+margin of about 2.9 s. Both go into the accepted risks of the T057 roll-up. No limit or code was changed for them.
+
+## Abuse tests (T049)
+
+2026-11-14, Windows 10, `CGO_ENABLED=0`, working tree on `14531fd` (not committed). `internal/wa/ingest_abuse_test.go`:
+`go test ./internal/wa -run 'TestIngestAbuse|TestIngestClientHasNo' -count=1 -v`: exit 0, 5 tests passed on the first
+run. They test behaviour already in place (store validation, the name rules of US4), so no expected-failure run
+exists for them; a test that could not fail would be worth nothing, so each case asserts the rejection or the
+bound it names.
+
+- **Fields**: 15 cases. Text at exactly 256 KiB is stored; one byte more is rejected. Also rejected, with nothing
+  written, `Live` not called and ingest not terminal: text and caption that are not UTF-8, a caption over 256 KiB,
+  a media URL or direct path over 4 KiB, a MIME type over 255 bytes, a document name over 1 KiB, a file length over
+  the signed range, a newline in the ID, a control character in the sender, a newsletter sender and a sender JID
+  over 256 bytes. Each is acknowledged (`HandleMessage` returns true).
+- **Names**: a push name over 1 KiB or not UTF-8 is not used (the chat gets the number); one of exactly 1 KiB is. An
+  oversized group subject is not written and the group is not asked for again; an oversized history name is not
+  offered while its messages are stored.
+- **Instructions in text** (send, pair, post to a URL, "ignore your instructions"): stored verbatim as text; no
+  client call, download or parse follows. `ingestClient` has exactly four methods (`OwnJID`, `ParseWebMessage`,
+  `DownloadHistorySync`, `GetGroupInfo`) and a test fails when one is added: the interface has no send, pairing or
+  connect method.
+- **Pressure**: 8 goroutines of 250 events each (valid live messages in 125 direct and group chats, invalid events,
+  ignored events and 2,000 merge hints) beside 3 history chunks of 700 messages: 3,300 stored (1,200 live and 2,100
+  history), 400 rejected, 400 ignored, 1,012 hints dropped at the limit of 1,024, name cache 601 of 4,096, failure
+  cache 600 of 1,024, 3 downloads, no terminal failure, every committed batch 1 to 250 messages, and the store holds
+  exactly the stored count. The lookup set reached 1 of 64 here, since the failing fake answers at once; the bound
+  of 64 is tested in `ingest_names_test.go`.
+- **Not run**: the race detector (T054, WSL2). Disk exhaustion and callbacks racing retirement are covered by
+  earlier tests (`TestIngestLiveStoreErrorIsTerminal`, the quiet-order and stop tests), not repeated here.

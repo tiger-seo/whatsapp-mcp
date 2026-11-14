@@ -69,6 +69,10 @@ type LIDMapping struct{ LIDJID, PhoneJID string }
 // ContactNames returns the device contact table's names for jid: saved (full, else first) and real (push, else
 // business). Empty strings when absent.
 func (s *Store) ContactNames(ctx context.Context, jid string) (saved, real string, err error)
+
+// ChatName returns the stored name of a chat with its quality and observation time, so ingest can tell a better
+// offer from a worse one without writing. ok is false when the chat is missing or has no name (quality none).
+func (s *Store) ChatName(ctx context.Context, jid string) (name string, quality NameQuality, at time.Time, ok bool, err error)
 ```
 
 All are ordinary store operations: admission, the 10 s limit, `ErrClosed` after `Close`, typed errors.

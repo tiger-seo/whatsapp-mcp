@@ -30,8 +30,8 @@ race-detector run in WSL2 that the owner allowed.
 `github.com/tiger-seo/whatsmeow v0.0.0-20261113124132-bedcf0185245` (branch `receive-bounds`, commit `bedcf01`: `9209108`
 plus the two phone-request gates, all approved by the owner on 2026-11-13, research R1); `modernc.org/sqlite` through `internal/store`. No new dependency.
 
-**Storage**: The existing `whatsapp.db`; no migration. Four read-only store helpers and two exported validation
-helpers (data model).
+**Storage**: The existing `whatsapp.db`; no migration. Five read-only store helpers (the fifth, `ChatName`, added at the US4 owner checkpoint on 2026-11-14 so the name cache
+knows the stored name's quality) and two exported validation helpers (data model).
 
 **Testing**: `go test` with fakes behind a narrow client interface, the `internal/wasim` simulator, and temporary
 stores; quiet-stop pass-rate rerun with `SynchronousAck`; the race detector once in WSL2. No real account.

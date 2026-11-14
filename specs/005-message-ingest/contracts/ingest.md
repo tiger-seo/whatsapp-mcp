@@ -69,7 +69,7 @@ func (in *ingest) Counters() IngestCounters
 5. Under the ingest lock: look up again any chat or sender that is still an unmapped LID (one 2 s deadline for the
    message; a LID not resolved in time stays a LID), then `StoreMessage`. On error: become terminal (below) and return
    `false`.
-6. Offer the chat name (R12): cached comparison first, at most one `UpdateChat` when the offer is better; a group
+6. Offer the chat name (R12): cached comparison first (a miss reads `ChatName` once), at most one `UpdateChat` when the offer is better; a group
    without a usable name goes to the lookup set. A failed name write is terminal like a failed message write
    (`ingest_failed` with operation `name`), but the message itself is already stored, so return `true`.
 7. Call `Live` if set. Return `true`.

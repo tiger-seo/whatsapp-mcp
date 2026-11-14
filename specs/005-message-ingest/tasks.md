@@ -362,7 +362,9 @@ provider while ingesting repeated messages.
 
 ### Tests for User Story 4 (write first, observe failing)
 
-- [ ] T044 [P] [US4] Write `internal/wa/ingest_names_test.go`: a stored non-empty name is read once into the "4,096
+- [X] T044 [P] [US4] Write `ChatName` tests in `internal/store/chats_test.go` (the stored name, quality and time; no
+  chat and a chat without a name give `ok` false; an invalid JID is `ErrInvalid`; it never writes) and
+  `internal/wa/ingest_names_test.go`: a stored non-empty name is read once into the "4,096
   chats, least recently used" cache and a worse offer is never written; direct chats get saved (full or first), then
   real (push or business), then the message's push name (never from an own message, whose push name is the
   owner's), then the JID user part as `NameFallback`, each offered only
@@ -373,11 +375,12 @@ provider while ingesting repeated messages.
   `name`) but the message stays stored and
   `HandleMessage` returns `true`; 10,000 distinct groups never grow the cache, the set or the worker count past their
   bounds.
-- [ ] T045 [US4] Run T044 and record the expected failures in `verification.md`.
+- [X] T045 [US4] Run T044 and record the expected failures in `verification.md`.
 
 ### Implementation for User Story 4
 
-- [ ] T046 [US4] Create `internal/wa/ingest_names.go`: the name cache, the direct-chat order through
+- [X] T046 [US4] Add `Store.ChatName` to `internal/store/chats.go` and to `ingestStore`; create
+  `internal/wa/ingest_names.go`: the name cache, the direct-chat order through
   `store.ContactNames`, observation times per research R12, the group lookup set and single worker with the failure
   cache (its own map of "1,024 groups"), and step 6 of `HandleMessage`. Make T044 pass.
 
@@ -389,21 +392,21 @@ provider while ingesting repeated messages.
 
 **Purpose**: Abuse and privacy coverage, documentation, measurements, gates, platforms and evidence.
 
-- [ ] T047 Measure stops with ingest busy (plan open question 2, research R11): add `TestQuietStopWithIngestWorkers`
+- [X] T047 Measure stops with ingest busy (plan open question 2, research R11): add `TestQuietStopWithIngestWorkers`
   to `internal/wa/quiet_measure_test.go` under `WA_MEASURE=1`. Run 50 stops while the simulator delivers history
   chunks, 50 while a group lookup and a run-time merge are each in progress, and 50 while a live message is inside
   the handler (two slow LID lookups and a slow store write), and 50 `pair`-shaped stops at the follow-up confirmation
   while the first history notification is being downloaded. Record per case the pass rate, the
   failure categories and the `stop_bound_exceeded` count in `verification.md` "Stops with ingest busy". The owner
   reviews the numbers before the code review.
-- [ ] T048 Measure handler latency under history (research R3): add `TestIngestHandlerLatency` to
+- [X] T048 Measure handler latency under history (research R3): add `TestIngestHandlerLatency` to
   `internal/wa/quiet_measure_test.go` under `WA_MEASURE=1`. On the simulator, deliver an initial history of at least
   20 chunks while other accounts send a burst of 2,000 live messages, half of them LID-addressed with a phone
   `SenderAlt` (so the library repeats mapping upserts), with 100 `view_once` placeholders mixed in, 20 runs. Record the handler's ingest-lock wait
   (p50, p99, max), the number of `receive_overload` events and the messages stored, in `verification.md` "Handler
   latency under history". Target: no `receive_overload`. A miss goes to the owner with the numbers before the code
   review; do not raise the fork's queue or change a limit on your own.
-- [ ] T049 [P] Write `internal/wa/ingest_abuse_test.go` (spec abuse cases): oversized text, caption, names and media
+- [X] T049 [P] Write `internal/wa/ingest_abuse_test.go` (spec abuse cases): oversized text, caption, names and media
   fields; malformed JIDs, timestamps and control characters; a message whose text asks to send, pair or call a
   webhook; concurrent live, history, lookup and merge pressure. Assert nothing invalid is written, no partial batch
   exists, no send or pairing call reaches the fake client, and no bound in data-model "Per-generation ingest state"

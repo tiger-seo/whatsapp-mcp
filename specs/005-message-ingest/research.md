@@ -267,7 +267,7 @@ measured with every worker busy, not assumed harmless (tasks, the stop measureme
 **Decision**:
 
 - **Stored name first**: a per-generation name cache of **4,096** chats (proposed, least recently used) holds the best
-  stored quality and name. A miss reads the chat once.
+  stored quality and name. A miss reads the chat once with `ChatName`.
 - **Direct chats**: from the device contact table, read through the message store: full name or first name
   (`NameSaved`), then push name or business name (`NameReal`), then the message's push name (`NameReal`, only for a
   message not from the account itself, whose push name is the owner's), then the
