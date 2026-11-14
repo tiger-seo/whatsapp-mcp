@@ -677,5 +677,23 @@ message text, name or JID is recorded.
 - **Observation**: the link produced one LID mapping and one run-time merge on a real server, and no ingest warning.
   The history a linked device receives after `pair` is the accepted risk named in the roll-up; with this run it is
   measured as zero stored and zero reported incomplete within a 3.6 s connection.
-- **Not yet run**: `serve`, live messages (text, captioned image, a LID-addressed contact), the second inspection,
-  and the cleanup (the owner unlinks the device on the phone, then the directory is deleted).
+- **Step 3, `serve --data-dir D:\tmp\wa-005-real` (run by the owner)**: connected from a saved session, 2026-11-14
+  02:54:42 to 03:00:11 UTC. The owner sent one text and one image to the account's own chat from the phone app. The
+  library reported history sync data on this connection (message secrets, privacy tokens, push names).
+  `lid_reconcile` at start: completed, 0 merged. `ingest_stopped`: `stored=306 ignored=47 rejected=0 unavailable=0
+  dropped=0 history_incomplete=0 lookups_dropped=0 hints_dropped=0 merged=36 merge_failed=0`. Stop:
+  `quiet_stop_passed` after 289 ms, 0 dropped messages, exit message "serve: stopped. The saved session can be reused."
+- **Step 4, offline inspection of a copy of the database after `serve` (counts only)**: `status` exit 0 (marker
+  clear). 300 messages in 6 chats (5 direct, 1 group), 167 received and 133 sent from the phone, 289 text and 11
+  images (3 with a caption), from 2026-08-16 to 2026-11-14; 258 device contacts; 37 LID links; no message under a LID
+  chat or from a LID sender (all identities normalised). Of the 6 chats, 2 have a stored name (one saved, one real)
+  and **4 direct chats have none (quality 0) although the contact table holds a name for each**: they received only
+  history, and names were offered only on the live path. This is a defect against the rule that direct chats use the
+  saved contact name, then the contact's own name, then the number. It is fixed in the commits that follow; the fix
+  is verified on fakes and the simulator only.
+- **Observations**: `stored=306` against 300 rows: 6 writes hit an existing key and the upsert kept one row each; the
+  cause (a duplicate delivery of the live or history copy) was not established. No placeholder (`unavailable=0`)
+  and no rejected message occurred. 47 events were ignored (not text or a supported media type). The live-message
+  check from a LID-addressed contact was **not performed** (the owner's test messages went to their own chat), so a
+  live LID-addressed message is not verified on a real account; 36 LID merges at run time were.
+- **Not yet run**: the cleanup (the owner unlinks the device on the phone, then the directory is deleted).
