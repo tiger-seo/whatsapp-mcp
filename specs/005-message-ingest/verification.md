@@ -876,3 +876,27 @@ The code is that of `b6d8727`; `0f4cb6b` only adds `OPERATIONS.md`. Exit codes r
   (wa 173.9 s, cmd 170.2 s); `CGO_ENABLED=0 go test -p 1 ./... -count=1 -timeout 30m` exit 0 (store 216.6 s, wa 57.9 s);
   `WA_MEASURE=1 go test ./internal/wa -run TestQuietStopPassRate -count=1 -v` exit 0, no failing subtest.
 - Not run: macOS, native Linux, CI.
+
+### Third real-account run (T056), 2026-11-14: the late contact re-read was not observed
+
+Same account and phone, device linked again, binary built from `0e170a8` (`D:\tmp\wa-0e170a8.exe`, `-dirty` only for the
+uncommitted `.claude/settings.json` plugin setting), new empty data directory `D:\tmp\wa-005-real3` (permissions
+restricted with the `icacls` command the program printed, on that empty directory only). The owner ran `pair` and two
+`serve` runs; every inspection was of a copy of `whatsapp.db`, counts only.
+
+- **`pair`**: linked; both stop checks passed (250 ms and 449 ms, 0 dropped).
+- **First `serve`** (4 min): history arrived at once; `stored=279 ignored=48 merged=37`, quiet stop 337 ms. 270 messages in 6
+  chats (5 direct, 1 group), 241 of 258 contacts with a saved name. Direct chats: 1 at saved, 4 at fallback although the
+  contact table has a saved name for them, 1 at fallback without one. Only one message arrived after the start and none
+  after 60 s, so nothing triggered a re-read.
+- **Second `serve`** (65 min, no history): 6 live messages stored (73, 98, 386, 1086, 1096 and 3627 s after the start),
+  quiet stop 421 ms. Direct chats: 2 at saved, 3 at fallback with a saved contact name, 1 at fallback without one. The one
+  chat that rose to saved was named by the first read of a new generation after its first message, not by a re-read.
+- **Finding**: the re-read queue only holds chats read in the current generation. A chat that has no message or history
+  in a generation is neither read nor queued, so after a restart without history it keeps its lower name until its next
+  message. This is by design and in the contract ("until the next start" for chats not seen), but it means the fix helps
+  only when history arrives right after connecting.
+- **Not verified on a real account**: the re-read itself (60 s, 5 min, 30 min); a live message from a LID-addressed contact
+  (counts cannot show the address form; no LID chat or LID sender exists after merging); everything else already listed.
+  The owner chose to stop here instead of pairing again.
+- **Cleanup**: pending the owner unlinking the device; then the data directory and the two inspection copies are deleted.
