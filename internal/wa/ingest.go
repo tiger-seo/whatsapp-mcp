@@ -41,6 +41,8 @@ type ingestStore interface {
 	PhoneForLID(ctx context.Context, lidJID string) (string, bool, error)
 	MappedLIDsWithData(ctx context.Context, afterLID string, limit int) ([]store.LIDMapping, error)
 	MergeLID(ctx context.Context, lidJID, phoneJID string) error
+	ChatName(ctx context.Context, jid string) (string, store.NameQuality, time.Time, bool, error)
+	ContactNames(ctx context.Context, jid string) (saved, real string, err error)
 }
 
 // IngestConfig is the construction input of one generation's ingest component.
@@ -130,6 +132,11 @@ type ingest struct {
 	maxLockHold atomic.Int64
 	// beforeWriteLock runs before a message write or flush takes the ingest lock; tests only.
 	beforeWriteLock func()
+	// liveWaited receives how long a live write waited for the ingest lock; tests only.
+	liveWaited func(time.Duration)
+	// nm is the chat-name memory; now is its clock, which tests replace.
+	nm  nameState
+	now func() time.Time
 
 	stored, ignored, rejected, unavailable, dropped, historyIncomplete atomic.Uint64
 	lookupsDropped, hintsDropped, merged, mergeFailed                  atomic.Uint64
@@ -144,7 +151,7 @@ func newIngest(cfg IngestConfig) *ingest {
 	}
 	in := &ingest{cfg: cfg, log: cfg.Log, stop: make(chan struct{}), workersDone: make(chan struct{}), lock: make(chan struct{}, 1),
 		hints: map[string]struct{}{}, hintCh: make(chan string, hintSetSize),
-		lidLookup: lidLookupTimeout, hintRetry: hintRetryDelay}
+		lidLookup: lidLookupTimeout, hintRetry: hintRetryDelay, now: time.Now}
 	in.st = cfg.store
 	if in.st == nil {
 		in.st = cfg.Store
@@ -202,6 +209,8 @@ func (in *ingest) HandleMessage(evt *events.Message) bool {
 	}
 	in.stored.Add(1)
 	in.logReceived(m)
+	// A failed name write is terminal, but the message is stored, so it is still handed on and acknowledged.
+	in.offerName(evt, m)
 	if in.cfg.Live != nil {
 		in.cfg.Live(m)
 	}
@@ -211,10 +220,14 @@ func (in *ingest) HandleMessage(evt *events.Message) bool {
 // lockForLive takes the ingest lock for a live write. A worker that holds it lets this write go before its next
 // step.
 func (in *ingest) lockForLive() {
+	started := time.Now()
 	in.liveWaiting.Add(1)
 	in.lock <- struct{}{}
 	in.liveWaiting.Add(-1)
 	in.lockedAt = time.Now()
+	if in.liveWaited != nil {
+		in.liveWaited(in.lockedAt.Sub(started))
+	}
 }
 
 // lockForWorker takes the ingest lock for a history flush or a merge, after every live write waiting for it.

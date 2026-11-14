@@ -216,6 +216,11 @@ func (in *ingest) flushHistory(c *historyChunk) bool {
 		in.stored.Add(uint64(len(c.batch)))
 		if len(c.names) > 0 {
 			err = in.st.UpdateChats(in.cfg.Lib, c.names)
+			if err == nil {
+				for _, u := range c.names {
+					in.nm.raise(u.JID, u.Name, u.NameQuality, msTime(u.NameTime))
+				}
+			}
 		}
 	}
 	in.unlock()

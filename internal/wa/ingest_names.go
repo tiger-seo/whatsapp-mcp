@@ -1,0 +1,355 @@
+package wa
+
+import (
+	"container/list"
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"time"
+	"unicode/utf8"
+
+	"github.com/tiger-seo/whatsapp-mcp/internal/store"
+	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
+)
+
+const (
+	// nameCacheSize is how many chats' stored names one generation remembers, least recently used first out.
+	nameCacheSize = 4096
+	// groupLookupSetSize is how many distinct groups wait for, or are in, a name lookup; one more is dropped and
+	// counted.
+	groupLookupSetSize = 64
+	// groupLookupTimeout bounds one group lookup.
+	groupLookupTimeout = 10 * time.Second
+	// failureTTL is how long a failed lookup keeps the group from being asked again, and failureCacheSize how
+	// many such groups are remembered; the oldest goes first.
+	failureTTL       = 10 * time.Minute
+	failureCacheSize = 1024
+)
+
+// nameEntry is what ingest knows of one chat's stored name. contactChecked, saved and real hold the device
+// contact table's names, read once per chat per generation, and readAt when they were read.
+type nameEntry struct {
+	jid            string
+	name           string
+	quality        store.NameQuality
+	at             time.Time
+	contactChecked bool
+	saved, real    string
+	readAt         time.Time
+}
+
+// nameState is one generation's chat-name memory: the cache, the failed group lookups and the lookup set.
+type nameState struct {
+	mu    sync.Mutex
+	cache map[string]*list.Element // jid -> element holding *nameEntry
+	lru   *list.List               // front = most recently used
+
+	failures *failureCache
+	// pending holds the groups queued for or in a lookup; queue is their order. Both hold at most
+	// groupLookupSetSize groups.
+	pending    map[string]struct{}
+	queue      chan string
+	started    bool
+	workers    int
+	pendingMax int
+}
+
+func (n *nameState) init() {
+	if n.cache == nil {
+		n.cache = map[string]*list.Element{}
+		n.lru = list.New()
+		n.failures = newFailureCache()
+		n.pending = map[string]struct{}{}
+		n.queue = make(chan string, groupLookupSetSize)
+	}
+}
+
+// get returns the cached entry and marks it recently used.
+func (n *nameState) get(jid string) (nameEntry, bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.init()
+	if el, ok := n.cache[jid]; ok {
+		n.lru.MoveToFront(el)
+		return *el.Value.(*nameEntry), true
+	}
+	return nameEntry{}, false
+}
+
+// put stores e, forgetting the least recently used chat beyond the limit.
+func (n *nameState) put(e nameEntry) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.init()
+	if el, ok := n.cache[e.jid]; ok {
+		*el.Value.(*nameEntry) = e
+		n.lru.MoveToFront(el)
+		return
+	}
+	n.cache[e.jid] = n.lru.PushFront(&e)
+	for n.lru.Len() > nameCacheSize {
+		old := n.lru.Back()
+		n.lru.Remove(old)
+		delete(n.cache, old.Value.(*nameEntry).jid)
+	}
+}
+
+// raise records a name that was written, when the chat is cached and the name is better than the cached one.
+func (n *nameState) raise(jid, name string, q store.NameQuality, at time.Time) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.init()
+	if el, ok := n.cache[jid]; ok {
+		if e := el.Value.(*nameEntry); better(*e, name, q, at) {
+			e.name, e.quality, e.at = name, q, at
+		}
+	}
+}
+
+// better reports whether offering name at quality q and time at can change what the store keeps: a higher quality,
+// or the same quality and newer, or the same time and the greater name. The same name at the same quality is
+// never better, whatever its time.
+func better(e nameEntry, name string, q store.NameQuality, at time.Time) bool {
+	switch {
+	case name == "" || q <= store.NameNone:
+		return false
+	case e.quality == store.NameNone || e.name == "":
+		return true
+	case name == e.name && q == e.quality:
+		return false
+	case q != e.quality:
+		return q > e.quality
+	case !at.Equal(e.at):
+		return at.After(e.at)
+	}
+	return name > e.name
+}
+
+// failureCache remembers the groups whose lookup failed. At most failureCacheSize are kept; the one added
+// longest ago goes first.
+type failureCache struct {
+	at    map[string]time.Time
+	order *list.List // front = oldest
+	elems map[string]*list.Element
+}
+
+func newFailureCache() *failureCache {
+	return &failureCache{at: map[string]time.Time{}, order: list.New(), elems: map[string]*list.Element{}}
+}
+
+func (c *failureCache) add(key string, at time.Time) {
+	if el, ok := c.elems[key]; ok {
+		c.order.MoveToBack(el)
+	} else {
+		c.elems[key] = c.order.PushBack(key)
+	}
+	c.at[key] = at
+	for c.order.Len() > failureCacheSize {
+		front := c.order.Front()
+		c.order.Remove(front)
+		k := front.Value.(string)
+		delete(c.elems, k)
+		delete(c.at, k)
+	}
+}
+
+// recent reports a failure within failureTTL of now.
+func (c *failureCache) recent(key string, now time.Time) bool {
+	at, ok := c.at[key]
+	return ok && now.Sub(at) < failureTTL
+}
+
+func (c *failureCache) len() int { return c.order.Len() }
+
+// msTime drops what the store does not keep, so a cached time compares as the stored one does.
+func msTime(t time.Time) time.Time { return time.UnixMilli(t.UnixMilli()).UTC() }
+
+func isGroupChat(jid string) bool { return strings.HasSuffix(jid, "@"+types.GroupServer) }
+
+// userPart is the part of a JID before the "@".
+func userPart(jid string) string {
+	user, _, _ := strings.Cut(jid, "@")
+	return user
+}
+
+// offerName is step 6 of HandleMessage: it offers the stored message's chat a name when that is better than the
+// one known, and asks for a group's subject when the group has no name. It reports false when a store error made
+// ingest terminal.
+func (in *ingest) offerName(evt *events.Message, m store.Message) bool {
+	ent, ok := in.nm.get(m.ChatJID)
+	if !ok {
+		name, q, at, found, err := in.st.ChatName(in.cfg.Lib, m.ChatJID)
+		if err != nil {
+			in.fail("name", err, "chat", escapeLog(m.ChatJID))
+			return false
+		}
+		ent = nameEntry{jid: m.ChatJID}
+		if found {
+			ent.name, ent.quality, ent.at = name, q, msTime(at)
+		}
+		in.nm.put(ent)
+	}
+	if isGroupChat(m.ChatJID) {
+		return in.offerGroupName(ent, m)
+	}
+	return in.offerDirectName(ent, evt, m)
+}
+
+// offerDirectName offers a direct chat the best name it has: the saved contact name, the real contact name, the
+// message's push name (never from an own message, whose push name is the owner's), then the JID's user part.
+func (in *ingest) offerDirectName(ent nameEntry, evt *events.Message, m store.Message) bool {
+	if !ent.contactChecked {
+		saved, real, err := in.st.ContactNames(in.cfg.Lib, ent.jid)
+		switch {
+		case err == nil:
+		case errors.Is(err, store.ErrResourceLimit), errors.Is(err, store.ErrInvalid):
+			// A contact name the store will not take is no name.
+			saved, real = "", ""
+		default:
+			in.fail("name", err, "chat", escapeLog(ent.jid))
+			return false
+		}
+		ent.contactChecked, ent.saved, ent.real, ent.readAt = true, usableName(saved), usableName(real), msTime(in.now())
+	}
+	type offer struct {
+		name string
+		q    store.NameQuality
+		at   time.Time
+	}
+	var best offer
+	switch push := usableName(evt.Info.PushName); {
+	case ent.saved != "":
+		best = offer{ent.saved, store.NameSaved, ent.readAt}
+	case ent.real != "":
+		best = offer{ent.real, store.NameReal, ent.readAt}
+	case push != "" && !m.FromMe:
+		best = offer{push, store.NameReal, msTime(m.Time)}
+	default:
+		best = offer{userPart(ent.jid), store.NameFallback, msTime(m.Time)}
+	}
+	if better(ent, best.name, best.q, best.at) {
+		if !in.writeName(ent.jid, best.name, best.q, best.at) {
+			return false
+		}
+		ent.name, ent.quality, ent.at = best.name, best.q, best.at
+	}
+	in.nm.put(ent)
+	return true
+}
+
+// offerGroupName gives a group without a name the fallback "Group <id>" and asks for its subject once; a group
+// that has a real name, from history or an earlier lookup, is left alone.
+func (in *ingest) offerGroupName(ent nameEntry, m store.Message) bool {
+	if ent.quality >= store.NameReal {
+		return true
+	}
+	if ent.quality == store.NameNone {
+		name, at := "Group "+userPart(ent.jid), msTime(m.Time)
+		if !in.writeName(ent.jid, name, store.NameFallback, at) {
+			return false
+		}
+		in.nm.raise(ent.jid, name, store.NameFallback, at)
+	}
+	in.requestGroupLookup(ent.jid)
+	return true
+}
+
+// writeName writes one name offer and updates the cache; a failure is terminal.
+func (in *ingest) writeName(jid, name string, q store.NameQuality, at time.Time) bool {
+	err := in.st.UpdateChats(in.cfg.Lib, []store.ChatUpdate{{JID: jid, Name: name, NameQuality: q, NameTime: at}})
+	if err != nil {
+		in.fail("name", err, "chat", escapeLog(jid))
+		return false
+	}
+	in.nm.raise(jid, name, q, at)
+	return true
+}
+
+// usableName is name when the store would accept it, else "".
+func usableName(name string) string {
+	if name == "" || len(name) > maxChatNameBytes || !utf8.ValidString(name) {
+		return ""
+	}
+	return name
+}
+
+// requestGroupLookup queues a group for a subject lookup unless it is already queued, failed recently, or the set
+// is full, in which case the request is dropped and counted.
+func (in *ingest) requestGroupLookup(jid string) {
+	n := &in.nm
+	n.mu.Lock()
+	n.init()
+	if _, ok := n.pending[jid]; ok || n.failures.recent(jid, in.now()) {
+		n.mu.Unlock()
+		return
+	}
+	if len(n.pending) >= groupLookupSetSize {
+		n.mu.Unlock()
+		in.lookupsDropped.Add(1)
+		return
+	}
+	n.pending[jid] = struct{}{}
+	n.pendingMax = max(n.pendingMax, len(n.pending))
+	n.queue <- jid // never blocks: the queue holds at most the set's size
+	start := !n.started
+	n.started = true
+	n.mu.Unlock()
+	if start {
+		if in.goWorker(in.groupNameWorker) {
+			n.mu.Lock()
+			n.workers++
+			n.mu.Unlock()
+		}
+	}
+}
+
+// groupNameWorker looks up one group at a time until ingest stops. It is the generation's only group-name
+// goroutine.
+func (in *ingest) groupNameWorker() {
+	for {
+		select {
+		case <-in.stop:
+			return
+		case jid := <-in.nm.queue:
+			in.lookupGroup(jid)
+			in.nm.mu.Lock()
+			delete(in.nm.pending, jid)
+			in.nm.mu.Unlock()
+		}
+	}
+}
+
+// lookupGroup asks for a group's subject under the library context and a deadline, and writes it as a real name.
+// A failed or empty answer is remembered for failureTTL; a failed write is terminal.
+func (in *ingest) lookupGroup(jid string) {
+	if in.stopping() {
+		return
+	}
+	parsed, err := types.ParseJID(jid)
+	if err == nil {
+		ctx, cancel := context.WithTimeout(in.cfg.Lib, groupLookupTimeout)
+		var info *types.GroupInfo
+		info, err = in.cfg.Client.GetGroupInfo(ctx, parsed)
+		cancel()
+		if err == nil {
+			name := ""
+			if info != nil {
+				name = usableName(info.Name)
+			}
+			if name != "" {
+				at := msTime(in.now())
+				in.writeName(jid, name, store.NameReal, at)
+				return
+			}
+		}
+	}
+	if in.stopping() {
+		return
+	}
+	in.nm.mu.Lock()
+	in.nm.init()
+	in.nm.failures.add(jid, in.now())
+	in.nm.mu.Unlock()
+}
