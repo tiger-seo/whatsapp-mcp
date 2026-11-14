@@ -68,11 +68,15 @@ Add the row it ends with to the "Owner reviews" table in `specs/NNN-*/verificati
 
 ## Current state
 
-Features 001–004 are merged (004, shutdown drain: pull request #11, 2026-11-10). No feature is in progress; the next
-one is in `docs/roadmap.md`. The resume point of a feature in progress is the `## Current state` section of its
-`tasks.md`. The whatsmeow pin is upstream `f1b7985`; the fix for a lost post-pair 515 is upstream PR
-tulir/whatsmeow#1337 (backlog `004-whatsmeow-lost-restart-request.md`).
-E003-RX-01, the receive-resource exception, expires at the start of 2026-12-02 UTC.
+Features 001–004 are merged (004, shutdown drain: pull request #11, 2026-11-10). Feature 005, message ingest, is
+implemented on branch `005-message-ingest` (code at `b6d8727`): live and history messages, LID merges and chat names are
+stored, and a direct chat below the saved name is re-read from the contact table at 60 s, 5 min and 30 min; there are
+still no MCP tools. The design review passed at `a040210` and the code review at `cbce833`; the pull request is open.
+Three real-account runs (2026-11-14, cleaned up) are in `verification.md`; the late contact re-read itself was not
+observed on a real account. The resume point of a feature in progress is the `## Current state` section of its `tasks.md`.
+Since 2026-11-13 `go.mod` replaces whatsmeow with the owner's fork `github.com/tiger-seo/whatsmeow` at `bedcf01`
+(branch `receive-bounds`), which enforces the receive bounds, sends nothing to the user's phone on another account's
+behalf, and carries the lost-515 fix proposed upstream as tulir/whatsmeow#1337; E003-RX-01 is retired.
 
 ## Commands
 
@@ -140,10 +144,10 @@ guard's `write` flag correctly: a write marked as a read escapes the check.
 
 ### ⚠️ A whatsmeow Pin Change Is an Owner Decision
 **Symptom:** a library bump looks like routine maintenance.
-**Cause:** E003-RX-01 is tied to the exact pin; the quiet check's allow-list entries record the version they were
-reviewed for (`quiet_test.go` compares them with `go.mod`); new upstream reconnect paths must stay behind
+**Cause:** the fork's receive bounds and their approved limits are tied to the exact revision; the quiet check's
+allow-list entries record the version they were reviewed for (`quiet_test.go` compares them with `go.mod`); new upstream reconnect paths must stay behind
 `EnableAutoReconnect = false`; `appstate_stop_test.go` matches function names in a goroutine dump.
-**Rule:** ask the owner first, reassess E003-RX-01, read the upstream diff for reconnect and storage changes, and
+**Rule:** ask the owner first, check the Fork Acceptance Contract in `specs/005-message-ingest/plan.md`, read the diff for reconnect and storage changes, and
 rerun the full gates and the pass-rate run.
 
 ### ⚠️ WSL2 Runs Need Three Workarounds

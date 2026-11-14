@@ -79,6 +79,11 @@ type Health struct {
 	QuietReason string
 	// QuietPassed records that at least one generation's quiet-stop check passed and none failed.
 	QuietPassed bool
+	// IngestFailed records that message storage failed; the command must stop and the operator restart.
+	IngestFailed bool
+	// ReceiveOverload is the library's reason for the last connection it closed at a receive limit; empty when
+	// none. Messages may be missing.
+	ReceiveOverload string
 }
 
 type Event struct {
@@ -100,6 +105,8 @@ type Owner interface {
 	CancelPairing()
 	Subscribe(func(Event)) func()
 	Health() Health
+	// Terminal closes when the running command must stop because message storage failed.
+	Terminal() <-chan struct{}
 }
 
 // SessionEvent is one admitted upstream event the adapter forwards to the owner.
@@ -113,6 +120,9 @@ const (
 	SessionLoggedOut
 	SessionClientOutdated
 	SessionManualLoginReconnect
+	// SessionReceiveOverload precedes the SessionDisconnected of a connection the library closed at a receive
+	// limit.
+	SessionReceiveOverload
 )
 
 // SessionHandle is the owner's narrow view of one client generation. It is created through a
@@ -165,11 +175,17 @@ type SessionConfig struct {
 	Library context.Context
 	// trace receives the name of each retirement step as it happens; tests only.
 	trace func(step string)
+	// wrapIngestStore, when set, wraps the store ingest writes to; tests only.
+	wrapIngestStore func(ingestStore) ingestStore
 	// Dispatch receives this generation's admitted upstream events.
 	Dispatch func(epoch uint64, event SessionEvent)
 	// Test-only transport injections; nil uses the approved defaults.
 	PreLoginHTTP  *http.Client
 	WebsocketHTTP *http.Client
+	// MediaHTTP, when set, supplies the transport of the media and history download client; tests only.
+	MediaHTTP *http.Client
+	// ReconcileFrom is the cursor of an unfinished startup LID reconciliation, for the first generation only.
+	ReconcileFrom *LIDCursor
 	// RepairSlot is the owner-wide slot for owner-invoked app-state calls; nil gives the session its own.
 	RepairSlot chan struct{}
 }

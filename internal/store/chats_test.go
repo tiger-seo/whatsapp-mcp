@@ -143,3 +143,72 @@ func TestBatchOfUpdatesIsAtomic(t *testing.T) {
 		t.Errorf("1,001 updates: %v", err)
 	}
 }
+
+func TestChatName(t *testing.T) {
+	st, _ := openTest(t, newDataDir(t))
+	ctx := t.Context()
+
+	if _, _, _, ok, err := st.ChatName(ctx, alice); err != nil || ok {
+		t.Fatalf("no chat: ok=%v err=%v; want not ok", ok, err)
+	}
+	// A chat created by activity alone has no name.
+	update(t, st, ChatUpdate{JID: alice, LastActivity: at(1)})
+	if _, q, _, ok, err := st.ChatName(ctx, alice); err != nil || ok || q != NameNone {
+		t.Fatalf("chat without a name: quality=%v ok=%v err=%v; want none, not ok", q, ok, err)
+	}
+	update(t, st, offer("Alice", NameReal, 5))
+	name, q, when, ok, err := st.ChatName(ctx, alice)
+	if err != nil || !ok || name != "Alice" || q != NameReal || !when.Equal(at(5)) {
+		t.Fatalf("ChatName = %q, %v, %v, %v, %v; want Alice, real, minute 5", name, q, when, ok, err)
+	}
+	// A worse offer leaves the stored name; ChatName shows what the store kept.
+	update(t, st, offer("491511234567", NameFallback, 9))
+	if name, q, _, _, _ := st.ChatName(ctx, alice); name != "Alice" || q != NameReal {
+		t.Errorf("after a worse offer = %q, %v; want Alice, real", name, q)
+	}
+	update(t, st, offer("Mum", NameSaved, 2))
+	if name, q, when, _, _ := st.ChatName(ctx, alice); name != "Mum" || q != NameSaved || !when.Equal(at(2)) {
+		t.Errorf("after a saved offer = %q, %v, %v; want Mum, saved, minute 2", name, q, when)
+	}
+
+	if _, _, _, _, err := st.ChatName(ctx, "not a jid"); !errors.Is(err, ErrInvalid) {
+		t.Errorf("invalid JID: %v, want ErrInvalid", err)
+	}
+	before := readChat(t, st, alice)
+	if _, _, _, _, err := st.ChatName(ctx, alice); err != nil {
+		t.Fatal(err)
+	}
+	if after := readChat(t, st, alice); after.name != before.name || after.quality != before.quality {
+		t.Errorf("ChatName changed the chat: %+v -> %+v", before, after)
+	}
+}
+
+func TestUpdateChatsExistingOnlyNeverCreatesAChat(t *testing.T) {
+	st, _ := openTest(t, newDataDir(t))
+	ctx := t.Context()
+	o := offer("Alice", NameReal, 1)
+	o.ExistingOnly = true
+	if err := st.UpdateChats(ctx, []ChatUpdate{o}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.GetChat(ctx, alice); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a name offer created the chat: %v", err)
+	}
+	// An existing chat takes the name, in the same call as a chat that is missing.
+	update(t, st, ChatUpdate{JID: alice, LastActivity: at(1)})
+	missing := ChatUpdate{JID: bob, Name: "Bob", NameQuality: NameReal, NameTime: at(1), ExistingOnly: true}
+	if err := st.UpdateChats(ctx, []ChatUpdate{o, missing}); err != nil {
+		t.Fatal(err)
+	}
+	if name, q, _, ok, err := st.ChatName(ctx, alice); err != nil || !ok || name != "Alice" || q != NameReal {
+		t.Errorf("existing chat = %q, %v, %v, %v; want Alice, real", name, q, ok, err)
+	}
+	if _, err := st.GetChat(ctx, bob); !errors.Is(err, ErrNotFound) {
+		t.Errorf("the missing chat was created: %v", err)
+	}
+	// Without the option an update still creates the chat, as before.
+	update(t, st, ChatUpdate{JID: bob, Name: "Bob", NameQuality: NameReal, NameTime: at(2)})
+	if _, err := st.GetChat(ctx, bob); err != nil {
+		t.Errorf("an ordinary update no longer creates the chat: %v", err)
+	}
+}

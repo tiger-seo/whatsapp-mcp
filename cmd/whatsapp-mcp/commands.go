@@ -125,6 +125,8 @@ type ownerDeps struct {
 	// shell enables the bounded saved-session startup budget (stdio/serve); pair keeps its single
 	// attempt.
 	shell bool
+	// reconcileFrom is where an unfinished startup LID reconciliation stopped; nil when it completed.
+	reconcileFrom *wa.LIDCursor
 
 	// discoveryTransport and sessionFactory are test seams; nil uses the approved defaults.
 	discoveryTransport http.RoundTripper
@@ -182,6 +184,7 @@ func productionOwnerConfig(deps ownerDeps, provider *wa.VersionProvider, session
 		Sessions:           sessions,
 		ShellStartupBudget: deps.shell,
 		StopBound:          shutdownTimeout,
+		ReconcileFrom:      deps.reconcileFrom,
 	}
 }
 
@@ -276,9 +279,11 @@ func runPair(cmd *command, args []string, s *streams) int {
 	lc.requestStop("pair finished")
 	<-lc.ctx.Done()
 	if code := lc.shutdown(); code != exitOK {
+		reportStorageFailure(oh.owner, s)
 		return code
 	}
 	if !success {
+		reportStorageFailure(oh.owner, s)
 		return exitError
 	}
 	if recoveryRequired.Load() {
@@ -294,7 +299,38 @@ func runPair(cmd *command, args []string, s *streams) int {
 		}
 		fmt.Fprintf(s.stderr, "whatsapp-mcp: pair: %s. The saved session can be reused.\n", word)
 	}
+	if reportStorageFailure(oh.owner, s) {
+		return exitError
+	}
 	return exitOK
+}
+
+// storageFailedMessage is the command's report of a message-storage failure, printed after the stop.
+const storageFailedMessage = "whatsapp-mcp: message storage failed; messages may be missing. Fix the cause and start again."
+
+// reportStorageFailure prints the storage message when the owner's terminal signal fired, and reports whether it
+// did.
+func reportStorageFailure(owner wa.Owner, s *streams) bool {
+	select {
+	case <-owner.Terminal():
+		fmt.Fprintln(s.stderr, storageFailedMessage)
+		return true
+	default:
+		return false
+	}
+}
+
+// waitShell waits for the first of the lifecycle's stop and the owner's terminal signal. A terminal signal
+// requests the normal stop.
+func waitShell(lc *lifecycle, oh *ownerHandle) {
+	if oh != nil {
+		select {
+		case <-lc.ctx.Done():
+		case <-oh.owner.Terminal():
+			lc.requestStop("message storage failed")
+		}
+	}
+	<-lc.ctx.Done()
 }
 
 // pairingFlow runs the pair journey and reports whether it succeeded. Pair exits successfully only
@@ -445,31 +481,32 @@ func warnPendingRepairs(owner wa.Owner, s *streams) {
 }
 
 func runServe(cmd *command, args []string, s *streams) int {
-	return runShell("serve", cmd, args, s, func(ctx context.Context, lc *lifecycle, logger *slog.Logger, st *store.Store, s *streams) bool {
-		failed := attachOwner("serve", lc, logger, st, s)
-		<-lc.ctx.Done()
-		return failed
+	return runShell("serve", cmd, args, s, func(ctx context.Context, lc *lifecycle, logger *slog.Logger, st *store.Store, s *streams, from *wa.LIDCursor) (*ownerHandle, bool) {
+		oh, failed := attachOwner("serve", lc, logger, st, s, from)
+		waitShell(lc, oh)
+		return oh, failed
 	})
 }
 
 func runStdio(cmd *command, args []string, s *streams) int {
-	return runShell("stdio", cmd, args, s, func(ctx context.Context, lc *lifecycle, logger *slog.Logger, st *store.Store, s *streams) bool {
-		failed := attachOwner("stdio", lc, logger, st, s)
+	return runShell("stdio", cmd, args, s, func(ctx context.Context, lc *lifecycle, logger *slog.Logger, st *store.Store, s *streams, from *wa.LIDCursor) (*ownerHandle, bool) {
+		oh, failed := attachOwner("stdio", lc, logger, st, s, from)
 		if !failed {
 			go func() {
 				_, _ = io.Copy(io.Discard, s.stdin)
 				lc.requestStop("stdin closed")
 			}()
 		}
-		<-lc.ctx.Done()
-		return failed
+		waitShell(lc, oh)
+		return oh, failed
 	})
 }
 
 // runShell takes the data directory, attaches the owner and runs until a stop signal or stop
 // request, then shuts down. The signal handler is installed before anything else, so an early signal
-// still releases what was taken. The body's result makes a start failure an unsuccessful exit.
-func runShell(kind string, cmd *command, args []string, s *streams, body func(context.Context, *lifecycle, *slog.Logger, *store.Store, *streams) bool) int {
+// still releases what was taken. The body's result makes a start failure an unsuccessful exit; a message-storage
+// failure is reported after the stop and is an unsuccessful exit too.
+func runShell(kind string, cmd *command, args []string, s *streams, body func(context.Context, *lifecycle, *slog.Logger, *store.Store, *streams, *wa.LIDCursor) (*ownerHandle, bool)) int {
 	lc := lifecycleFactory(slog.New(slog.NewTextHandler(s.stderr, nil)))
 	cfg, logger, code, ok := startup(cmd, args, s)
 	if !ok {
@@ -490,7 +527,10 @@ func runShell(kind string, cmd *command, args []string, s *streams, body func(co
 	if lc.ctx.Err() != nil {
 		return lc.shutdown()
 	}
-	st, code, ok := openStore(lc.ctx, cfg, logger, s)
+	// The store's open and the identity reconciliation share one startup budget.
+	budget, cancelBudget := context.WithTimeout(lc.ctx, startupBudget)
+	defer cancelBudget()
+	st, code, ok := openStore(budget, cfg, logger, s)
 	if !ok {
 		lc.shutdown()
 		return code
@@ -505,10 +545,21 @@ func runShell(kind string, cmd *command, args []string, s *streams, body func(co
 		lc.shutdown()
 		return exitError
 	}
-	failed := body(lc.ctx, lc, logger, st, s)
+	from := startupReconcile(budget, st, logger)
+	cancelBudget()
+	if lc.ctx.Err() != nil {
+		// A stop during the reconciliation stops the command like a stop at any other point of the start: the owner
+		// is not started with a cancelled context.
+		return lc.shutdown()
+	}
+	oh, failed := body(lc.ctx, lc, logger, st, s, from)
 	lc.requestStop("shell finished")
 	<-lc.ctx.Done()
-	if code := lc.shutdown(); code != exitOK {
+	code = lc.shutdown()
+	if oh != nil && reportStorageFailure(oh.owner, s) {
+		return exitError
+	}
+	if code != exitOK {
 		return code
 	}
 	if failed {
@@ -517,14 +568,38 @@ func runShell(kind string, cmd *command, args []string, s *streams, body func(co
 	return exitOK
 }
 
+// startupBudget bounds the store's open and the startup identity reconciliation together.
+const startupBudget = 10 * time.Minute
+
+// startupReconcile merges the data stored under mapped LIDs before the owner opens a generation, within what is
+// left of the startup budget, and logs the result. Its failure never stops the command. A pass the budget ended
+// returns its cursor, which the first generation continues; tests replace it.
+var startupReconcile = func(ctx context.Context, st wa.LIDMergeStore, logger *slog.Logger) *wa.LIDCursor {
+	res := wa.ReconcileLIDs(ctx, st, logger, "")
+	status := "completed"
+	switch {
+	case res.Completed:
+	case ctx.Err() != nil:
+		status = "budget_exhausted"
+	default:
+		status = "incomplete"
+	}
+	logger.Info("identity reconciliation", "event", "lid_reconcile", "status", status, "merged", res.Merged,
+		"failed", res.Failed, "skipped", res.Skipped)
+	if res.Completed {
+		return nil
+	}
+	return &wa.LIDCursor{After: res.Cursor}
+}
+
 // attachOwner creates the owner after the store cleanup registration, starts it and stays with the
 // shell until stop. A start failure is reported and makes the shell exit unsuccessfully.
-func attachOwner(kind string, lc *lifecycle, logger *slog.Logger, st *store.Store, s *streams) bool {
-	oh, err := newOwner(ownerDeps{ctx: lc.ctx, log: logger, store: st, shell: true})
+func attachOwner(kind string, lc *lifecycle, logger *slog.Logger, st *store.Store, s *streams, from *wa.LIDCursor) (*ownerHandle, bool) {
+	oh, err := newOwner(ownerDeps{ctx: lc.ctx, log: logger, store: st, shell: true, reconcileFrom: from})
 	if err != nil {
 		fmt.Fprintf(s.stderr, "whatsapp-mcp: %s\n", safeError(err))
 		lc.requestStop("owner failed")
-		return true
+		return nil, true
 	}
 	// Registered after the store stop, so shutdown runs owner first and the store closes after the
 	// device writes drained.
@@ -537,10 +612,10 @@ func attachOwner(kind string, lc *lifecycle, logger *slog.Logger, st *store.Stor
 	if err := oh.owner.Start(lc.ctx); err != nil {
 		fmt.Fprintf(s.stderr, "whatsapp-mcp: %s: %s\n", kind, safeError(err))
 		lc.requestStop("owner start failed")
-		return true
+		return oh, true
 	}
 	logger.Info(kind+": connection owner running; MCP arrives in a later feature", "event", "owner_running")
-	return false
+	return oh, false
 }
 
 func notImplemented(cmd *command, s *streams) int {
@@ -614,7 +689,7 @@ func utcTime(groups []string, a slog.Attr) slog.Attr {
 // openStore opens the database after the lock is held. It gives the whole startup, including schema upgrades,
 // the approved 10 minutes. On failure it prints the safe error and returns the environment-error exit code.
 func openStore(ctx context.Context, cfg *config.Config, logger *slog.Logger, s *streams) (*store.Store, int, bool) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, startupBudget)
 	defer cancel()
 	st, err := store.Open(ctx, cfg.DataDir, logger)
 	if err != nil {

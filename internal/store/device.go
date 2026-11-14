@@ -46,6 +46,26 @@ type leaseToken struct {
 	mu      sync.Mutex
 	closing bool
 	nested  sync.WaitGroup
+	// mapped holds the LID-map changes written under this lease; they are reported only after the outermost
+	// operation returned without error, so a change that was rolled back is never reported.
+	mapped []mappingChange
+}
+
+// mappingChange is one LID-map row that a write inserted or moved to another phone.
+type mappingChange struct{ lid, oldPhone, newPhone string }
+
+func (t *leaseToken) addMapped(changes []mappingChange) {
+	t.mu.Lock()
+	t.mapped = append(t.mapped, changes...)
+	t.mu.Unlock()
+}
+
+func (t *leaseToken) takeMapped() []mappingChange {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := t.mapped
+	t.mapped = nil
+	return out
 }
 
 func (t *leaseToken) closeAndWait() {
@@ -90,6 +110,10 @@ type deviceSession struct {
 	retiring     atomic.Bool
 	refused      atomic.Uint64
 	refusedReads atomic.Uint64
+
+	// mappingObserver receives each LID-map row a guarded write inserted or moved to another phone, after the
+	// write committed and with no store lock held.
+	mappingObserver atomic.Pointer[func(lidJID, oldPhoneJID, newPhoneJID string)]
 }
 
 // refuse counts a guarded call that failed for a reason from the guard or the context once retirement has
@@ -215,7 +239,23 @@ func (sess *deviceSession) latchWriteFault(result error) {
 // must be neither closed nor retired, the device must be ready, and the call is admitted on the shared gate;
 // a write checks the disk guard, and the validation runs before the delegate's SQL. Bulk work is rejected
 // inside a transaction, where it would be incompatible.
-func (sess *deviceSession) run(ctx context.Context, op string, write, bulk bool, validate func() error, fn func(context.Context) error) (result error) {
+func (sess *deviceSession) run(ctx context.Context, op string, write, bulk bool, validate func() error, fn func(context.Context) error) error {
+	var mapped []mappingChange
+	err := sess.runLeased(ctx, op, write, bulk, validate, fn, &mapped)
+	if err == nil && len(mapped) > 0 {
+		// Every lock, admission and lease of the operation is released by now.
+		if obs := sess.mappingObserver.Load(); obs != nil {
+			for _, c := range mapped {
+				(*obs)(c.lid, c.oldPhone, c.newPhone)
+			}
+		}
+	}
+	return err
+}
+
+// runLeased is run without the mapping report. An outermost operation hands the mapping changes its lease
+// collected to mapped; a nested one leaves them on the outer lease.
+func (sess *deviceSession) runLeased(ctx context.Context, op string, write, bulk bool, validate func() error, fn func(context.Context) error, mapped *[]mappingChange) (result error) {
 	defer func() {
 		if write {
 			sess.refuse(result)
@@ -325,7 +365,11 @@ func (sess *deviceSession) run(ctx context.Context, op string, write, bulk bool,
 		sess.mu.Unlock()
 		tok.closeAndWait()
 	}()
-	return sess.st.report(op, fn(context.WithValue(opCtx, leaseKey, tok)))
+	if err := fn(context.WithValue(opCtx, leaseKey, tok)); err != nil {
+		return sess.st.report(op, err)
+	}
+	*mapped = tok.takeMapped()
+	return nil
 }
 
 // DeviceBarrier retires one device generation. It does not close the shared store, which stays open for
@@ -355,6 +399,18 @@ func (b *DeviceBarrier) Retire(ctx context.Context) error {
 	case <-ctx.Done():
 		return ErrNotQuiescent
 	}
+}
+
+// SetMappingObserver sets the function that receives each LID-map row this generation's guarded writes insert or
+// move to another phone: the LID JID, the previous phone JID ("" for a new row) and the new one. An unchanged
+// upsert, a failed write and a refused write report nothing. It is called after the write committed, with no
+// store lock held, on the writer's goroutine; it must not block. nil removes it.
+func (b *DeviceBarrier) SetMappingObserver(fn func(lidJID, oldPhoneJID, newPhoneJID string)) {
+	if fn == nil {
+		b.sess.mappingObserver.Store(nil)
+		return
+	}
+	b.sess.mappingObserver.Store(&fn)
 }
 
 // Done closes when the generation has fully drained.

@@ -62,14 +62,27 @@ func (m Message) validate() (storedMessage, int, error) {
 	if err := validateMedia(m.MediaType, m.Media); err != nil {
 		return storedMessage{}, 0, err
 	}
-	size := len(m.ChatJID) + len(m.ID) + len(m.SenderJID) + len(m.Text) + len(m.Caption) + len(m.MediaType) +
-		len(m.Media.URL) + len(m.Media.DirectPath) + len(m.Media.MediaKey) + len(m.Media.FileSHA256) +
-		len(m.Media.FileEncSHA256) + len(m.Media.MIMEType) + len(m.Media.FileName)
+	size := MessageFieldBytes(m)
 	return storedMessage{
 		chatJID: chat.String(), chatPhone: phoneOf(chat), id: m.ID,
 		senderJID: sender.String(), senderPhone: phoneOf(sender),
 		time: m.Time.UnixMilli(), m: m, textFold: fold(m.Text), captionFold: fold(m.Caption),
 	}, size, nil
+}
+
+// ValidateMessage applies exactly the checks StoreMessages applies to one message, so a caller can skip an invalid
+// message instead of failing a whole batch. The error names the field and never repeats its value.
+func ValidateMessage(m Message) error {
+	_, _, err := m.validate()
+	return err
+}
+
+// MessageFieldBytes is the size StoreMessages charges against its 16 MiB batch limit for m: the bytes of every
+// text and binary field.
+func MessageFieldBytes(m Message) int {
+	return len(m.ChatJID) + len(m.ID) + len(m.SenderJID) + len(m.Text) + len(m.Caption) + len(m.MediaType) +
+		len(m.Media.URL) + len(m.Media.DirectPath) + len(m.Media.MediaKey) + len(m.Media.FileSHA256) +
+		len(m.Media.FileEncSHA256) + len(m.Media.MIMEType) + len(m.Media.FileName)
 }
 
 // StoreMessage stores one message; see StoreMessages.

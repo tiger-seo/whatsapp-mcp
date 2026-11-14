@@ -15,12 +15,16 @@ import (
 
 	"github.com/tiger-seo/whatsapp-mcp/internal/store"
 	"github.com/tiger-seo/whatsapp-mcp/internal/wasim"
+	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waHistorySync"
 	wastore "go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 )
 
 // retirementOrder is the sequence the contract fixes for one generation, ending with the quiet-stop check.
-var retirementOrder = []string{"work_cancelled", "disconnect", "fence_closed", "barrier_retired", "lib_cancelled", "observe", "handler_removed", "quiet_decided"}
+// Ingest adds three steps without moving any: its stop with the work cancel (step 4), its bounded wait beside the
+// repair pass (step 5), and the join of whatever still runs after the barrier and before the library context.
+var retirementOrder = []string{"work_cancelled", "ingest_stopped", "ingest_waited", "disconnect", "fence_closed", "barrier_retired", "ingest_joined", "lib_cancelled", "observe", "handler_removed", "quiet_decided"}
 
 // checkRetirementOrder reports the first violation of the contract's order in got, or nil. Steps may be
 // missing (a generation that never connected has no disconnect to trace), but the ones present keep their order.
@@ -340,6 +344,13 @@ func startSavedRun(t *testing.T, ctx context.Context) (*connectionOwner, *genSta
 // startSavedRunWith also takes a retirement trace and returns the data directory and the simulator.
 func startSavedRunWith(t *testing.T, ctx context.Context, trace func(string)) (*connectionOwner, *genState, *Session, *store.Store, string, *wasim.Server) {
 	t.Helper()
+	return startSavedRunWrapped(t, ctx, trace, nil)
+}
+
+// startSavedRunWrapped is startSavedRunWith with a wrapper around the store ingest writes to, put in place when the
+// session is built, so no worker of the session can be reading the field while a test changes it.
+func startSavedRunWrapped(t *testing.T, ctx context.Context, trace func(string), wrap func(ingestStore) ingestStore) (*connectionOwner, *genState, *Session, *store.Store, string, *wasim.Server) {
+	t.Helper()
 	dir := waDataDir(t)
 	st, err := store.Open(ctx, dir, nil)
 	if err != nil {
@@ -378,6 +389,7 @@ func startSavedRunWith(t *testing.T, ctx context.Context, trace func(string)) (*
 		Sessions: func(cfg SessionConfig) (SessionHandle, error) {
 			cfg.PreLoginHTTP = srv.Client()
 			cfg.WebsocketHTTP = srv.Client()
+			cfg.wrapIngestStore = wrap
 			return OpenSession(cfg)
 		},
 	})
@@ -464,6 +476,172 @@ func TestWriteAfterLibraryCancelIsCountedAndFailsTheCheck(t *testing.T) {
 	sess.observer = cleanObserver
 	res := sess.QuietStop(ctx, time.Second)
 	if res.Passed || res.Reason != QuietStorageRefused {
+		t.Fatalf("result = %+v, want storage_refused", res)
+	}
+}
+
+// The order checker also rejects the ingest steps out of place.
+func TestRetirementOrderCheckerRejectsIngestStepsOutOfPlace(t *testing.T) {
+	for name, seq := range map[string][]string{
+		"join before the barrier":       {"work_cancelled", "ingest_stopped", "ingest_waited", "disconnect", "fence_closed", "ingest_joined", "barrier_retired"},
+		"join after the library cancel": {"barrier_retired", "lib_cancelled", "ingest_joined"},
+		"stop after the disconnect":     {"work_cancelled", "disconnect", "ingest_stopped"},
+		"wait before the stop":          {"ingest_waited", "ingest_stopped"},
+	} {
+		if err := checkRetirementOrder(seq); err == nil {
+			t.Errorf("%s: the checker accepted %v", name, seq)
+		}
+	}
+}
+
+// ingestFakeSession is a fake generation with an ingest component whose workers do not return by themselves.
+type ingestFakeSession struct {
+	fakeSession
+	stopped  atomic.Int64
+	waitCtx  chan context.Context
+	released chan struct{}
+}
+
+func (f *ingestFakeSession) StopIngest() { f.stopped.Add(1) }
+func (f *ingestFakeSession) WaitIngest(ctx context.Context) error {
+	f.waitCtx <- ctx
+	select {
+	case <-f.released:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// The owner stops ingest at step 4 and waits for its workers at step 5 for at most two seconds; a worker that is
+// still running does not hold up the disconnect, the fence or the barrier.
+func TestRetirementStopsIngestAndBoundsTheWait(t *testing.T) {
+	trace := &stepLog{}
+	f := &ingestFakeSession{fakeSession: fakeSession{identity: true, script: func(int64, context.Context) error { return nil }},
+		waitCtx: make(chan context.Context, 1), released: make(chan struct{})}
+	o := NewOwner(OwnerConfig{
+		Versions: bundledProvider(context.Background()),
+		Sessions: func(cfg SessionConfig) (SessionHandle, error) { f.cfg = cfg; return f, nil },
+		trace:    trace.add,
+	})
+	if err := o.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return f.connectN.Load() == 1 })
+	began := time.Now()
+	o.BeginStop()
+	var waitCtx context.Context
+	select {
+	case waitCtx = <-f.waitCtx:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the owner never waited for ingest")
+	}
+	if f.stopped.Load() != 1 {
+		t.Fatalf("StopIngest called %d times before the wait, want 1", f.stopped.Load())
+	}
+	deadline, ok := waitCtx.Deadline()
+	if !ok || deadline.Sub(began) > ingestWorkerWait+500*time.Millisecond {
+		t.Fatalf("ingest wait deadline %v after the stop, want at most %v", deadline.Sub(began), ingestWorkerWait)
+	}
+	select {
+	case <-o.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("stop did not finish with an ingest worker still running")
+	}
+	got := trace.get()
+	if err := checkRetirementOrder(got); err != nil {
+		t.Fatalf("order %v: %v", got, err)
+	}
+	for _, step := range []string{"work_cancelled", "ingest_stopped", "ingest_waited"} {
+		if !slices.Contains(got, step) {
+			t.Errorf("step %q missing from %v", step, got)
+		}
+	}
+	close(f.released)
+}
+
+// Messages dropped after the retire bit are reported in the result and never fail the check.
+func TestQuietStopReportsDroppedMessagesWithoutFailing(t *testing.T) {
+	s := connectedAttempt(t)
+	s.BeginRetire()
+	for i := range 3 {
+		s.handleEvent(textEvent(fmt.Sprintf("late%d", i), "dropped"))
+	}
+	if err := s.Retire(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	res := s.QuietStop(context.Background(), time.Second)
+	if !res.Passed || res.Reason != QuietPassed {
+		t.Fatalf("result = %+v; dropped messages must not fail the check", res)
+	}
+	if res.DroppedMessages != 3 {
+		t.Fatalf("DroppedMessages = %d, want 3", res.DroppedMessages)
+	}
+}
+
+// A history worker still inside the library's download at step 5 is left to the fence and the barrier: the work
+// context does not cancel it, it is joined after the barrier and before the library context, and the device write
+// it attempts after the barrier is refused and counted, so the check reports storage_refused. No message is written
+// after the join.
+func TestHistoryWorkerInsideTheLibraryIsJoinedAfterTheBarrier(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+	steps := &stepLog{}
+	var sess *Session
+	var gen *genState
+	entered, release := make(chan struct{}), make(chan struct{})
+	writeErr := make(chan error, 1)
+	f := &faultyStore{}
+	o, g, s, _, _, _ := startSavedRunWrapped(t, ctx, func(step string) {
+		steps.add(step)
+		if step == "barrier_retired" {
+			close(release)
+		}
+	}, func(st ingestStore) ingestStore { f.ingestStore = st; return f })
+	sess, gen = s, g
+	sess.ingest.cfg.Client = &fakeIngestClient{own: ownJID(), download: func(ctx context.Context, _ *waE2E.HistorySyncNotification, _ bool) (*waHistorySync.HistorySync, error) {
+		close(entered)
+		<-release
+		if ctx.Err() != nil {
+			writeErr <- fmt.Errorf("the download context was cancelled before the join: %w", ctx.Err())
+			return nil, ctx.Err()
+		}
+		// The library's synchronous storage of a history chunk writes LID mappings to the device store.
+		lid, pn := types.NewJID("123456789", types.HiddenUserServer), types.NewJID("490000000077", types.DefaultUserServer)
+		writeErr <- sess.dev.LIDs.PutLIDMapping(ctx, lid, pn)
+		return historyOf(conversation(peerJID(), "", webText("LATE", "x", histTime))), nil
+	}}
+	if !sess.handleEvent(historyNotice(1)) {
+		t.Fatal("the history notification returned false")
+	}
+	within(t, entered, "the download to start")
+	o.BeginStop()
+	within(t, o.Done(), "the stop")
+	if gen.work.Err() == nil {
+		t.Fatal("the work context was not cancelled")
+	}
+	var err error
+	select {
+	case err = <-writeErr:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the held download never resumed")
+	}
+	if err == nil {
+		t.Fatal("a device write after the barrier succeeded")
+	} else if strings.Contains(err.Error(), "download context was cancelled") {
+		t.Fatal(err)
+	}
+	if err := checkRetirementOrder(steps.get()); err != nil {
+		t.Fatalf("order %v: %v", steps.get(), err)
+	}
+	if got := sess.barrier.Refused(); got == 0 {
+		t.Fatal("the refused device write was not counted")
+	}
+	if f.writes != 0 {
+		t.Fatalf("%d message writes after Stop, want none", f.writes)
+	}
+	sess.observer = cleanObserver
+	if res := sess.QuietStop(ctx, time.Second); res.Passed || res.Reason != QuietStorageRefused {
 		t.Fatalf("result = %+v, want storage_refused", res)
 	}
 }

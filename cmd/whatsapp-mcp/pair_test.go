@@ -113,6 +113,8 @@ type scriptedOwner struct {
 	health    wa.Health
 	window    wa.PairingState
 	hasWindow bool
+	// terminal is what Terminal returns; nil never fires.
+	terminal chan struct{}
 
 	wake      chan struct{}
 	subs      map[int]func(wa.Event)
@@ -193,6 +195,8 @@ func (s *scriptedOwner) Subscribe(fn func(wa.Event)) func() {
 		s.mu.Unlock()
 	}
 }
+
+func (s *scriptedOwner) Terminal() <-chan struct{} { return s.terminal }
 
 func (s *scriptedOwner) Health() wa.Health {
 	s.mu.Lock()

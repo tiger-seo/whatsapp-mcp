@@ -49,6 +49,9 @@ type OwnerConfig struct {
 	// StopBound is the whole orderly stop, from BeginStop to the decision to clear the marker. The command passes
 	// the shutdown timeout it already uses (10 s); zero means that value. It is not a setting.
 	StopBound time.Duration
+	// ReconcileFrom is where an unfinished startup LID reconciliation stopped; the first generation's ingest
+	// continues from it. nil when the pass completed.
+	ReconcileFrom *LIDCursor
 
 	// drainBound replaces barrierDrainBound; tests only.
 	drainBound time.Duration
@@ -64,11 +67,13 @@ type OwnerConfig struct {
 // Exactly one attempt is in flight at any time, and every attempt holds its slot until the call and
 // the generation access have drained.
 type connectionOwner struct {
-	cfg    OwnerConfig
-	log    *slog.Logger
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
+	cfg OwnerConfig
+	// reconcileFrom is handed to the first generation and then cleared; guarded by mu.
+	reconcileFrom *LIDCursor
+	log           *slog.Logger
+	ctx           context.Context
+	cancel        context.CancelFunc
+	done          chan struct{}
 
 	stopOnce sync.Once
 
@@ -110,6 +115,10 @@ type connectionOwner struct {
 	updateCh chan struct{}
 	subs     map[uint64]func(Event)
 	subNext  uint64
+
+	// terminal closes once when message storage fails.
+	terminal     chan struct{}
+	terminalOnce sync.Once
 }
 
 // genState is one client generation with its epoch and its contexts.
@@ -177,6 +186,9 @@ func NewOwner(cfg OwnerConfig) *connectionOwner {
 		repairSlot: make(chan struct{}, 1),
 		updateCh:   make(chan struct{}),
 		subs:       make(map[uint64]func(Event)),
+		terminal:   make(chan struct{}),
+
+		reconcileFrom: cfg.ReconcileFrom,
 	}
 	return o
 }
@@ -238,6 +250,7 @@ func (o *connectionOwner) Start(ctx context.Context) error {
 	o.publishLocked()
 	o.mu.Unlock()
 	o.watchStorageFault(gen)
+	o.watchIngestFailure(gen)
 	if o.identity {
 		go o.runStartupSequence(gen)
 	}
@@ -272,7 +285,10 @@ func (o *connectionOwner) openGeneration() (*genState, error) {
 		trace:      o.cfg.trace,
 		Dispatch:   o.dispatch,
 		RepairSlot: o.repairSlot,
+		// Only the first generation continues the startup pass; a later one has nothing left to continue.
+		ReconcileFrom: o.reconcileFrom,
 	}
+	o.reconcileFrom = nil
 	o.mu.Unlock()
 	factory := o.cfg.Sessions
 	if factory == nil {
@@ -298,6 +314,35 @@ func (o *connectionOwner) watchStorageFault(gen *genState) {
 		}
 	}()
 }
+
+// watchIngestFailure turns the generation's ingest failure into the owner's terminal signal. A device storage
+// fault is not one: it keeps its own handling.
+func (o *connectionOwner) watchIngestFailure(gen *genState) {
+	src, ok := gen.handle.(interface{ IngestFailed() <-chan struct{} })
+	if !ok {
+		return
+	}
+	failed := src.IngestFailed()
+	go func() {
+		select {
+		case <-failed:
+		case <-o.ctx.Done():
+		case <-gen.work.Done():
+		}
+		select {
+		case <-failed:
+			o.mu.Lock()
+			o.health.IngestFailed = true
+			o.publishLocked()
+			o.mu.Unlock()
+			o.terminalOnce.Do(func() { close(o.terminal) })
+		default:
+		}
+	}()
+}
+
+// Terminal closes when message storage failed and the running command must stop.
+func (o *connectionOwner) Terminal() <-chan struct{} { return o.terminal }
 
 func (o *connectionOwner) storageFault(gen *genState) {
 	o.mu.Lock()
@@ -392,6 +437,10 @@ func (o *connectionOwner) dispatch(epoch uint64, ev SessionEvent) {
 			o.phase = PhaseDisconnected
 		}
 	case SessionManualLoginReconnect:
+	case SessionReceiveOverload:
+		if r, ok := gen.handle.(interface{ ReceiveOverload() string }); ok {
+			o.health.ReceiveOverload = r.ReceiveOverload()
+		}
 	}
 	o.publishLocked()
 	o.mu.Unlock()
@@ -628,14 +677,19 @@ func (o *connectionOwner) checkQuiet(gen *genState, deadline time.Duration) {
 		o.health.QuietPassed = true
 	}
 	o.mu.Unlock()
+	if res.DroppedMessages > 0 {
+		o.log.Warn("messages were left unacknowledged at the stop; messages may be missing", "event", "messages_dropped",
+			"epoch", gen.epoch, "dropped_messages", res.DroppedMessages)
+	}
 	if res.Passed {
-		o.log.Info("quiet stop passed", "event", "quiet_stop_passed", "epoch", gen.epoch, "duration_ms", res.Duration.Milliseconds())
+		o.log.Info("quiet stop passed", "event", "quiet_stop_passed", "epoch", gen.epoch, "duration_ms", res.Duration.Milliseconds(),
+			"dropped_messages", res.DroppedMessages)
 		return
 	}
 	o.log.Error("quiet stop failed; offline recovery is required", "event", "quiet_stop_failed", "epoch", gen.epoch,
 		"reason", string(res.Reason), "library_goroutines", res.LibraryGoroutines, "network_refused", res.NetworkRefused,
 		"storage_refused", res.StorageRefused, "calls_refused", res.CallsRefused, "events_dropped", res.EventsDropped,
-		"duration_ms", res.Duration.Milliseconds())
+		"dropped_messages", res.DroppedMessages, "duration_ms", res.Duration.Milliseconds())
 }
 
 // markRetiringLocked starts the generation's storage refusal count. It takes no lock of its own (an atomic
@@ -691,9 +745,24 @@ func (o *connectionOwner) retireGeneration(gen *genState, deadline time.Duration
 		o.mu.Unlock()
 		gen.workCancel()
 		o.traceStep("work_cancelled")
+		ingest, hasIngest := gen.handle.(interface {
+			StopIngest()
+			WaitIngest(context.Context) error
+		})
+		if hasIngest {
+			ingest.StopIngest()
+			o.traceStep("ingest_stopped")
+		}
+		// Ingest gets a bounded wait beside the repair pass; whatever still runs is joined after the barrier.
+		ingestCtx, ingestCancel := context.WithTimeout(context.Background(), ingestWorkerWait)
 		if repairDone != nil {
 			<-repairDone
 		}
+		if hasIngest {
+			_ = ingest.WaitIngest(ingestCtx)
+			o.traceStep("ingest_waited")
+		}
+		ingestCancel()
 		// The barrier waits for admitted calls, which a pinned handler may still be finishing. A drain that does
 		// not finish inside its bound is the forced path: the library context is released so those calls fail,
 		// and the stop is unsafe.
@@ -1124,6 +1193,7 @@ func (o *connectionOwner) runPostPairHandover(pairGen *genState) {
 	o.publishLocked()
 	o.mu.Unlock()
 	o.watchStorageFault(fresh)
+	o.watchIngestFailure(fresh)
 	if o.cfg.afterPostPairPublish != nil {
 		o.cfg.afterPostPairPublish()
 	}

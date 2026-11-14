@@ -1,16 +1,28 @@
 package wa
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"os"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/tiger-seo/whatsapp-mcp/internal/store"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/types"
+	"google.golang.org/protobuf/proto"
 )
 
 // The owner logs at every level, including debug. These tests drive hostile synthetic material
@@ -188,4 +200,138 @@ func TestQRCodeFloodKeepsOnlyTheCurrentCode(t *testing.T) {
 		}
 		stopInBubble(t, ot)
 	})
+}
+
+// Ingest handles content other accounts wrote. Text and captions may appear in a log only at debug; media keys,
+// hashes, URLs and direct paths never; names never above debug; and nothing reaches stdout, which is the protocol
+// channel in stdio mode.
+
+const (
+	secretText    = "SECRET-TEXT-8c1f"
+	secretCaption = "SECRET-CAPTION-3d7a"
+	secretPush    = "Secret Pushy Name"
+	secretSubject = "Secret Group Subject"
+)
+
+// captureStdout returns what fn wrote to the process's standard output.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	done := make(chan string)
+	go func() { b, _ := io.ReadAll(r); done <- string(b) }()
+	func() {
+		defer func() { os.Stdout = orig; w.Close() }()
+		fn()
+	}()
+	return <-done
+}
+
+// logScenario runs one fixed set of hostile and ordinary events through ingest with a text logger at level and
+// returns everything it logged and everything it wrote to stdout.
+func logScenario(t *testing.T, level slog.Level) (logged, stdout string) {
+	t.Helper()
+	var buf bytes.Buffer
+	var mu sync.Mutex
+	w := writerFunc(func(p []byte) (int, error) { mu.Lock(); defer mu.Unlock(); return buf.Write(p) })
+	f := &faultyStore{}
+	r := newIngestRig(t, withFaultyStore(f), func(cfg *IngestConfig) {
+		cfg.Log = slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level}))
+	})
+	r.client.group = func(context.Context, types.JID) (*types.GroupInfo, error) { return groupInfo(secretSubject), nil }
+	stdout = captureStdout(t, func() {
+		handle(t, r, nameEvent("S1", peerJID(), peerJID(), secretPush, 0))
+		text := liveEvent("S2", &waE2E.Message{Conversation: proto.String(secretText)})
+		handle(t, r, text)
+		handle(t, r, liveEvent("S3", imageMessage(secretCaption)))
+		handle(t, r, nameEvent("S4", groupJID(), peerJID(), secretPush, 1))
+		waitFor(t, func() bool { n, _, _ := chatNameOf(t, r.st, groupJID().String()); return n == secretSubject })
+		// A rejected message and a history notification that cannot be downloaded.
+		handle(t, r, liveEvent("S5", &waE2E.Message{Conversation: proto.String(secretText + strings.Repeat("x", 256<<10))}))
+		handle(t, r, historyNotice(1))
+		waitFor(t, func() bool { return r.in.Counters().HistoryIncomplete == 1 })
+		// A failed write ends in a warning.
+		f.setErr(fmt.Errorf("synthetic: %w", store.ErrDiskLow))
+		r.in.HandleMessage(liveEvent("S6", &waE2E.Message{Conversation: proto.String(secretText)}))
+		r.in.Stop()
+		r.in.logStopped(0)
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	return buf.String(), stdout
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
+func TestIngestLogsKeepContentAtDebugAndNeverLogMediaMaterial(t *testing.T) {
+	var never []string
+	for _, b := range [][]byte{key32(1), key32(2), key32(3)} {
+		never = append(never, string(b), hex.EncodeToString(b), base64.StdEncoding.EncodeToString(b),
+			base64.URLEncoding.EncodeToString(b), base64.RawStdEncoding.EncodeToString(b), fmt.Sprint(b), fmt.Sprintf("%x", b))
+	}
+	never = append(never, "mmg.example", "https://", "/v/i")
+	for _, c := range []struct {
+		name  string
+		level slog.Level
+	}{{"debug", slog.LevelDebug}, {"info", slog.LevelInfo}} {
+		t.Run(c.name, func(t *testing.T) {
+			logged, stdout := logScenario(t, c.level)
+			if stdout != "" {
+				t.Errorf("ingest wrote %d bytes to stdout", len(stdout))
+			}
+			for _, needle := range never {
+				if strings.Contains(logged, needle) {
+					t.Errorf("a log line carries media material %q", needle)
+				}
+			}
+			for _, needle := range []string{secretPush, secretSubject} {
+				if c.level > slog.LevelDebug && strings.Contains(logged, needle) {
+					t.Errorf("a name appears above debug: %q", needle)
+				}
+			}
+			hasText := strings.Contains(logged, secretText) && strings.Contains(logged, secretCaption)
+			if c.level == slog.LevelDebug && !hasText {
+				t.Errorf("debug shows no text or caption: the check would prove nothing: %s", logged)
+			}
+			if c.level > slog.LevelDebug && (strings.Contains(logged, secretText) || strings.Contains(logged, secretCaption)) {
+				t.Errorf("text or a caption appears above debug")
+			}
+			// The scenario must have reached the warnings it is meant to cover.
+			for _, want := range []string{"event=history_incomplete", "event=ingest_failed", "event=ingest_stopped"} {
+				if !strings.Contains(logged, want) {
+					t.Errorf("no %s record: the scenario did not reach it", want)
+				}
+			}
+		})
+	}
+}
+
+// A JID or ID another account chose is written quoted, so it cannot add a field or end the record.
+func TestIngestLogsEscapeAttackerChosenIdentifiers(t *testing.T) {
+	f := &faultyStore{}
+	r := newIngestRig(t, withFaultyStore(f))
+	f.setErr(fmt.Errorf("synthetic: %w", store.ErrDiskLow))
+	id := `a b" event=ingest_stopped x=`
+	if r.in.HandleMessage(liveEvent(id, &waE2E.Message{Conversation: proto.String("hello")})) {
+		t.Fatal("a failed write was acknowledged")
+	}
+	ev := r.logs.events("ingest_failed")
+	if len(ev) != 1 {
+		t.Fatalf("ingest_failed records = %v", ev)
+	}
+	if got, want := ev[0]["message_id"], strconv.QuoteToASCII(id); got != want {
+		t.Errorf("message_id = %s, want the quoted form %s", got, want)
+	}
+	if got, want := ev[0]["chat"], strconv.QuoteToASCII(peerJID().String()); got != want {
+		t.Errorf("chat = %s, want %s", got, want)
+	}
+	if n := len(r.logs.events("ingest_stopped")); n != 0 {
+		t.Errorf("a forged ingest_stopped record appeared: %d", n)
+	}
 }

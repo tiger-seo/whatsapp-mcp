@@ -142,10 +142,10 @@ func runWith(t *testing.T, dir string, body func(context.Context, *lifecycle, *s
 	var stderr bytes.Buffer
 	s := &streams{stdin: strings.NewReader(""), stdout: &bytes.Buffer{}, stderr: &stderr}
 	cmd := &command{name: "stdio", flags: true}
-	code := runShell("stdio", cmd, []string{"--data-dir", dir}, s, func(ctx context.Context, lc *lifecycle, logger *slog.Logger, st *store.Store, s *streams) bool {
+	code := runShell("stdio", cmd, []string{"--data-dir", dir}, s, func(ctx context.Context, lc *lifecycle, logger *slog.Logger, st *store.Store, s *streams, _ *wa.LIDCursor) (*ownerHandle, bool) {
 		body(ctx, lc, logger, st)
 		<-lc.ctx.Done()
-		return false
+		return nil, false
 	})
 	return code, stderr.String()
 }
@@ -534,24 +534,27 @@ func TestShellSavedSessionOutdatedHandoff(t *testing.T) {
 	for _, kind := range []string{"serve", "stdio"} {
 		t.Run(kind, func(t *testing.T) {
 			dir := privateDir(t)
-			var fs *fakeWaSession
+			// The factory runs on the owner's goroutine while this one polls, so the session is shared atomically.
+			var fsp atomic.Pointer[fakeWaSession]
 			withFakeOwnerSeam(t, func(cfg wa.SessionConfig) *fakeWaSession {
-				fs = &fakeWaSession{identity: true, failFirst: 1, connectErr: errors.New("synthetic refusal")}
+				fs := &fakeWaSession{identity: true, failFirst: 1, connectErr: errors.New("synthetic refusal")}
+				fsp.Store(fs)
 				return fs
 			})
 			signals := make(chan os.Signal, 2)
 			stdin := blockingReader{closed: make(chan struct{})}
 			pr := startShellStdin(t, kind, signals, stdin, nil, "--data-dir", dir)
 			connects := func() int {
-				if fs == nil {
-					return 0
+				if fs := fsp.Load(); fs != nil {
+					return fs.connects()
 				}
-				return fs.connects()
+				return 0
 			}
 			deadline := time.Now().Add(10 * time.Second)
 			for connects() < 1 && time.Now().Before(deadline) {
 				time.Sleep(20 * time.Millisecond)
 			}
+			fs := fsp.Load()
 			if fs == nil {
 				t.Fatal("the shell never created its generation")
 			}

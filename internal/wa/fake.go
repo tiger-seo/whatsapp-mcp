@@ -232,6 +232,9 @@ func (f *Fake) StopError() error {
 }
 func (f *Fake) Snapshot() Status { f.mu.Lock(); defer f.mu.Unlock(); return f.fixtures.Status }
 func (f *Fake) Health() Health   { f.mu.Lock(); defer f.mu.Unlock(); return f.fixtures.Health }
+
+// Terminal never closes: the fake stores no messages.
+func (f *Fake) Terminal() <-chan struct{} { return nil }
 func (f *Fake) RequestPairing(ctx context.Context) (PairingState, error) {
 	if err := ctx.Err(); err != nil {
 		return PairingState{}, err

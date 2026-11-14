@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 )
 
@@ -175,4 +177,65 @@ func equalContacts(a, b []Contact) bool {
 		}
 	}
 	return true
+}
+
+func TestContactNames(t *testing.T) {
+	st, _ := openTest(t, newDataDir(t))
+	ctx := t.Context()
+
+	// Without a device there are no names.
+	if saved, real, err := st.ContactNames(ctx, phoneJID("491511000001")); err != nil || saved != "" || real != "" {
+		t.Errorf("no device = %q, %q, %v", saved, real, err)
+	}
+
+	dev := seedDevice(t, st)
+	seedContacts(t, dev,
+		contactSeed{jid: phoneJID("491511000001"), full: "Alice Smith", first: "Alice", push: "Ali", business: "Ali Co"},
+		contactSeed{jid: phoneJID("491511000002"), first: "Bob"},
+		contactSeed{jid: phoneJID("491511000003"), business: "Carl Co"},
+		contactSeed{jid: lidJID("700000000004"), push: "Dana"},
+	)
+	for _, c := range []struct{ jid, saved, real string }{
+		{phoneJID("491511000001"), "Alice Smith", "Ali"},
+		{phoneJID("491511000002"), "Bob", ""},
+		{phoneJID("491511000003"), "", "Carl Co"},
+		{lidJID("700000000004"), "", "Dana"},
+		{phoneJID("491511000009"), "", ""},
+	} {
+		saved, real, err := st.ContactNames(ctx, c.jid)
+		if err != nil || saved != c.saved || real != c.real {
+			t.Errorf("ContactNames(%s) = %q, %q, %v; want %q, %q", c.jid, saved, real, err, c.saved, c.real)
+		}
+	}
+
+	// Another device's row is never read.
+	conn, err := st.writer.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		"PRAGMA foreign_keys = OFF",
+		"INSERT INTO whatsmeow_contacts (our_jid, their_jid, full_name, push_name) VALUES ('1@s.whatsapp.net', '491511000005@s.whatsapp.net', 'Other', 'Other')",
+		"PRAGMA foreign_keys = ON",
+	} {
+		if _, err := conn.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	conn.Close()
+	if saved, real, err := st.ContactNames(ctx, phoneJID("491511000005")); err != nil || saved != "" || real != "" {
+		t.Errorf("another device's row = %q, %q, %v; want nothing", saved, real, err)
+	}
+
+	// A name over 1 KiB in the device table is a resource limit, never truncated.
+	long := strings.Repeat("n", maxNameBytes+1)
+	if _, err := st.writer.Exec("UPDATE whatsmeow_contacts SET push_name = ? WHERE their_jid = ?", long, lidJID("700000000004")); err != nil {
+		t.Fatal(err)
+	}
+	if saved, real, err := st.ContactNames(ctx, lidJID("700000000004")); !errors.Is(err, ErrResourceLimit) || saved != "" || real != "" {
+		t.Errorf("1 KiB + 1 = %q, %d bytes, %v; want ErrResourceLimit", saved, len(real), err)
+	}
+	if _, _, err := st.ContactNames(ctx, "not a jid"); !errors.Is(err, ErrInvalid) {
+		t.Errorf("invalid JID: %v, want ErrInvalid", err)
+	}
 }

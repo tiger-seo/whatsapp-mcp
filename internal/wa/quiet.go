@@ -37,6 +37,9 @@ type QuietStopResult struct {
 	CallsRefused      uint64
 	EventsDropped     uint64
 	Duration          time.Duration
+	// DroppedMessages counts message events left unacknowledged during or after retirement. They may be missing
+	// from the store and are reported; they never make Passed false.
+	DroppedMessages uint64
 }
 
 const (
