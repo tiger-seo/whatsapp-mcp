@@ -478,6 +478,21 @@ lines, 0 `FAIL`); each pair run covers both of its checks. No kind is lower than
 | design | 2026-11-13 | 1b1d91f | CONCERNS | Fix all and review again (2026-11-13): placeholder gated in the fork (`bedcf01`), roadmap history check kept; fixed at 84dfa32 |
 | design | 2026-11-13 | 84dfa32 | PASS | |
 | design | 2026-11-13 | a040210 | PASS | |
+| code | 2026-11-14 | 0ccc59b | PASS | |
+
+Code review (2026-11-14, commit `0ccc59b`, last code change `e67fdf5`): PASS, no blocking finding. It traced every return
+path of `HandleMessage` (no acknowledgement without storage), the stop order, the read/write flags of the new store
+reads, worker admission, and every bound, and ran its own targeted tests and the five cross-builds. Four low findings,
+none fixed yet, each needing a short re-review because they touch reviewed files; the owner decides whether to fix
+them before the pull request:
+
+- `OPERATIONS.md` "Message ingest" still says nothing was verified on a real account and that the WSL2 race run is
+  pending, and implies CI ran; it also omits the `invalid` and `context` error classes of `ingest_failed`.
+- `cmd/whatsapp-mcp/commands.go`: a stop signal during a long startup LID reconciliation ends in exit 1 with an error
+  message instead of a clean stop (no check of the stop context before the owner starts). No data at risk; not run.
+- `internal/wa/ingest_names.go`, `ingest_history.go`: a name offer made outside the ingest lock can recreate an empty LID
+  chat row after a run-time merge, until the next startup reconciliation removes it. Narrow window; not reproduced.
+- `internal/wa/ingest.go`: the ingest lock is released without `defer` on the live path (hardening only).
 
 ## US4 tests and implementation (T044–T046)
 
