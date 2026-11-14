@@ -89,6 +89,7 @@ All are ordinary store operations: admission, the 10 s limit, `ErrClosed` after 
 | History worker | 1 goroutine; one decoded history at a time (≤ 128 MiB expanded, fork limit) | – |
 | History flush | 250 messages or 4 MiB of field bytes (*proposed*), ingest lock released between flushes | the batch is cut early |
 | Name cache | 4,096 chats, least recently used (*proposed*) | the oldest entry is forgotten; the next miss reads the store again |
+| Contact re-read queue | 4,096 chats (the name cache's size), each queued once; at most 3 re-reads per chat, 60 s, 5 min and 30 min after the previous read; at most 8 chats re-read per live message or history flush; no goroutine | a chat is dropped, not queued, when the queue is full; its name stays until the next start |
 | Group lookup set | 64 distinct groups (*proposed*); 1 worker; 10 s per lookup (*proposed*) | the request is dropped and counted; the fallback name stays |
 | Failed-lookup cache | 1,024 groups (*proposed*), entries expire after 10 min (*proposed*) | the oldest entry is forgotten; that group may be asked again sooner |
 | LID hint set | 1,024 LIDs (*proposed*); 1 worker; 5 attempts 1 s apart (*proposed*) | the hint is dropped and counted; startup reconciles it |

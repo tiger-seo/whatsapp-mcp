@@ -848,3 +848,18 @@ empty data directory `D:\tmp\wa-005-real2`. The owner ran `pair` and `serve`; ev
 - **Cleanup (done 2026-11-14)**: the owner unlinked the second device; the data directory of this run and the two read-only
   inspection copies were deleted and the deletion was checked. The owner chose to fix the early contact read (option B:
   re-read the contact table later for chats below the saved quality); it is not yet implemented.
+
+## Late contact names (option B), 2026-11-14
+
+Tests first, on `91d613a` plus the new tests (`internal/wa/ingest_names_recheck_test.go`) with empty stubs for the new
+functions, `CGO_ENABLED=0`, Windows 10: `go test ./internal/wa -run TestIngestName -count=1` exit 1, expected failures:
+
+- `TestIngestNameLateSavedNameIsOfferedAfterTheDelay`: "contact reads after 61 s = 1, want 2"; "stored name = Pushy (2), want Mum at saved".
+- `TestIngestNameChatWithoutASavedNameIsRecheckedThreeTimesAtMost`: "step 1: contact reads = 1, want 2".
+- `TestIngestNameRecheckTakesAFewChatsPerCall`: "contact reads in one call = 0, want 8".
+- `TestIngestNameRecheckQueueIsBoundedAndHoldsAChatOnce`: "recheck queue = 0, want the cap 4096".
+- `TestIngestNameRecheckNeverHoldsTheIngestLock` and `TestIngestNameLateSavedNameIsOfferedAfterAHistoryFlush`: the stored name stays the number.
+
+After the implementation (`internal/wa/ingest_names.go`: a bounded queue, 3 re-reads at 60 s, 5 min and 30 min, 8 chats per
+message or flush, no goroutine, no lock held during the reads): `go test ./internal/wa -run TestIngest -count=1` exit 0 (22.6 s).
+`contracts/ingest.md` (step 6) and `data-model.md` (state table) are updated. The full gates follow on the final commit.

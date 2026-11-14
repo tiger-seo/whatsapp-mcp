@@ -72,6 +72,13 @@ func (in *ingest) Counters() IngestCounters
 6. Offer the chat name (R12): cached comparison first (a miss reads `ChatName` once), at most one `UpdateChat` when the offer is better; a group
    without a usable name goes to the lookup set. A failed name write is terminal like a failed message write
    (`ingest_failed` with operation `name`), but the message itself is already stored, so return `true`.
+   *Late contact names*: the contact table is read once per direct chat when the chat is first named, but the device's
+   contact sync can store saved names after that (about a second after connecting is too early). A direct chat whose first
+   read found no saved name is queued for a re-read 60 s after that read; after every live message and every history flush
+   (outside the ingest lock, on the calling goroutine, no new goroutine) up to 8 due chats are re-read, and a saved name
+   (else a real one) better than the known name is offered through the same `ExistingOnly` update. A chat still without a
+   saved name is queued again at 5 min and at 30 min after the previous read, then never again in the generation. A chat no
+   longer in the name cache, or already at the saved quality, is dropped. A failed name write is terminal as above.
 7. Call `Live` if set. Return `true`.
 
 ### History worker
@@ -82,8 +89,8 @@ the parsed ID differs from `webMsg.Key.ID`, then steps 3–4 above; add to the b
 under the ingest lock, after the same re-lookup of the flush's distinct unmapped LIDs under one 2 s deadline, and
 the lock is released
 between flushes so a waiting live write goes first. After each flush, outside the lock, every distinct chat of the
-batch is named as a live message would name it (step 6: stored name read once, contact table once, best better
-name, a group without a name gets `Group <id>` and a lookup request), and the offers of the batch go to the store in
+batch is named as a live message would name it (step 6: stored name read once, contact table once and re-read later as
+described there, best better name, a group without a name gets `Group <id>` and a lookup request), and the offers of the batch go to the store in
 one `UpdateChats`; a failure is terminal with operation `name`. At `Stop`, every notification still queued is reported as
 `history_incomplete` (`stopped`). Checkpoints (where `Stop` is observed): before each download, between conversations, before
 each flush. A store error is terminal and reports the chunk and the messages committed from it. History never calls

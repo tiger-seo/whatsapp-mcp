@@ -26,7 +26,13 @@ const (
 	// many such groups are remembered; the oldest goes first.
 	failureTTL       = 10 * time.Minute
 	failureCacheSize = 1024
+	// recheckPerCall is how many due chats one message or one history flush re-reads from the contact table.
+	recheckPerCall = 8
 )
+
+// recheckDelays are the waits before the first, second and third re-read of a direct chat's contact names, counted
+// from the previous read. A chat still below the saved name after the third is not read again in this generation.
+var recheckDelays = [...]time.Duration{time.Minute, 5 * time.Minute, 30 * time.Minute}
 
 // nameEntry is what ingest knows of one chat's stored name. contactChecked, saved and real hold the device
 // contact table's names, read once per chat per generation, and readAt when they were read.
@@ -54,6 +60,19 @@ type nameState struct {
 	started    bool
 	workers    int
 	pendingMax int
+
+	// recheck holds, per attempt, the chats whose contact names are due for a re-read, oldest due first (a delay is
+	// the same for every chat of an attempt); recheckSet holds each queued chat once. Together they hold at most
+	// nameCacheSize chats.
+	recheck    [len(recheckDelays)][]recheckItem
+	recheckSet map[string]struct{}
+}
+
+// recheckItem is one chat waiting for its attempt'th re-read of the contact table.
+type recheckItem struct {
+	jid     string
+	attempt int
+	due     time.Time
 }
 
 func (n *nameState) init() {
@@ -63,6 +82,7 @@ func (n *nameState) init() {
 		n.failures = newFailureCache()
 		n.pending = map[string]struct{}{}
 		n.queue = make(chan string, groupLookupSetSize)
+		n.recheckSet = map[string]struct{}{}
 	}
 }
 
@@ -200,7 +220,7 @@ func (in *ingest) offerName(evt *events.Message, m store.Message) bool {
 	if plan.lookup {
 		in.requestGroupLookup(m.ChatJID)
 	}
-	return true
+	return in.recheckNames()
 }
 
 // offerHistoryNames gives every chat of a committed history batch the same naming as a live message: the stored
@@ -234,7 +254,7 @@ func (in *ingest) offerHistoryNames(chats map[string]time.Time) bool {
 	for _, chat := range lookups {
 		in.requestGroupLookup(chat)
 	}
-	return true
+	return in.recheckNames()
 }
 
 // planName decides the name offer for a chat: it reads the stored name and, for a direct chat, the contact table,
@@ -265,18 +285,16 @@ func (in *ingest) planName(chat, push string, msgTime time.Time) (namePlan, bool
 // name, then the JID's user part.
 func (in *ingest) planDirectName(ent nameEntry, push string, msgTime time.Time) (namePlan, bool) {
 	if !ent.contactChecked {
-		saved, real, err := in.st.ContactNames(in.cfg.Lib, ent.jid)
-		switch {
-		case err == nil:
-		case errors.Is(err, store.ErrResourceLimit), errors.Is(err, store.ErrInvalid):
-			// A contact name the store will not take is no name.
-			saved, real = "", ""
-		default:
-			in.fail("name", err, "chat", escapeLog(ent.jid))
+		saved, real, ok := in.readContactNames(ent.jid)
+		if !ok {
 			return namePlan{}, false
 		}
-		ent.contactChecked, ent.saved, ent.real, ent.readAt = true, usableName(saved), usableName(real), msTime(in.now())
+		ent.contactChecked, ent.saved, ent.real, ent.readAt = true, saved, real, msTime(in.now())
 		in.nm.put(ent)
+		if saved == "" {
+			// The device's contact sync may store the saved name later.
+			in.queueRecheck(ent.jid, 0, ent.readAt.Add(recheckDelays[0]))
+		}
 	}
 	var name string
 	var q store.NameQuality
@@ -407,4 +425,100 @@ func (in *ingest) lookupGroup(jid string) {
 	in.nm.init()
 	in.nm.failures.add(jid, in.now())
 	in.nm.mu.Unlock()
+}
+
+// readContactNames reads a chat's saved and real contact names, "" for one the store will not take. It reports false
+// when a store error made ingest terminal.
+func (in *ingest) readContactNames(jid string) (saved, real string, ok bool) {
+	saved, real, err := in.st.ContactNames(in.cfg.Lib, jid)
+	switch {
+	case err == nil:
+	case errors.Is(err, store.ErrResourceLimit), errors.Is(err, store.ErrInvalid):
+		// A contact name the store will not take is no name.
+		return "", "", true
+	default:
+		in.fail("name", err, "chat", escapeLog(jid))
+		return "", "", false
+	}
+	return usableName(saved), usableName(real), true
+}
+
+func (n *nameState) recheckLen() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return len(n.recheckSet)
+}
+
+// queueRecheck queues a direct chat for its attempt'th contact table re-read at due. A chat already queued, an
+// attempt beyond the last and a full queue are dropped.
+func (in *ingest) queueRecheck(jid string, attempt int, due time.Time) {
+	n := &in.nm
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.init()
+	if attempt < 0 || attempt >= len(recheckDelays) || len(n.recheckSet) >= nameCacheSize {
+		return
+	}
+	if _, ok := n.recheckSet[jid]; ok {
+		return
+	}
+	n.recheckSet[jid] = struct{}{}
+	n.recheck[attempt] = append(n.recheck[attempt], recheckItem{jid: jid, attempt: attempt, due: due})
+}
+
+// takeDue removes and returns up to limit queued chats that are due at now.
+func (n *nameState) takeDue(now time.Time, limit int) []recheckItem {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.init()
+	var out []recheckItem
+	for a := range n.recheck {
+		q := n.recheck[a]
+		for len(q) > 0 && len(out) < limit && !q[0].due.After(now) {
+			out = append(out, q[0])
+			delete(n.recheckSet, q[0].jid)
+			q = q[1:]
+		}
+		if len(q) == 0 {
+			q = nil // release the backing array
+		}
+		n.recheck[a] = q
+	}
+	return out
+}
+
+// recheckNames re-reads the contact table for up to recheckPerCall due chats whose name is below the saved quality
+// and offers a better name through the normal name write. It runs after a live message or a history flush, holds no
+// lock during the reads and starts no goroutine. It reports false when a store error made ingest terminal.
+func (in *ingest) recheckNames() bool {
+	for _, it := range in.nm.takeDue(in.now(), recheckPerCall) {
+		if !in.recheckOne(it) {
+			return false
+		}
+	}
+	return true
+}
+
+func (in *ingest) recheckOne(it recheckItem) bool {
+	ent, ok := in.nm.get(it.jid)
+	if !ok || ent.quality >= store.NameSaved {
+		return true // forgotten, or already as good as a contact can make it
+	}
+	saved, real, ok := in.readContactNames(it.jid)
+	if !ok {
+		return false
+	}
+	ent.contactChecked, ent.saved, ent.real, ent.readAt = true, saved, real, msTime(in.now())
+	in.nm.put(ent)
+	name, q := saved, store.NameSaved
+	if saved == "" {
+		name, q = real, store.NameReal
+	}
+	if better(ent, name, q, ent.readAt) && !in.writeName(ent.jid, name, q, ent.readAt) {
+		return false
+	}
+	if saved == "" {
+		in.queueRecheck(it.jid, it.attempt+1, ent.readAt.Add(recheckDelays[min(it.attempt+1, len(recheckDelays)-1)]))
+	}
+	return true
 }

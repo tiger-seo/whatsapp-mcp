@@ -23,13 +23,14 @@ import (
 // every name read counted.
 type nameStore struct {
 	ingestStore
-	mu         sync.Mutex
-	contacts   map[string][2]string // jid -> saved, real
-	noMessages bool                 // message writes succeed without reaching the store
-	updateErr  error                // returned by every chat update while set
-	chatReads  map[string]int
-	contactRds map[string]int
-	updates    []store.ChatUpdate
+	mu          sync.Mutex
+	contacts    map[string][2]string // jid -> saved, real
+	noMessages  bool                 // message writes succeed without reaching the store
+	updateErr   error                // returned by every chat update while set
+	chatReads   map[string]int
+	contactRds  map[string]int
+	updates     []store.ChatUpdate
+	contactHook func() // runs inside every contact table read
 }
 
 func (n *nameStore) ChatName(ctx context.Context, jid string) (string, store.NameQuality, time.Time, bool, error) {
@@ -45,7 +46,19 @@ func (n *nameStore) ChatName(ctx context.Context, jid string) (string, store.Nam
 	return n.ingestStore.ChatName(ctx, jid)
 }
 
+func (n *nameStore) setContact(jid, saved, real string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.contacts == nil {
+		n.contacts = map[string][2]string{}
+	}
+	n.contacts[jid] = [2]string{saved, real}
+}
+
 func (n *nameStore) ContactNames(_ context.Context, jid string) (string, string, error) {
+	if n.contactHook != nil {
+		n.contactHook()
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.contactRds == nil {
