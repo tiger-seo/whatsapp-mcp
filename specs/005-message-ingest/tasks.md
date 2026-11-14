@@ -428,7 +428,7 @@ provider while ingesting repeated messages.
   golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...`, and `go vet`, `go test` and the build of
   `./internal/wa/testdata/cmd/session-check`. Confirm `go.mod` and `go.sum` still pin `bedcf01` and are unchanged since
   the commit that pinned it (`git log -1 --format=%h -- go.mod`, then `git diff <that> -- go.mod go.sum`). Keep `TEMP` and `TMP` on `D:\tmp`.
-- [ ] T054 Run the race detector again in WSL2 on `./internal/wa ./cmd/...` (quickstart §6, `MSYS_NO_PATHCONV=1`) and
+- [X] T054 Run the race detector again in WSL2 on `./internal/wa ./cmd/...` (quickstart §6, `MSYS_NO_PATHCONV=1`) and
   the whole suite under WSL2 with `CGO_ENABLED=0` as in `AGENTS.md`; record both as WSL2. Push the branch for CI only
   if the user asks; anything not run is "not verified".
 - [X] T055 Check LF endings with `git ls-files --eol`; no tracked file shows `w/crlf`.

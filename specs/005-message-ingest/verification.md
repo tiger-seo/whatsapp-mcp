@@ -631,7 +631,7 @@ was written by the command itself into a file (no pipe), and the first line of e
 - **Line endings (T055)**: `git ls-files --eol` lists 302 tracked files, all `w/lf`; none shows `w/crlf`.
 - Not covered by this run: the race detector and native Linux or macOS test runs (T054, and CI on push).
 
-## WSL2 race and suite runs (T054), in progress
+## WSL2 race and suite runs (T054)
 
 2026-11-14, WSL2 Ubuntu, Go 1.27.4 linux/amd64, gcc 15.2, `TMPDIR=/var/tmp`, results are WSL2, not native Linux.
 
@@ -649,5 +649,10 @@ was written by the command itself into a file (no pipe), and the first line of e
   tests the WSL root file system became read-only (`TempDir: mkdir /var/tmp/...: read-only file system`; later
   `df`: "Input/output error"), so the rest of `store` and the builds of `wa`, `walog` and `wasim` failed on the file
   system, not on the code. `cmd`, `buildinfo`, `config`, `lock` and `private` passed before it.
-- **Still to do**: restore the WSL file system, then rerun the race command and the suite. Until then T054 is not
-  verified.
+- **Final runs**, 2026-11-14, after the WSL VM was restarted (`/` writable, 951 GB available), commit `4d95554`:
+  `CGO_ENABLED=1 go test -race ./internal/wa ./cmd/... -count=1 -timeout 40m`: exit 0 (wa 217.1 s, cmd 230.5 s),
+  0 data races. `CGO_ENABLED=0 go test -p 1 ./... -count=1 -timeout 60m`: exit 0 (cmd 114.4 s, store 227.6 s, wa 55.2 s,
+  wasim 3.2 s; every package ok). Both are WSL2 results, not native Linux. Exit codes were written by the commands
+  themselves. The cause of the file system turning read-only was not established; the VM's virtual disk grows on a
+  Windows drive with little free space, which is the likeliest reason and is not confirmed.
+- No push to CI was made (only on the owner's request).
