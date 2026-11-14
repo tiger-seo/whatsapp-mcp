@@ -344,6 +344,13 @@ func startSavedRun(t *testing.T, ctx context.Context) (*connectionOwner, *genSta
 // startSavedRunWith also takes a retirement trace and returns the data directory and the simulator.
 func startSavedRunWith(t *testing.T, ctx context.Context, trace func(string)) (*connectionOwner, *genState, *Session, *store.Store, string, *wasim.Server) {
 	t.Helper()
+	return startSavedRunWrapped(t, ctx, trace, nil)
+}
+
+// startSavedRunWrapped is startSavedRunWith with a wrapper around the store ingest writes to, put in place when the
+// session is built, so no worker of the session can be reading the field while a test changes it.
+func startSavedRunWrapped(t *testing.T, ctx context.Context, trace func(string), wrap func(ingestStore) ingestStore) (*connectionOwner, *genState, *Session, *store.Store, string, *wasim.Server) {
+	t.Helper()
 	dir := waDataDir(t)
 	st, err := store.Open(ctx, dir, nil)
 	if err != nil {
@@ -382,6 +389,7 @@ func startSavedRunWith(t *testing.T, ctx context.Context, trace func(string)) (*
 		Sessions: func(cfg SessionConfig) (SessionHandle, error) {
 			cfg.PreLoginHTTP = srv.Client()
 			cfg.WebsocketHTTP = srv.Client()
+			cfg.wrapIngestStore = wrap
 			return OpenSession(cfg)
 		},
 	})
@@ -583,15 +591,14 @@ func TestHistoryWorkerInsideTheLibraryIsJoinedAfterTheBarrier(t *testing.T) {
 	var gen *genState
 	entered, release := make(chan struct{}), make(chan struct{})
 	writeErr := make(chan error, 1)
-	o, g, s, _, _, _ := startSavedRunWith(t, ctx, func(step string) {
+	f := &faultyStore{}
+	o, g, s, _, _, _ := startSavedRunWrapped(t, ctx, func(step string) {
 		steps.add(step)
 		if step == "barrier_retired" {
 			close(release)
 		}
-	})
+	}, func(st ingestStore) ingestStore { f.ingestStore = st; return f })
 	sess, gen = s, g
-	f := &faultyStore{ingestStore: sess.ingest.st}
-	sess.ingest.st = f
 	sess.ingest.cfg.Client = &fakeIngestClient{own: ownJID(), download: func(ctx context.Context, _ *waE2E.HistorySyncNotification, _ bool) (*waHistorySync.HistorySync, error) {
 		close(entered)
 		<-release
