@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -213,4 +215,51 @@ func TestShellPassesTheReconcileCursorToTheOwner(t *testing.T) {
 func bufferLogger() (*slog.Logger, *syncBuffer) {
 	buf := &syncBuffer{}
 	return slog.New(slog.NewTextHandler(buf, nil)), buf
+}
+
+// A stop signal during a long startup reconciliation stops the command like a signal at any other point of the
+// start: no owner is started, no error is printed, and the exit is the clean one.
+func TestShellStopDuringReconciliationExitsCleanly(t *testing.T) {
+	for _, kind := range []string{"serve", "stdio"} {
+		t.Run(kind, func(t *testing.T) {
+			signals := make(chan os.Signal, 2)
+			withTestLifecycleSignals(t, signals)
+			started := make(chan struct{})
+			prevReconcile := startupReconcile
+			t.Cleanup(func() { startupReconcile = prevReconcile })
+			startupReconcile = func(ctx context.Context, _ wa.LIDMergeStore, _ *slog.Logger) *wa.LIDCursor {
+				close(started)
+				signals <- os.Interrupt
+				<-ctx.Done() // the pass ends with the stop, as a real one does at its budget
+				return &wa.LIDCursor{After: "100000000001@lid"}
+			}
+			ownerStarted := make(chan struct{}, 1)
+			prevOwner := newOwner
+			t.Cleanup(func() { newOwner = prevOwner })
+			newOwner = func(ownerDeps) (*ownerHandle, error) {
+				ownerStarted <- struct{}{}
+				return &ownerHandle{owner: newScriptedOwner()}, nil
+			}
+			stdin, keep := io.Pipe()
+			defer keep.Close()
+			r := startIngestShell(t, kind, stdin, privateDir(t))
+			code := r.wait(t)
+			select {
+			case <-started:
+			default:
+				t.Fatal("the reconciliation never ran")
+			}
+			if code != exitOK {
+				t.Errorf("exit code = %d, want %d after a stop signal\nstderr:\n%s", code, exitOK, r.stderr.String())
+			}
+			if strings.Contains(r.stderr.String(), "whatsapp-mcp: "+kind+":") {
+				t.Errorf("an error was printed for a stop signal:\n%s", r.stderr.String())
+			}
+			select {
+			case <-ownerStarted:
+				t.Error("the owner was started after the stop signal")
+			default:
+			}
+		})
+	}
 }

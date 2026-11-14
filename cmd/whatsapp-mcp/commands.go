@@ -547,6 +547,11 @@ func runShell(kind string, cmd *command, args []string, s *streams, body func(co
 	}
 	from := startupReconcile(budget, st, logger)
 	cancelBudget()
+	if lc.ctx.Err() != nil {
+		// A stop during the reconciliation stops the command like a stop at any other point of the start: the owner
+		// is not started with a cancelled context.
+		return lc.shutdown()
+	}
 	oh, failed := body(lc.ctx, lc, logger, st, s, from)
 	lc.requestStop("shell finished")
 	<-lc.ctx.Done()
