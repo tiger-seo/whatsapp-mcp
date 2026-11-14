@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 )
 
@@ -116,4 +117,37 @@ func touchChat(ctx context.Context, tx *sql.Tx, jid string, t int64) error {
 	_, err := tx.ExecContext(ctx,
 		"UPDATE chats SET last_message_time = max(coalesce(last_message_time, ?1), ?1) WHERE jid = ?2", t, jid)
 	return err
+}
+
+// ChatName returns a chat's stored name with its quality and observation time, so a caller can tell a better offer
+// from a worse one without writing. ok is false when the chat is missing or has no name. It only reads.
+func (s *Store) ChatName(ctx context.Context, jid string) (name string, quality NameQuality, at time.Time, ok bool, err error) {
+	parsed, err := parseChatJID("chat_jid", jid)
+	if err != nil {
+		return "", NameNone, time.Time{}, false, s.report(newOpID(), err)
+	}
+	err = s.snapshot(ctx, "ChatName", func(ctx context.Context, q querier) error {
+		var n string
+		var ql int
+		var ms sql.NullInt64
+		err := q.QueryRowContext(ctx, "SELECT name, name_quality, name_time FROM chats WHERE jid = ?", parsed.String()).Scan(&n, &ql, &ms)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if n == "" || ql == int(NameNone) {
+			return nil
+		}
+		name, quality, ok = n, NameQuality(ql), true
+		if ms.Valid {
+			at = time.UnixMilli(ms.Int64).UTC()
+		}
+		return nil
+	})
+	if err != nil {
+		return "", NameNone, time.Time{}, false, err
+	}
+	return name, quality, at, ok, nil
 }

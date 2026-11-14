@@ -174,6 +174,7 @@ func TestEveryMethodAfterClose(t *testing.T) {
 		"StoreMessages": st.StoreMessages(ctx, []Message{msg(alice, "A", alice, at(0))}),
 		"UpdateChats":   st.UpdateChats(ctx, []ChatUpdate{{JID: alice}}),
 		"MergeLID":      st.MergeLID(ctx, lidAlice, alice),
+		"ChatName":      chatNameErr(st, ctx),
 		"read":          st.read(ctx, "x", func(context.Context, *sql.Conn) error { return nil }),
 	} {
 		if !errors.Is(err, ErrClosed) {
@@ -217,4 +218,9 @@ func TestCloseCancelsALongOperation(t *testing.T) {
 	if err := st.StoreMessage(context.Background(), msg(alice, "after", alice, at(0))); !errors.Is(err, ErrClosed) {
 		t.Errorf("a call after the stop: %v, want ErrClosed", err)
 	}
+}
+
+func chatNameErr(st *Store, ctx context.Context) error {
+	_, _, _, _, err := st.ChatName(ctx, alice)
+	return err
 }
