@@ -209,22 +209,26 @@ func (in *ingest) flushHistory(c *historyChunk) bool {
 	if in.beforeWriteLock != nil {
 		in.beforeWriteLock()
 	}
-	in.lockForWorker()
-	in.relookup(c.batch, c.names)
-	err := in.st.StoreMessages(in.cfg.Lib, c.batch)
-	if err == nil {
+	err := func() error {
+		in.lockForWorker()
+		defer in.unlock()
+		in.relookup(c.batch, c.names)
+		err := in.st.StoreMessages(in.cfg.Lib, c.batch)
+		if err != nil {
+			return err
+		}
 		c.committed += len(c.batch)
 		in.stored.Add(uint64(len(c.batch)))
 		if len(c.names) > 0 {
-			err = in.st.UpdateChats(in.cfg.Lib, c.names)
-			if err == nil {
-				for _, u := range c.names {
-					in.nm.raise(u.JID, u.Name, u.NameQuality, msTime(u.NameTime))
-				}
+			if err := in.st.UpdateChats(in.cfg.Lib, c.names); err != nil {
+				return err
+			}
+			for _, u := range c.names {
+				in.nm.raise(u.JID, u.Name, u.NameQuality, msTime(u.NameTime))
 			}
 		}
-	}
-	in.unlock()
+		return nil
+	}()
 	var chats map[string]time.Time
 	if err == nil {
 		chats = chatsOf(c.batch)

@@ -197,12 +197,15 @@ func (in *ingest) HandleMessage(evt *events.Message) bool {
 	if in.beforeWriteLock != nil {
 		in.beforeWriteLock()
 	}
-	in.lockForLive()
-	batch := []store.Message{m}
-	in.relookup(batch, nil)
-	m = batch[0]
-	err := in.st.StoreMessage(in.cfg.Lib, m)
-	in.unlock()
+	err := func() error {
+		// The deferred release keeps a panic in a store call from leaving the one-slot lock taken.
+		in.lockForLive()
+		defer in.unlock()
+		batch := []store.Message{m}
+		in.relookup(batch, nil)
+		m = batch[0]
+		return in.st.StoreMessage(in.cfg.Lib, m)
+	}()
 	if err != nil {
 		in.fail("live", err, "chat", escapeLog(m.ChatJID), "message_id", escapeLog(m.ID))
 		return false

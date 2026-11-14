@@ -288,9 +288,11 @@ func (in *ingest) merge(lid, phone string) {
 	if in.stopping() {
 		return
 	}
-	in.lockForWorker()
-	err := in.st.MergeLID(in.cfg.Lib, lid, phone)
-	in.unlock()
+	err := func() error {
+		in.lockForWorker()
+		defer in.unlock()
+		return in.st.MergeLID(in.cfg.Lib, lid, phone)
+	}()
 	switch {
 	case err == nil:
 		in.merged.Add(1)
