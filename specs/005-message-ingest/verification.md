@@ -696,7 +696,9 @@ message text, name or JID is recorded.
   and no rejected message occurred. 47 events were ignored (not text or a supported media type). The live-message
   check from a LID-addressed contact was **not performed** (the owner's test messages went to their own chat), so a
   live LID-addressed message is not verified on a real account; 36 LID merges at run time were.
-- **Not yet run**: the cleanup (the owner unlinks the device on the phone, then the directory is deleted).
+- **Cleanup (done 2026-11-14)**: the owner unlinked the device on the phone; then the real-account data directory
+  (a lock file and `whatsapp.db`) and the two read-only copies made for the inspections were deleted and the deletion
+  was checked. Only redacted counts remain in this file. The binary built from `221a265` was kept.
 
 ## Naming chats that only history created (found by T056)
 
@@ -780,4 +782,4 @@ earlier runs. Each exit code was written by the command itself.
   real account.
 - The cause of 6 duplicate writes (306 writes, 300 rows) in the real `serve` run.
 - Native Linux and macOS test runs, CI, power loss, and long-run behaviour (memory and disk growth over days).
-- The T056 cleanup: the device is still linked and `D:\tmp\wa-005-real` still holds the real messages in clear text.
+- The T056 cleanup is done (device unlinked, data directory and inspection copies deleted).

@@ -36,8 +36,7 @@ No commit carries attribution lines.
 Resume point, 2026-11-14. Branch `005-message-ingest`. T001–T055 and T057's roll-up are done and committed; the code
 is at `e67fdf5` and all gates are green on it (Windows, WSL2 race and suite, pass rate 50 of 50 for every kind; see
 `verification.md` "Gates on the reviewed commit and roll-up"). T056 (real account) ran `pair` and `serve` and found and
-fixed one defect (history-only chats had no name); it stays open for its cleanup (the owner unlinks the device, then
-`D:\tmp\wa-005-real` is deleted) and for the checks listed as not verified. **Next: the owner-judge code review**, then
+fixed one defect (history-only chats had no name); its cleanup is done (device unlinked, data directory deleted); the checks listed as not verified stay not verified. **Next: the owner-judge code review**, then
 its row in "Owner reviews", then the pull request only if the owner asks.
 
 - **Design**: passed at `a040210` after four owner-judge rounds (BLOCK, CONCERNS, PASS, PASS; table in
@@ -433,7 +432,7 @@ provider while ingesting repeated messages.
   the whole suite under WSL2 with `CGO_ENABLED=0` as in `AGENTS.md`; record both as WSL2. Push the branch for CI only
   if the user asks; anything not run is "not verified".
 - [X] T055 Check LF endings with `git ls-files --eol`; no tracked file shows `w/crlf`.
-- [ ] T056 **Permitted real-account journey, only with the owner's explicit permission for each step** (quickstart §7),
+- [X] T056 **Permitted real-account journey, only with the owner's explicit permission for each step** (quickstart §7),
   after reviewing the roadmap's shutdown follow-up: a new directory under `D:\tmp`, the binary from a named commit,
   `pair`, recording its `history_incomplete` counts by reason, the history it stored and its `unavailable` count; then
   `serve`, recording its `unavailable` count and any
