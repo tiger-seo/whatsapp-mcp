@@ -717,3 +717,67 @@ once, contact table once, best better name, `Group <id>` and one lookup for a gr
 - **Real account**: not re-verified. The existing directory keeps its 4 unnamed chats (names are offered when history or
   a message arrives again). A fresh `pair` and `serve` in a new directory would show the fix; that needs the owner's
   permission for each step.
+
+## Gates on the reviewed commit and roll-up (T057)
+
+2026-11-14, commit `e67fdf5` (the last code change; later commits touch `specs/`, `AGENTS.md` and this file only). The
+Windows gates, the WSL2 passes and the pass rate were rerun on this commit because the naming fix changed code after the
+earlier runs. Each exit code was written by the command itself.
+
+| Gate | Result |
+| --- | --- |
+| `gofmt -l .` | exit 0, printed nothing |
+| `go vet ./...` | exit 0 |
+| `go mod verify` | exit 0 |
+| `CGO_ENABLED=0 go test ./... -count=1 -timeout 30m` (Windows) | exit 0 (cmd 130.7 s, store 337.1 s, wa 69.9 s, wasim 14.4 s; every package ok) |
+| build `windows/amd64`, `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64` | exit 0 each |
+| `govulncheck@v1.9.0 ./...` | exit 0, "No vulnerabilities found." |
+| `session-check` helper: vet, test, build | exit 0 each |
+| WSL2: `CGO_ENABLED=1 go test -race ./internal/wa ./cmd/... -count=1 -timeout 40m` | exit 0 (wa 192.1 s, cmd 178.1 s), 0 data races |
+| WSL2: `CGO_ENABLED=0 go test -p 1 ./... -count=1 -timeout 60m` | exit 0 (cmd 115.9 s, store 243.2 s, wa 59.7 s, wasim 2.6 s; every package ok) |
+| `WA_MEASURE=1 go test ./internal/wa -run TestQuietStopPassRate -count=1 -v -timeout 60m` | exit 0, 150 subtests passed, 0 failed |
+
+- **Pass rate with synchronous acknowledgements**: `pair` pairing generation 50 of 50, `pair` stop check 50 of 50, `stdio`
+  50 of 50, `serve` 50 of 50, none with a marker that was not clean. Feature 004 recorded 50 of 50 for each kind.
+- **Pin and limits**: `go.mod` and `go.sum` unchanged since `84dfa32`, the commit that pinned `bedcf01`; the diff is empty.
+  No fork queue, receive bound or other limit was changed or raised. The WSL2 results are WSL2, not native Linux.
+- **LF**: no tracked file shows `w/crlf`.
+- **Platforms covered**: Windows 10 native (full suite and gates), WSL2 Ubuntu (race detector and full suite, `-p 1`),
+  and cross-builds for `linux/amd64`, `linux/arm64`, `darwin/amd64` and `darwin/arm64`. Not covered: native Linux, any
+  macOS test run, and the CI runners (nothing was pushed).
+- **History and unsafe stops**: on the simulator, 3 of 50 stops during history ended `storage_refused` with the unsafe
+  marker (6%); stops with a live message, a group lookup and a merge in flight, and the `pair`-shaped stop, passed 50
+  of 50 each. No stop during history was tried on the real account.
+- **Real account** (one account, one phone, Windows): `pair`, `serve` with the owner's own text and image, two inspections
+  of a copy of the database. Both stop checks of `pair` and the stop of `serve` passed. Results and the naming defect
+  they found are in "Real-account journey" and "Naming chats that only history created".
+
+### Accepted risks
+
+- **State the library keeps for itself** (mapping tables, message secrets, queues inside the client) is outside the
+  bounds ingest sets; the fork pin's receive bounds are the limit and a pin change is an owner decision.
+- **No replay guarantee**: a message whose write failed is not acknowledged, but WhatsApp may not send it again; ingest
+  becomes terminal and the process exits 1 so the loss is visible, not silent.
+- **History after `pair`**: on the real account `pair` stored 0 messages and reported 0 incomplete chunks during its
+  3.6 s connection; the history (about three months, 300 messages in 6 chats) arrived on the next connection, `serve`.
+  History is therefore not lost by stopping `pair`, but it is stored only when a later run stays connected; if that run
+  stops during a chunk, the chunk is reported incomplete and is not fetched again.
+- **No undo on a LID remap**: if WhatsApp later changes a LID's phone number, earlier merges stay under the old number.
+- **`ErrBusy` stops ingest**: a busy-timeout error from the store is a failed write and ends ingest for the run.
+- **Placeholders are not fetched**: a view-once or other unavailable message is counted as `unavailable`, never stored.
+- **Unsafe stops during history (6% on the simulator)** and **a stop of about 7.1 s of the 10 s limit when a group lookup
+  never gets an answer**: accepted by the owner on 2026-11-14.
+- **Naming**: the contact table is read once per chat per generation, so a contact saved while the process runs is
+  picked up at the next start; names already missing in an existing database are filled when history or a message for
+  that chat arrives again.
+
+### Not verified
+
+- The naming fix on the real account (only fakes and the simulator); the existing real directory still has its 4
+  unnamed chats.
+- A live message from a LID-addressed contact on a real account, a view-once placeholder as the real server sends it, a
+  real group-name lookup (the one real group already had a history name), and a stop during a history chunk on the
+  real account.
+- The cause of 6 duplicate writes (306 writes, 300 rows) in the real `serve` run.
+- Native Linux and macOS test runs, CI, power loss, and long-run behaviour (memory and disk growth over days).
+- The T056 cleanup: the device is still linked and `D:\tmp\wa-005-real` still holds the real messages in clear text.

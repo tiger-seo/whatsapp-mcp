@@ -33,11 +33,12 @@ No commit carries attribution lines.
 
 ## Current state
 
-Resume point, 2026-11-13. Branch `005-message-ingest`. Phase 2 is done and committed (`a893ef5`..`40cf6c5`): store
-helpers, synchronous acknowledgements, the ingest skeleton, the terminal signal and exit 1, the ingest steps in
-retirement, and the reshaped app-state stop test. T025's pass rate is 50 of 50 for every kind, as in feature 004.
-**Next: US1, T026** (tests for extraction, the live path and the simulator), then T030–T032. `HandleMessage` still
-counts every running message as ignored and stores nothing; `NoteMapping` is empty until T042.
+Resume point, 2026-11-14. Branch `005-message-ingest`. T001–T055 and T057's roll-up are done and committed; the code
+is at `e67fdf5` and all gates are green on it (Windows, WSL2 race and suite, pass rate 50 of 50 for every kind; see
+`verification.md` "Gates on the reviewed commit and roll-up"). T056 (real account) ran `pair` and `serve` and found and
+fixed one defect (history-only chats had no name); it stays open for its cleanup (the owner unlinks the device, then
+`D:\tmp\wa-005-real` is deleted) and for the checks listed as not verified. **Next: the owner-judge code review**, then
+its row in "Owner reviews", then the pull request only if the owner asks.
 
 - **Design**: passed at `a040210` after four owner-judge rounds (BLOCK, CONCERNS, PASS, PASS; table in
   `verification.md`). Its one remaining low: T004 names the plan heading "Open questions", which is now "Questions for
