@@ -75,6 +75,10 @@ func (s *Store) ContactNames(ctx context.Context, jid string) (saved, real strin
 func (s *Store) ChatName(ctx context.Context, jid string) (name string, quality NameQuality, at time.Time, ok bool, err error)
 ```
 
+Ingest's name offers set `ChatUpdate.ExistingOnly`: the update applies only to a chat that already exists and never
+creates one, so an offer that reaches the store after a run-time merge removed a LID chat does not bring the empty
+chat back.
+
 All are ordinary store operations: admission, the 10 s limit, `ErrClosed` after `Close`, typed errors.
 
 ## Per-generation ingest state (in memory)

@@ -294,7 +294,7 @@ func (in *ingest) planDirectName(ent nameEntry, push string, msgTime time.Time) 
 	if !better(ent, name, q, at) {
 		return namePlan{}, true
 	}
-	return namePlan{update: store.ChatUpdate{JID: ent.jid, Name: name, NameQuality: q, NameTime: at}, offer: true}, true
+	return namePlan{update: store.ChatUpdate{JID: ent.jid, Name: name, NameQuality: q, NameTime: at, ExistingOnly: true}, offer: true}, true
 }
 
 // planGroupName gives a group without a name the fallback "Group <id>" and asks for its subject; a group that has a
@@ -306,14 +306,14 @@ func (in *ingest) planGroupName(ent nameEntry, msgTime time.Time) namePlan {
 	plan := namePlan{lookup: true}
 	if ent.quality == store.NameNone {
 		plan.offer = true
-		plan.update = store.ChatUpdate{JID: ent.jid, Name: "Group " + userPart(ent.jid), NameQuality: store.NameFallback, NameTime: msTime(msgTime)}
+		plan.update = store.ChatUpdate{JID: ent.jid, Name: "Group " + userPart(ent.jid), NameQuality: store.NameFallback, NameTime: msTime(msgTime), ExistingOnly: true}
 	}
 	return plan
 }
 
 // writeName writes one name offer and updates the cache; a failure is terminal.
 func (in *ingest) writeName(jid, name string, q store.NameQuality, at time.Time) bool {
-	err := in.st.UpdateChats(in.cfg.Lib, []store.ChatUpdate{{JID: jid, Name: name, NameQuality: q, NameTime: at}})
+	err := in.st.UpdateChats(in.cfg.Lib, []store.ChatUpdate{{JID: jid, Name: name, NameQuality: q, NameTime: at, ExistingOnly: true}})
 	if err != nil {
 		in.fail("name", err, "chat", escapeLog(jid))
 		return false

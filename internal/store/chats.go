@@ -24,6 +24,9 @@ type ChatUpdate struct {
 	NameQuality  NameQuality // required when Name is set
 	NameTime     time.Time   // required when Name is set
 	LastActivity time.Time
+	// ExistingOnly applies the update only when the chat already exists; it never creates one. A caller that names a
+	// chat after its messages were stored uses it, so a chat a merge has since removed does not come back empty.
+	ExistingOnly bool
 }
 
 type chatUpdate struct {
@@ -31,6 +34,7 @@ type chatUpdate struct {
 	quality                int
 	nameTime               int64
 	activity               int64 // 0 = not offered
+	existingOnly           bool
 }
 
 func (u ChatUpdate) validate() (chatUpdate, error) {
@@ -38,7 +42,7 @@ func (u ChatUpdate) validate() (chatUpdate, error) {
 	if err != nil {
 		return chatUpdate{}, err
 	}
-	out := chatUpdate{jid: jid.String(), phone: phoneOf(jid)}
+	out := chatUpdate{jid: jid.String(), phone: phoneOf(jid), existingOnly: u.ExistingOnly}
 	if err := validText("name", u.Name, maxNameBytes); err != nil {
 		return chatUpdate{}, err
 	}
@@ -95,8 +99,10 @@ func (s *Store) UpdateChats(ctx context.Context, updates []ChatUpdate) error {
 }
 
 func applyChatUpdate(ctx context.Context, tx *sql.Tx, u chatUpdate) error {
-	if _, err := tx.ExecContext(ctx, "INSERT INTO chats (jid, phone) VALUES (?, ?) ON CONFLICT (jid) DO NOTHING", u.jid, u.phone); err != nil {
-		return err
+	if !u.existingOnly {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO chats (jid, phone) VALUES (?, ?) ON CONFLICT (jid) DO NOTHING", u.jid, u.phone); err != nil {
+			return err
+		}
 	}
 	if u.name != "" {
 		if _, err := tx.ExecContext(ctx,

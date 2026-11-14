@@ -510,3 +510,42 @@ func TestIngestHistoryNameWritesAreBatchedAndFailuresAreTerminal(t *testing.T) {
 		t.Errorf("ingest_failed records = %v, want one with operation name", ev)
 	}
 }
+
+// A name offer that reaches the store after a run-time merge moved the LID chat away must not bring the empty LID chat
+// back.
+func TestIngestNameOfferNeverRecreatesAMergedAwayChat(t *testing.T) {
+	ctx := context.Background()
+	lid := lidJID()
+	phone := peerJID().String()
+	for _, path := range []string{"live", "history"} {
+		t.Run(path, func(t *testing.T) {
+			ns := &nameStore{contacts: map[string][2]string{lid.String(): {"Mum", ""}}}
+			r := newNameRig(t, ns)
+			m := store.Message{ChatJID: lid.String(), ID: "ML1", SenderJID: lid.String(), Time: nameBase, Text: "x"}
+			if err := r.st.StoreMessage(ctx, m); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.st.MergeLID(ctx, lid.String(), phone); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.st.GetChat(ctx, lid.String()); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("the merge left the LID chat: %v", err)
+			}
+			// The offer arrives late, after the merge.
+			evt := nameEvent("ML1", lid, lid, "Pushy", 0)
+			switch path {
+			case "live":
+				if !r.in.offerName(evt, m) {
+					t.Fatal("offerName reported a terminal failure")
+				}
+			default:
+				if !r.in.offerHistoryNames(map[string]time.Time{lid.String(): nameBase}) {
+					t.Fatal("offerHistoryNames reported a terminal failure")
+				}
+			}
+			if _, err := r.st.GetChat(ctx, lid.String()); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("a late name offer recreated the merged-away LID chat: %v", err)
+			}
+		})
+	}
+}
