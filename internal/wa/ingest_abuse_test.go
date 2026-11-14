@@ -129,7 +129,7 @@ func TestIngestAbuseNames(t *testing.T) {
 			t.Errorf("group name = %q (%v), want the fallback", got, q)
 		}
 	})
-	t.Run("an oversized history name is not offered but its messages are stored", func(t *testing.T) {
+	t.Run("an oversized history name is not used but its messages are stored", func(t *testing.T) {
 		h := newHistoryRig(t, historyOf(conversation(peerJID(), strings.Repeat("h", 1<<10+1),
 			webText("H1", "kept", histTime), webText("H2", "kept too", histTime.Add(time.Second)))))
 		h.deliver(t, 1)
@@ -137,10 +137,16 @@ func TestIngestAbuseNames(t *testing.T) {
 			t.Errorf("stored = %d, want 2", c.Stored)
 		}
 		h.f.mu.Lock()
-		offers := len(h.f.names)
+		for _, batch := range h.f.names {
+			for _, u := range batch {
+				if len(u.Name) > 1<<10 {
+					t.Errorf("a name of %d bytes was offered", len(u.Name))
+				}
+			}
+		}
 		h.f.mu.Unlock()
-		if offers != 0 {
-			t.Errorf("%d name offers, want none", offers)
+		if got, q, _ := chatNameOf(t, h.st, peerJID().String()); got != testPeer || q != store.NameFallback {
+			t.Errorf("chat name = %q (%v), want the number as a fallback", got, q)
 		}
 	})
 }

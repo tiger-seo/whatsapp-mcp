@@ -174,32 +174,96 @@ func userPart(jid string) string {
 	return user
 }
 
+// namePlan is what ingest decides to do about one chat's name: offer a name, ask for a group's subject, or neither.
+type namePlan struct {
+	update store.ChatUpdate
+	offer  bool
+	lookup bool
+}
+
 // offerName is step 6 of HandleMessage: it offers the stored message's chat a name when that is better than the
 // one known, and asks for a group's subject when the group has no name. It reports false when a store error made
 // ingest terminal.
 func (in *ingest) offerName(evt *events.Message, m store.Message) bool {
-	ent, ok := in.nm.get(m.ChatJID)
+	push := ""
+	if !m.FromMe {
+		// An own message carries the owner's push name, never the other person's.
+		push = evt.Info.PushName
+	}
+	plan, ok := in.planName(m.ChatJID, push, m.Time)
 	if !ok {
-		name, q, at, found, err := in.st.ChatName(in.cfg.Lib, m.ChatJID)
-		if err != nil {
-			in.fail("name", err, "chat", escapeLog(m.ChatJID))
+		return false
+	}
+	if plan.offer && !in.writeName(plan.update.JID, plan.update.Name, plan.update.NameQuality, plan.update.NameTime) {
+		return false
+	}
+	if plan.lookup {
+		in.requestGroupLookup(m.ChatJID)
+	}
+	return true
+}
+
+// offerHistoryNames gives every chat of a committed history batch the same naming as a live message: the stored
+// name is read once per chat, the best better name is offered, and a group without a name is asked for. The offers
+// of a batch go to the store in one write. at is the time of the chat's first message in the batch. It reports false
+// when a store error made ingest terminal.
+func (in *ingest) offerHistoryNames(chats map[string]time.Time) bool {
+	var updates []store.ChatUpdate
+	var lookups []string
+	for chat, at := range chats {
+		plan, ok := in.planName(chat, "", at)
+		if !ok {
 			return false
 		}
-		ent = nameEntry{jid: m.ChatJID}
+		if plan.offer {
+			updates = append(updates, plan.update)
+		}
+		if plan.lookup {
+			lookups = append(lookups, chat)
+		}
+	}
+	if len(updates) > 0 {
+		if err := in.st.UpdateChats(in.cfg.Lib, updates); err != nil {
+			in.fail("name", err, "chats", len(updates))
+			return false
+		}
+		for _, u := range updates {
+			in.nm.raise(u.JID, u.Name, u.NameQuality, u.NameTime)
+		}
+	}
+	for _, chat := range lookups {
+		in.requestGroupLookup(chat)
+	}
+	return true
+}
+
+// planName decides the name offer for a chat: it reads the stored name and, for a direct chat, the contact table,
+// once per chat per generation, and compares the best candidate with what is known. push is the sender's own name
+// from the message ("" when there is none or it is not the other person's). It reports false when a store error
+// made ingest terminal.
+func (in *ingest) planName(chat, push string, msgTime time.Time) (namePlan, bool) {
+	ent, ok := in.nm.get(chat)
+	if !ok {
+		name, q, at, found, err := in.st.ChatName(in.cfg.Lib, chat)
+		if err != nil {
+			in.fail("name", err, "chat", escapeLog(chat))
+			return namePlan{}, false
+		}
+		ent = nameEntry{jid: chat}
 		if found {
 			ent.name, ent.quality, ent.at = name, q, msTime(at)
 		}
 		in.nm.put(ent)
 	}
-	if isGroupChat(m.ChatJID) {
-		return in.offerGroupName(ent, m)
+	if isGroupChat(chat) {
+		return in.planGroupName(ent, msgTime), true
 	}
-	return in.offerDirectName(ent, evt, m)
+	return in.planDirectName(ent, push, msgTime)
 }
 
-// offerDirectName offers a direct chat the best name it has: the saved contact name, the real contact name, the
-// message's push name (never from an own message, whose push name is the owner's), then the JID's user part.
-func (in *ingest) offerDirectName(ent nameEntry, evt *events.Message, m store.Message) bool {
+// planDirectName picks a direct chat's best name: the saved contact name, the real contact name, the message's push
+// name, then the JID's user part.
+func (in *ingest) planDirectName(ent nameEntry, push string, msgTime time.Time) (namePlan, bool) {
 	if !ent.contactChecked {
 		saved, real, err := in.st.ContactNames(in.cfg.Lib, ent.jid)
 		switch {
@@ -209,51 +273,42 @@ func (in *ingest) offerDirectName(ent nameEntry, evt *events.Message, m store.Me
 			saved, real = "", ""
 		default:
 			in.fail("name", err, "chat", escapeLog(ent.jid))
-			return false
+			return namePlan{}, false
 		}
 		ent.contactChecked, ent.saved, ent.real, ent.readAt = true, usableName(saved), usableName(real), msTime(in.now())
+		in.nm.put(ent)
 	}
-	type offer struct {
-		name string
-		q    store.NameQuality
-		at   time.Time
-	}
-	var best offer
-	switch push := usableName(evt.Info.PushName); {
+	var name string
+	var q store.NameQuality
+	var at time.Time
+	switch push = usableName(push); {
 	case ent.saved != "":
-		best = offer{ent.saved, store.NameSaved, ent.readAt}
+		name, q, at = ent.saved, store.NameSaved, ent.readAt
 	case ent.real != "":
-		best = offer{ent.real, store.NameReal, ent.readAt}
-	case push != "" && !m.FromMe:
-		best = offer{push, store.NameReal, msTime(m.Time)}
+		name, q, at = ent.real, store.NameReal, ent.readAt
+	case push != "":
+		name, q, at = push, store.NameReal, msTime(msgTime)
 	default:
-		best = offer{userPart(ent.jid), store.NameFallback, msTime(m.Time)}
+		name, q, at = userPart(ent.jid), store.NameFallback, msTime(msgTime)
 	}
-	if better(ent, best.name, best.q, best.at) {
-		if !in.writeName(ent.jid, best.name, best.q, best.at) {
-			return false
-		}
-		ent.name, ent.quality, ent.at = best.name, best.q, best.at
+	if !better(ent, name, q, at) {
+		return namePlan{}, true
 	}
-	in.nm.put(ent)
-	return true
+	return namePlan{update: store.ChatUpdate{JID: ent.jid, Name: name, NameQuality: q, NameTime: at}, offer: true}, true
 }
 
-// offerGroupName gives a group without a name the fallback "Group <id>" and asks for its subject once; a group
-// that has a real name, from history or an earlier lookup, is left alone.
-func (in *ingest) offerGroupName(ent nameEntry, m store.Message) bool {
+// planGroupName gives a group without a name the fallback "Group <id>" and asks for its subject; a group that has a
+// real name, from history or an earlier lookup, is left alone.
+func (in *ingest) planGroupName(ent nameEntry, msgTime time.Time) namePlan {
 	if ent.quality >= store.NameReal {
-		return true
+		return namePlan{}
 	}
+	plan := namePlan{lookup: true}
 	if ent.quality == store.NameNone {
-		name, at := "Group "+userPart(ent.jid), msTime(m.Time)
-		if !in.writeName(ent.jid, name, store.NameFallback, at) {
-			return false
-		}
-		in.nm.raise(ent.jid, name, store.NameFallback, at)
+		plan.offer = true
+		plan.update = store.ChatUpdate{JID: ent.jid, Name: "Group " + userPart(ent.jid), NameQuality: store.NameFallback, NameTime: msTime(msgTime)}
 	}
-	in.requestGroupLookup(ent.jid)
-	return true
+	return plan
 }
 
 // writeName writes one name offer and updates the cache; a failure is terminal.

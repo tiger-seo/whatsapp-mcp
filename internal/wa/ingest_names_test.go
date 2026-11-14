@@ -12,6 +12,8 @@ import (
 
 	"github.com/tiger-seo/whatsapp-mcp/internal/store"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waHistorySync"
+	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
@@ -402,5 +404,109 @@ func TestIngestFailedNameWriteIsTerminalButTheMessageStays(t *testing.T) {
 	}
 	if r.in.HandleMessage(nameEvent("W2", peerJID(), peerJID(), "", 1)) {
 		t.Error("a message after the terminal failure was accepted")
+	}
+}
+
+// A chat that only history created is named like any other: the conversation's own name, the saved contact name, the
+// contact's own name, then the number; a group without a name gets "Group <id>" and one lookup.
+func historyNameRig(t *testing.T, ns *nameStore, hist ...*waHistorySync.HistorySync) *historyRig {
+	t.Helper()
+	h := newHistoryRig(t, hist...)
+	ns.ingestStore = h.in.st
+	h.in.st = ns
+	return h
+}
+
+func TestIngestHistoryNamesDirectChats(t *testing.T) {
+	peer := peerJID().String()
+	cases := []struct {
+		name     string
+		display  string
+		contact  [2]string
+		want     string
+		wantQual store.NameQuality
+	}{
+		{"saved contact name for a chat without a conversation name", "", [2]string{"Mum", "Bank"}, "Mum", store.NameSaved},
+		{"real contact name", "", [2]string{"", "Bank"}, "Bank", store.NameReal},
+		{"the number as the last resort", "", [2]string{}, testPeer, store.NameFallback},
+		{"a saved contact name beats the conversation's own name", "Chat Name", [2]string{"Mum", ""}, "Mum", store.NameSaved},
+		{"the conversation's name is kept when nothing is better", "Chat Name", [2]string{}, "Chat Name", store.NameReal},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ns := &nameStore{contacts: map[string][2]string{peer: c.contact}}
+			h := historyNameRig(t, ns, historyOf(conversation(peerJID(), c.display, webText("HN1", "x", histTime), webText("HN2", "y", histTime.Add(time.Second)))))
+			h.deliver(t, 1)
+			if got, q, _ := chatNameOf(t, h.st, peer); got != c.want || q != c.wantQual {
+				t.Errorf("stored name = %q (%v), want %q (%v)", got, q, c.want, c.wantQual)
+			}
+			if _, contact := ns.reads(peer); contact != 1 {
+				t.Errorf("contact table reads = %d for two messages, want 1", contact)
+			}
+		})
+	}
+}
+
+// groupText is a history message in a group; the library's parser needs the participant.
+func groupText(id, text string, ts time.Time) *waWeb.WebMessageInfo {
+	m := webText(id, text, ts)
+	m.Key.Participant = proto.String(peerJID().String())
+	return m
+}
+
+func TestIngestHistoryNamesGroups(t *testing.T) {
+	t.Run("a group without a name gets the fallback and one lookup", func(t *testing.T) {
+		h := historyNameRig(t, &nameStore{}, historyOf(conversation(groupJID(), "", groupText("HG1", "x", histTime), groupText("HG2", "y", histTime.Add(time.Second)))))
+		h.client.group = func(context.Context, types.JID) (*types.GroupInfo, error) { return groupInfo("Team"), nil }
+		h.deliver(t, 1)
+		waitFor(t, func() bool { n, _, _ := chatNameOf(t, h.st, groupJID().String()); return n == "Team" })
+		if calls := h.client.groupCalls(); len(calls) != 1 {
+			t.Errorf("group lookups = %v, want 1", calls)
+		}
+	})
+	t.Run("a group with a conversation name is never looked up", func(t *testing.T) {
+		h := historyNameRig(t, &nameStore{}, historyOf(conversation(groupJID(), "History Name", groupText("HG3", "x", histTime))))
+		h.deliver(t, 1)
+		if got, q, _ := chatNameOf(t, h.st, groupJID().String()); got != "History Name" || q != store.NameReal {
+			t.Errorf("name = %q (%v), want the conversation's name", got, q)
+		}
+		time.Sleep(50 * time.Millisecond)
+		if calls := h.client.groupCalls(); len(calls) != 0 {
+			t.Errorf("group lookups = %v, want none", calls)
+		}
+	})
+}
+
+func TestIngestHistoryNameWritesAreBatchedAndFailuresAreTerminal(t *testing.T) {
+	var convs []*waHistorySync.Conversation
+	ns := &nameStore{contacts: map[string][2]string{}}
+	for i := range 40 {
+		jid := types.NewJID(fmt.Sprintf("4915100000%02d", i), types.DefaultUserServer)
+		ns.contacts[jid.String()] = [2]string{fmt.Sprintf("Contact %d", i), ""}
+		convs = append(convs, conversation(jid, "", webText(fmt.Sprintf("HB%d", i), "x", histTime)))
+	}
+	h := historyNameRig(t, ns, historyOf(convs...))
+	h.deliver(t, 1)
+	if w := ns.nameWrites(); len(w) != 40 {
+		t.Fatalf("name writes = %d, want 40", len(w))
+	}
+	ns.mu.Lock()
+	calls := 0
+	for range ns.updates {
+		calls++
+	}
+	ns.mu.Unlock()
+	if calls != 40 {
+		t.Fatalf("recorded %d updates", calls)
+	}
+
+	failing := &nameStore{updateErr: errors.New("disk on fire")}
+	h2 := historyNameRig(t, failing, historyOf(conversation(peerJID(), "", webText("HF1", "x", histTime))))
+	h2.deliver(t, 1)
+	if h2.failed.Load() != 1 {
+		t.Errorf("failed callbacks = %d, want 1: a failed name write is terminal", h2.failed.Load())
+	}
+	if ev := h2.logs.events("ingest_failed"); len(ev) != 1 || ev[0]["operation"] != "name" {
+		t.Errorf("ingest_failed records = %v, want one with operation name", ev)
 	}
 }

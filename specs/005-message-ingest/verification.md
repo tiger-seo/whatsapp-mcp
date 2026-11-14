@@ -697,3 +697,23 @@ message text, name or JID is recorded.
   check from a LID-addressed contact was **not performed** (the owner's test messages went to their own chat), so a
   live LID-addressed message is not verified on a real account; 36 LID merges at run time were.
 - **Not yet run**: the cleanup (the owner unlinks the device on the phone, then the directory is deleted).
+
+## Naming chats that only history created (found by T056)
+
+2026-11-14, Windows 10, `CGO_ENABLED=0`. The real-account `serve` run left 4 of 6 chats unnamed although the contact
+table held a name for each (see "Real-account journey"): a name was offered only for a live message or from the
+conversation's own display name. The fix gives each chat of a committed history batch the live naming (stored name
+once, contact table once, best better name, `Group <id>` and one lookup for a group without a name), batched into one
+`UpdateChats` per flush, and the live path shares the decision code (`planName`).
+
+- **Expected failures**: `go test ./internal/wa -run TestIngestHistoryNam -count=1 -v` before the change: exit 1. Direct
+  chats had no stored name (`stored name = "" (0), want "Mum" (3)`), 0 contact table reads for 2 messages, no
+  group lookup for a group without a name, 0 of 40 name writes. (The group cases first failed for a test-data flaw,
+  a group message without a participant, which the library's parser refuses; the helper `groupText` adds one.)
+- **After the change**: the same tests pass (5 direct-chat cases, 2 group cases, batching and terminal failure), and
+  `go test ./internal/wa ./cmd/... -count=1` exit 0 (wa 69.9 s, cmd 126.8 s). One earlier test, "an oversized
+  history name is not offered", asserted no name offers at all; it now asserts that no oversized name is offered and
+  that the chat gets the number as a fallback.
+- **Real account**: not re-verified. The existing directory keeps its 4 unnamed chats (names are offered when history or
+  a message arrives again). A fresh `pair` and `serve` in a new directory would show the fix; that needs the owner's
+  permission for each step.

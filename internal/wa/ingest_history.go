@@ -2,6 +2,7 @@ package wa
 
 import (
 	"errors"
+	"time"
 	"unicode/utf8"
 
 	"github.com/tiger-seo/whatsapp-mcp/internal/store"
@@ -224,6 +225,10 @@ func (in *ingest) flushHistory(c *historyChunk) bool {
 		}
 	}
 	in.unlock()
+	var chats map[string]time.Time
+	if err == nil {
+		chats = chatsOf(c.batch)
+	}
 	c.batch, c.bytes, c.names = c.batch[:0], 0, nil
 	clear(c.offered)
 	if err != nil {
@@ -231,5 +236,16 @@ func (in *ingest) flushHistory(c *historyChunk) bool {
 			"committed", c.committed)
 		return false
 	}
-	return true
+	return in.offerHistoryNames(chats)
+}
+
+// chatsOf lists the distinct chats of a batch with the time of each one's first message in it.
+func chatsOf(batch []store.Message) map[string]time.Time {
+	chats := map[string]time.Time{}
+	for _, m := range batch {
+		if first, ok := chats[m.ChatJID]; !ok || m.Time.Before(first) {
+			chats[m.ChatJID] = m.Time
+		}
+	}
+	return chats
 }

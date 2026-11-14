@@ -81,7 +81,10 @@ normalise the chat; offer the conversation name; for each message `ParseWebMessa
 the parsed ID differs from `webMsg.Key.ID`, then steps 3–4 above; add to the batch; flush at 250 messages or 4 MiB (`MessageFieldBytes`). A flush is one `StoreMessages` and one `UpdateChats`
 under the ingest lock, after the same re-lookup of the flush's distinct unmapped LIDs under one 2 s deadline, and
 the lock is released
-between flushes so a waiting live write goes first. At `Stop`, every notification still queued is reported as
+between flushes so a waiting live write goes first. After each flush, outside the lock, every distinct chat of the
+batch is named as a live message would name it (step 6: stored name read once, contact table once, best better
+name, a group without a name gets `Group <id>` and a lookup request), and the offers of the batch go to the store in
+one `UpdateChats`; a failure is terminal with operation `name`. At `Stop`, every notification still queued is reported as
 `history_incomplete` (`stopped`). Checkpoints (where `Stop` is observed): before each download, between conversations, before
 each flush. A store error is terminal and reports the chunk and the messages committed from it. History never calls
 `Live`.
