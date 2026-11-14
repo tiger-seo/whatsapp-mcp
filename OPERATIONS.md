@@ -261,9 +261,11 @@ recovery as above; do not delete the database to get around that.
 ## Message ingest (feature 005)
 
 `stdio`, `serve` and the connection that follows a `pair` now store the messages the account receives. There are
-still no MCP tools, so nothing reads them yet. "Implemented" and "verified" mean what they mean above. **Nothing in
-this section has been verified on a real account**; every result below comes from the simulator, fakes and a
-temporary store on Windows (`specs/005-message-ingest/verification.md`).
+still no MCP tools, so nothing reads them yet. "Implemented" and "verified" mean what they mean above. **Verified on
+a real account so far**: two `pair` and `serve` runs on one account and one phone on Windows (2026-11-14), which stored
+live and history messages and showed that history chats were named before the device's contact sync had stored the
+saved names; the fix for that (below) has been tested on the simulator and with fakes only. Everything else comes from
+the simulator, fakes and a temporary store (`specs/005-message-ingest/verification.md`). No CI run is claimed.
 
 ### What is stored
 
@@ -298,7 +300,7 @@ your phone on another account's behalf.
 
 | Event | Level | Meaning and what to do |
 | --- | --- | --- |
-| `ingest_failed` | warn | A store write failed (`operation` is `live`, `history` or `name`; the error class is `busy`, `disk_low`, `io`, `resource_limit`, `closed`, `indeterminate` or `storage`). Ingest stops for this run, the process stops normally and exits 1 with "message storage failed; messages may be missing. Fix the cause and start again." Free disk space or fix permissions, then start again. A failed message was not acknowledged to WhatsApp, but there is no guarantee WhatsApp sends it again. |
+| `ingest_failed` | warn | A store write failed (`operation` is `live`, `history` or `name`; the error class is `busy`, `disk_low`, `io`, `resource_limit`, `closed`, `indeterminate`, `invalid`, `context` or `storage`). Ingest stops for this run, the process stops normally and exits 1 with "message storage failed; messages may be missing. Fix the cause and start again." Free disk space or fix permissions, then start again. A failed message was not acknowledged to WhatsApp, but there is no guarantee WhatsApp sends it again. |
 | `history_incomplete` | warn | A history chunk was not fully stored (`reason`: `download`, `too_large`, `parse`, `queue_full`, `stopped`). History is sent once; the missing messages are not fetched again. |
 | `receive_overload` | warn | The library closed the connection at a receive limit and messages may be missing. It was not reopened in the simulator test; stop and start again. |
 | `lid_reconcile`, `lid_reassigned` | info | The startup merge of identities finished, or WhatsApp changed a link (earlier merges are kept). |
@@ -321,6 +323,14 @@ answer took about 7.1 s of the 10 s limit. The owner accepted both on 2026-11-14
   with real download and decryption through the simulator; identity merges; chat names; the bounds above; the abuse
   cases; log contents; the stop and latency measurements (no `receive_overload` with 20 history chunks and a burst of
   2,000 live messages).
-- **Not verified**: a real account, a real history, a real LID-addressed contact, view-once placeholders as the
-  real server sends them, a real group lookup, Linux and macOS (only the CI runners' automated tests), the
-  race detector (WSL2 run pending) and long-run behaviour.
+- **Verified on a real account** (one account, one phone, Windows; two runs): pairing, `serve` with history arriving
+  within seconds, 301 messages stored in 6 chats, a clean stop and quiet-stop check, and chat names: no chat unnamed.
+  The runs showed that saved contact names were missed for most direct chats, because the contact table was read once,
+  right after connecting and before the device's contact sync had stored them. Ingest now re-reads the contact table
+  for a direct chat below the saved name at 60 s, 5 min and 30 min after its previous read (a few chats per message or
+  history flush, no extra goroutine); a chat with no saved name keeps its real name or its number. This re-read has not
+  yet been run on a real account.
+- **Not verified**: a live message from a LID-addressed contact, a view-once placeholder as the real server sends it,
+  a real group-name lookup, a stop during a real history chunk, the cause of 7 duplicate writes absorbed by the
+  upsert in the real run, native Linux and macOS runs, CI, and long-run behaviour. The race detector ran on WSL2
+  (Linux under Windows), not on native Linux.
