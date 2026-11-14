@@ -398,7 +398,7 @@ func TestQuietStopPassRate(t *testing.T) {
 	}
 }
 
-// Stops with ingest busy (research R11). Each case stops the production owner while the ingest component has work
+// Stops with ingest busy. Each case stops the production owner while the ingest component has work
 // in flight and records what the stop's own quiet check decided and the marker it left. Set WA_MEASURE=1;
 // WA_MEASURE_RUNS defaults to 50.
 //
@@ -663,7 +663,7 @@ func TestQuietStopWithIngestWorkers(t *testing.T) {
 	}
 }
 
-// Handler latency under history (research R3). On the simulator an initial history of 20 chunks arrives while two
+// Handler latency under history. On the simulator an initial history of 20 chunks arrives while two
 // other accounts send a burst of live messages: one by phone number, one by LID with a phone SenderAlt (so the
 // library repeats mapping upserts), with view-once placeholders mixed in. The measurement records how long the
 // handler waited for the ingest lock, how many times the library reported receive_overload and what was stored.
