@@ -33,11 +33,10 @@ No commit carries attribution lines.
 
 ## Current state
 
-Resume point, 2026-11-14. Branch `005-message-ingest`. T001–T055 and T057's roll-up are done and committed; the code
-is at `e67fdf5` and all gates are green on it (Windows, WSL2 race and suite, pass rate 50 of 50 for every kind; see
-`verification.md` "Gates on the reviewed commit and roll-up"). T056 (real account) ran `pair` and `serve` and found and
-fixed one defect (history-only chats had no name); its cleanup is done (device unlinked, data directory deleted); the checks listed as not verified stay not verified. **Next: the owner-judge code review**, then
-its row in "Owner reviews", then the pull request only if the owner asks.
+Resume point, 2026-11-14. Branch `005-message-ingest`. All tasks are done and committed; the code is at `b6d8727` and
+all gates are green on it (`verification.md` "Gates on the final code commit"). T056 ran three real-account sessions
+(cleaned up); the late contact re-read (option B) is not observed on a real account. The owner-judge code review passed at
+`cbce833`. **Next: the pull request review and merge, if the owner asks.**
 
 - **Design**: passed at `a040210` after four owner-judge rounds (BLOCK, CONCERNS, PASS, PASS; table in
   `verification.md`). Its one remaining low: T004 names the plan heading "Open questions", which is now "Questions for

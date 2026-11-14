@@ -69,10 +69,11 @@ Add the row it ends with to the "Owner reviews" table in `specs/NNN-*/verificati
 ## Current state
 
 Features 001–004 are merged (004, shutdown drain: pull request #11, 2026-11-10). Feature 005, message ingest, is
-implemented on branch `005-message-ingest` (code at `e67fdf5`): live and history messages, LID merges and chat names are
-stored; there are still no MCP tools. The design review passed at `a040210`; the code review is next, then the pull
-request if the owner asks. A real-account `pair` and `serve` ran on 2026-11-14; its cleanup and some checks are open
-(see `verification.md`). The resume point of a feature in progress is the `## Current state` section of its `tasks.md`.
+implemented on branch `005-message-ingest` (code at `b6d8727`): live and history messages, LID merges and chat names are
+stored, and a direct chat below the saved name is re-read from the contact table at 60 s, 5 min and 30 min; there are
+still no MCP tools. The design review passed at `a040210` and the code review at `cbce833`; the pull request is open.
+Three real-account runs (2026-11-14, cleaned up) are in `verification.md`; the late contact re-read itself was not
+observed on a real account. The resume point of a feature in progress is the `## Current state` section of its `tasks.md`.
 Since 2026-11-13 `go.mod` replaces whatsmeow with the owner's fork `github.com/tiger-seo/whatsmeow` at `bedcf01`
 (branch `receive-bounds`), which enforces the receive bounds, sends nothing to the user's phone on another account's
 behalf, and carries the lost-515 fix proposed upstream as tulir/whatsmeow#1337; E003-RX-01 is retired.
