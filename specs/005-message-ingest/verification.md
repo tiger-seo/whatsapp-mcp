@@ -609,3 +609,24 @@ bound it names.
   No stale text about asynchronous acknowledgements remains (`SynchronousAck` is set in `session.go`). After the
   change `gofmt -l .` printed nothing, `go vet ./internal/wa` passed and `go test ./internal/wa ./cmd/...
   -count=1` exit 0 (wa 64.6 s, cmd 124.4 s).
+
+## Full gates (T053) and line endings (T055)
+
+2026-11-14, Windows 10 amd64, Go 1.27.4, `CGO_ENABLED=0`, `TEMP` and `TMP` on `D:	mp`, commit `42fdbf1`. Each exit code
+was written by the command itself into a file (no pipe), and the first line of each output was read.
+
+| Gate | Exit code |
+| --- | --- |
+| `gofmt -l .` | 0, printed nothing |
+| `go vet ./...` | 0 |
+| `go mod verify` | 0 |
+| `go test ./... -count=1 -timeout 30m` | 0 (cmd 161.9 s, store 355.0 s, wa 111.5 s, wasim 2.5 s; every package ok) |
+| build `windows/amd64`, `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64` | 0 each |
+| `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...` | 0, "No vulnerabilities found." |
+| `go vet`, `go test` and `go build` of `./internal/wa/testdata/cmd/session-check` | 0 each |
+
+- **Pin**: `go.mod` and `go.sum` were last changed by `84dfa32`, the commit that pinned the fork; `git diff 84dfa32 --
+  go.mod go.sum` is empty. `replace` still names `github.com/tiger-seo/whatsmeow v0.0.0-20261113124132-bedcf0185245`
+  (`bedcf01`).
+- **Line endings (T055)**: `git ls-files --eol` lists 302 tracked files, all `w/lf`; none shows `w/crlf`.
+- Not covered by this run: the race detector and native Linux or macOS test runs (T054, and CI on push).

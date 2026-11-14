@@ -423,7 +423,7 @@ provider while ingesting repeated messages.
 - [X] T052 [P] Check doc comments in `internal/wa/ingest*.go`, `session.go`, `owner.go`, `internal/store/lids.go`,
   `validate.go`, `contacts.go` and `device_lids.go`: no FR-, SC-, US, D, F or research IDs (constitution); no stale
   text about asynchronous acknowledgements.
-- [ ] T053 Run the full gates of `AGENTS.md` "Commands" and record each exit code read directly: `gofmt -l .`, `go vet
+- [X] T053 Run the full gates of `AGENTS.md` "Commands" and record each exit code read directly: `gofmt -l .`, `go vet
   ./...`, `go mod verify`, `CGO_ENABLED=0 go test ./... -count=1 -timeout 30m`, the five cross-builds, `go run
   golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...`, and `go vet`, `go test` and the build of
   `./internal/wa/testdata/cmd/session-check`. Confirm `go.mod` and `go.sum` still pin `bedcf01` and are unchanged since
@@ -431,7 +431,7 @@ provider while ingesting repeated messages.
 - [ ] T054 Run the race detector again in WSL2 on `./internal/wa ./cmd/...` (quickstart §6, `MSYS_NO_PATHCONV=1`) and
   the whole suite under WSL2 with `CGO_ENABLED=0` as in `AGENTS.md`; record both as WSL2. Push the branch for CI only
   if the user asks; anything not run is "not verified".
-- [ ] T055 Check LF endings with `git ls-files --eol`; no tracked file shows `w/crlf`.
+- [X] T055 Check LF endings with `git ls-files --eol`; no tracked file shows `w/crlf`.
 - [ ] T056 **Permitted real-account journey, only with the owner's explicit permission for each step** (quickstart §7),
   after reviewing the roadmap's shutdown follow-up: a new directory under `D:\tmp`, the binary from a named commit,
   `pair`, recording its `history_incomplete` counts by reason, the history it stored and its `unavailable` count; then
