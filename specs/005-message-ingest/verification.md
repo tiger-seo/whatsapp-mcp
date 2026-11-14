@@ -630,3 +630,24 @@ was written by the command itself into a file (no pipe), and the first line of e
   (`bedcf01`).
 - **Line endings (T055)**: `git ls-files --eol` lists 302 tracked files, all `w/lf`; none shows `w/crlf`.
 - Not covered by this run: the race detector and native Linux or macOS test runs (T054, and CI on push).
+
+## WSL2 race and suite runs (T054), in progress
+
+2026-11-14, WSL2 Ubuntu, Go 1.27.4 linux/amd64, gcc 15.2, `TMPDIR=/var/tmp`, results are WSL2, not native Linux.
+
+- **Race run 1**, commit `0f4ebbf`, `CGO_ENABLED=1 go test -race ./internal/wa ./cmd/... -count=1 -timeout 40m`:
+  exit 1. 0 data races, 1 failure: `TestIngestLIDRelookupOfAFlushHasOneDeadline` held the lock 1.097 s against a limit
+  of 1 s plus the deadline. Cause: under the race detector the write of a 250-chat flush alone takes about 1.1 s, so
+  the limit was slack, not the design under test. The limit is now 1.8 s (one deadline per LID would hold it at least
+  2.5 s); the test passed 5 of 5 under `-race` and 3 of 3 natively. `cmd/whatsapp-mcp` passed (189.5 s).
+- **Race run 2**, commit `533fb38`, same command: exit 1. One data race, in
+  `TestHistoryWorkerInsideTheLibraryIsJoinedAfterTheBarrier`: the test replaced `sess.ingest.st` while the LID
+  reconcile worker, started by a mapping the library stored at connect, read it in `merge`. It is the test's own
+  setup (production never reassigns the field); the test now passes the wrapper through the session's
+  `wrapIngestStore` option when the session is built. It passed 3 of 3 natively. Not yet rerun under `-race`.
+- **Suite run**, same commit, `CGO_ENABLED=0 go test -p 1 ./...`: exit 1, not valid. Partway through the `store`
+  tests the WSL root file system became read-only (`TempDir: mkdir /var/tmp/...: read-only file system`; later
+  `df`: "Input/output error"), so the rest of `store` and the builds of `wa`, `walog` and `wasim` failed on the file
+  system, not on the code. `cmd`, `buildinfo`, `config`, `lock` and `private` passed before it.
+- **Still to do**: restore the WSL file system, then rerun the race command and the suite. Until then T054 is not
+  verified.
