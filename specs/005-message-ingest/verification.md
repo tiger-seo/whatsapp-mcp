@@ -845,3 +845,6 @@ empty data directory `D:\tmp\wa-005-real2`. The owner ran `pair` and `serve`; ev
   runs is picked up at the next start"), larger than assumed because it also covers the seconds after connecting.
 - **Not verified again**: a live message from a LID-addressed contact (no live message in a LID chat; the owner's test
   messages were to their own chat), a view-once placeholder, a real group lookup, and a stop during a history chunk.
+- **Cleanup (done 2026-11-14)**: the owner unlinked the second device; the data directory of this run and the two read-only
+  inspection copies were deleted and the deletion was checked. The owner chose to fix the early contact read (option B:
+  re-read the contact table later for chats below the saved quality); it is not yet implemented.
