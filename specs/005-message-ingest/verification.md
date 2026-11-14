@@ -899,4 +899,4 @@ restricted with the `icacls` command the program printed, on that empty director
 - **Not verified on a real account**: the re-read itself (60 s, 5 min, 30 min); a live message from a LID-addressed contact
   (counts cannot show the address form; no LID chat or LID sender exists after merging); everything else already listed.
   The owner chose to stop here instead of pairing again.
-- **Cleanup**: pending the owner unlinking the device; then the data directory and the two inspection copies are deleted.
+- **Cleanup (done 2026-11-14)**: the owner unlinked the device; the data directory and the two inspection copies were deleted and the deletion was checked.
