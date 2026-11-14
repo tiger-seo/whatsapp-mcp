@@ -798,3 +798,22 @@ earlier runs. Each exit code was written by the command itself.
 - The cause of 6 duplicate writes (306 writes, 300 rows) in the real `serve` run.
 - Native Linux and macOS test runs, CI, power loss, and long-run behaviour (memory and disk growth over days).
 - The T056 cleanup is done (device unlinked, data directory and inspection copies deleted).
+
+## Code review findings fixed (2026-11-14)
+
+After the code review PASS at `0ccc59b` (four low findings), three were fixed in code with tests first and one in the
+operator guide (see the next section). Tree on `e88252f` plus these changes, Windows 10, `CGO_ENABLED=0`.
+
+- **Stop during the startup reconciliation** (`cmd/whatsapp-mcp/commands.go`): `TestShellStopDuringReconciliationExitsCleanly`
+  (serve and stdio) failed first because the owner was started with a cancelled context after the stop signal; a check of the
+  stop context after the pass makes the command stop like at any other point of the start. Both runs pass.
+- **Late name offer recreating an empty LID chat** (`internal/store/chats.go`, `internal/wa/ingest_names.go`): reproduced by
+  `TestIngestNameOfferNeverRecreatesAMergedAwayChat` (live and history paths failed: "a late name offer recreated the
+  merged-away LID chat") and by `TestUpdateChatsExistingOnlyNeverCreatesAChat` (failed: "a name offer created the chat").
+  `ChatUpdate` gains `ExistingOnly`, which applies the update only to a chat that exists; every name offer of ingest sets it.
+  An ordinary update still creates the chat (tested). Both tests pass.
+- **Lock released without `defer`** (`internal/wa/ingest.go`, `ingest_history.go`, `ingest_lid.go`): the live write, the history
+  flush and the merge now release the ingest lock with `defer`. Hardening only; no input that panics is known, so there is
+  no failing test.
+- `go test ./internal/wa ./cmd/... ./internal/store -count=1 -timeout 30m`: exit 0 (wa 71.9 s, cmd 127.8 s, store 286.8 s).
+  The full gates, the WSL2 runs and a re-review follow after the OPERATIONS.md change.
