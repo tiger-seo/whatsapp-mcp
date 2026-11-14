@@ -505,7 +505,7 @@ lines, 0 `FAIL`); each pair run covers both of its checks. No kind is lower than
 
 ## Stops with ingest busy (T047)
 
-2026-11-14, Windows 10, Go 1.27.4, `CGO_ENABLED=0`, `TEMP` on `D:	mp`, working tree on `14531fd` with the US4 work
+2026-11-14, Windows 10, Go 1.27.4, `CGO_ENABLED=0`, `TEMP` on `D:\tmp`, working tree on `14531fd` with the US4 work
 (not committed). `WA_MEASURE=1 CGO_ENABLED=0 go test ./internal/wa -run TestQuietStopWithIngestWorkers -count=1 -v
 -timeout 60m`: exit 0 (501.5 s). 50 stops per case, each through the production owner and the simulator. The
 simulator was extended for this: it answers the media-connection query, serves an encrypted history blob over HTTP
@@ -612,7 +612,7 @@ bound it names.
 
 ## Full gates (T053) and line endings (T055)
 
-2026-11-14, Windows 10 amd64, Go 1.27.4, `CGO_ENABLED=0`, `TEMP` and `TMP` on `D:	mp`, commit `42fdbf1`. Each exit code
+2026-11-14, Windows 10 amd64, Go 1.27.4, `CGO_ENABLED=0`, `TEMP` and `TMP` on `D:\tmp`, commit `42fdbf1`. Each exit code
 was written by the command itself into a file (no pipe), and the first line of each output was read.
 
 | Gate | Exit code |
@@ -656,3 +656,26 @@ was written by the command itself into a file (no pipe), and the first line of e
   themselves. The cause of the file system turning read-only was not established; the VM's virtual disk grows on a
   Windows drive with little free space, which is the likeliest reason and is not confirmed.
 - No push to CI was made (only on the owner's request).
+
+## Real-account journey (T056), in progress
+
+Owner permission was given step by step in the session; the owner ran every command that touched the account. 2026-11-14,
+Windows 10, binary built from commit `221a265` (`D:\tmp\whatsapp-mcp-221a265.exe`, reported as `-dirty` only because the
+uncommitted `.claude/settings.json` plugin setting was in the tree; no Go file differed), new empty data directory
+`D:\tmp\wa-005-real`, one account and one phone, the one used for the earlier real runs. Results are redacted: no
+message text, name or JID is recorded.
+
+- **Step 1, `pair --data-dir D:\tmp\wa-005-real` (run by the owner, QR scanned by the owner)**: exit message "linked.
+  The saved session can be reused." The pairing generation's stop check and the fresh connection's stop check both
+  passed (`quiet_stop_passed`, 262 ms and 460 ms, 0 dropped messages). The fresh connection lasted about 3.6 s after
+  "Successfully authenticated". `ingest_stopped`: `stored=0 ignored=0 rejected=0 unavailable=0 dropped=0
+  history_incomplete=0 lookups_dropped=0 hints_dropped=0 merged=1 merge_failed=0`. So during `pair` no history
+  chunk was reported incomplete and none was stored: history, if WhatsApp sends it, did not arrive in that window.
+- **Step 2, offline inspection (read-only, of a copy of `whatsapp.db`)**: `status` exit 0 (`logged_in: true`,
+  `pairing_required: false`, marker clear). The copy holds 22 tables; `chats` 0, `messages` 0, `whatsmeow_contacts` 0,
+  `whatsmeow_lid_map` 1, `mcp_version` 3. Database size 336 KB. Nothing else was opened or printed.
+- **Observation**: the link produced one LID mapping and one run-time merge on a real server, and no ingest warning.
+  The history a linked device receives after `pair` is the accepted risk named in the roll-up; with this run it is
+  measured as zero stored and zero reported incomplete within a 3.6 s connection.
+- **Not yet run**: `serve`, live messages (text, captioned image, a LID-addressed contact), the second inspection,
+  and the cleanup (the owner unlinks the device on the phone, then the directory is deleted).
