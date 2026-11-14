@@ -257,3 +257,70 @@ operating system against a baseline you have seen on your own machine. Both are 
 they cannot prevent or prove exhaustion. If memory grows without explanation, stop the
 process with a normal stop signal and wait for it to exit. If you have to kill it, the next start will require
 recovery as above; do not delete the database to get around that.
+
+## Message ingest (feature 005)
+
+`stdio`, `serve` and the connection that follows a `pair` now store the messages the account receives. There are
+still no MCP tools, so nothing reads them yet. "Implemented" and "verified" mean what they mean above. **Nothing in
+this section has been verified on a real account**; every result below comes from the simulator, fakes and a
+temporary store on Windows (`specs/005-message-ingest/verification.md`).
+
+### What is stored
+
+- **Message text and captions**, in clear text, in `whatsapp.db`, with the chat, the sender, the time and whether you
+  sent it from your phone. This includes messages from groups and from people who are not your contacts.
+- **Media metadata, not media**: type, size, MIME type, file name, URL and direct path, and the **keys and hashes
+  that decrypt the media**. Anyone who holds the database and can reach WhatsApp's media servers while the link
+  lives can fetch and decrypt those files. Treat the database as you treat the photos themselves. The program never
+  downloads media.
+- **Chat names**: your saved contact name, a name the other person chose, a group's subject, or a fallback made
+  from the number. The device's contact table is read for these.
+- **LID-to-phone links**: some contacts are addressed by an internal identifier. The links WhatsApp reports are
+  kept, and a person's messages are stored under one identity, the phone number, once a link is known. A merge is
+  not undone if WhatsApp later changes a link.
+- **History**: the history WhatsApp sends after a link, in bounded batches.
+- **Not stored**: edits, deletions, reactions and other protocol messages; status and newsletter traffic; and the
+  placeholders WhatsApp sends instead of a message it did not encrypt for this device (view-once media is the usual
+  one). Those are only counted, as `unavailable`, which is why such a message is missing.
+- **Growth is not bounded.** Nothing is deleted or expired. A disk guard refuses new messages below 256 MiB free and
+  resumes at 512 MiB. **Deleting a chat or a message in WhatsApp does not delete it here**, and a backup holds the
+  same data as the database. Decommissioning needs the whole data directory and its backups removed.
+
+### What the program sends
+
+Ingest cannot send a message, pair or connect: its client interface has none of those methods and a test fails if one
+is added. It does ask WhatsApp for a group's name, once per group while the name is missing, with at most 64 groups
+waiting and a failure remembered for 10 minutes. The library still acknowledges what it received after the message
+is stored, and an undecryptable message keeps the library's own retry request. The pinned library fork sends nothing to
+your phone on another account's behalf.
+
+### Events
+
+| Event | Level | Meaning and what to do |
+| --- | --- | --- |
+| `ingest_failed` | warn | A store write failed (`operation` is `live`, `history` or `name`; the error class is `busy`, `disk_low`, `io`, `resource_limit`, `closed`, `indeterminate` or `storage`). Ingest stops for this run, the process stops normally and exits 1 with "message storage failed; messages may be missing. Fix the cause and start again." Free disk space or fix permissions, then start again. A failed message was not acknowledged to WhatsApp, but there is no guarantee WhatsApp sends it again. |
+| `history_incomplete` | warn | A history chunk was not fully stored (`reason`: `download`, `too_large`, `parse`, `queue_full`, `stopped`). History is sent once; the missing messages are not fetched again. |
+| `receive_overload` | warn | The library closed the connection at a receive limit and messages may be missing. It was not reopened in the simulator test; stop and start again. |
+| `lid_reconcile`, `lid_reassigned` | info | The startup merge of identities finished, or WhatsApp changed a link (earlier merges are kept). |
+| `lid_merge_failed` | warn | One identity merge failed; both sides stay intact and the next start retries it. |
+| `ingest_stopped` | info | Counts for the run: `stored`, `ignored`, `rejected` (invalid fields, never repaired), `unavailable`, `dropped` (arrived after the stop began), `history_incomplete`, `lookups_dropped`, `hints_dropped`, `merged`, `merge_failed`. Not written when all are zero. |
+
+Text and captions appear in logs only at debug level; media keys, hashes, URLs and paths appear at no level; names
+appear at no level above debug (a test covers each). JIDs and IDs in warnings are quoted.
+
+### Stopping while history arrives
+
+A stop while a history chunk is downloading or being stored can end `storage_refused` and leave the unsafe marker,
+which then needs offline recovery as above. On the simulator that happened in 3 of 50 such stops (6%); stops while a
+live message, a group lookup or a merge was in flight passed 50 of 50. A stop with a group lookup that never gets an
+answer took about 7.1 s of the 10 s limit. The owner accepted both on 2026-11-14.
+
+### What has been checked
+
+- **Implemented and tested on the simulator and with fakes**: storing text, captions and media metadata; history
+  with real download and decryption through the simulator; identity merges; chat names; the bounds above; the abuse
+  cases; log contents; the stop and latency measurements (no `receive_overload` with 20 history chunks and a burst of
+  2,000 live messages).
+- **Not verified**: a real account, a real history, a real LID-addressed contact, view-once placeholders as the
+  real server sends them, a real group lookup, Linux and macOS (only the CI runners' automated tests), the
+  race detector (WSL2 run pending) and long-run behaviour.
