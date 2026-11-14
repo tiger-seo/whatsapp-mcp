@@ -479,6 +479,7 @@ lines, 0 `FAIL`); each pair run covers both of its checks. No kind is lower than
 | design | 2026-11-13 | 84dfa32 | PASS | |
 | design | 2026-11-13 | a040210 | PASS | |
 | code | 2026-11-14 | 0ccc59b | PASS | |
+| code | 2026-11-14 | cbce833 | PASS | |
 
 Code review (2026-11-14, commit `0ccc59b`, last code change `e67fdf5`): PASS, no blocking finding. It traced every return
 path of `HandleMessage` (no acknowledgement without storage), the stop order, the read/write flags of the new store
@@ -784,8 +785,8 @@ earlier runs. Each exit code was written by the command itself.
 - **Placeholders are not fetched**: a view-once or other unavailable message is counted as `unavailable`, never stored.
 - **Unsafe stops during history (6% on the simulator)** and **a stop of about 7.1 s of the 10 s limit when a group lookup
   never gets an answer**: accepted by the owner on 2026-11-14.
-- **Naming**: the contact table is read once per chat per generation, so a contact saved while the process runs is
-  picked up at the next start; names already missing in an existing database are filled when history or a message for
+- **Naming**: the contact table is read when a chat is first named and, for a chat below the saved name, again at 60 s,
+  5 min and 30 min (see "Late contact names"); a contact saved later than that is picked up at the next start; names already missing in an existing database are filled when history or a message for
   that chat arrives again.
 
 ### Not verified
