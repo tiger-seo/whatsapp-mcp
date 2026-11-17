@@ -1,16 +1,57 @@
 # U1 Spike: Store Isolation and Actual Query Completion
 
 **Created**: 2026-11-17
-**Status**: Not started. This is a research/run guide, not evidence of a supported solution or owner approval.
+**Status**: Started; preliminary native initial-query and later-Next cancellation cases are recorded below and in verification.md. No supported isolation solution or owner approval has been established.
 **Task**: T001 in [tasks.md](tasks.md), before formal implementation-readiness review and T002-T042.
 
 ## Resume Here
 
-Start with experiment 1: cancellation during a genuinely expensive later `rows.Next` through the public `database/sql` API and the repository's exact SQLite pin. Do not start by implementing the MCP server or assuming that a context timeout proves SQL drainage.
+Continue experiments 1 and 3: validate bounded query strategies and the remaining cancellation/close cases, then test atomic admission and integrated resource isolation. Do not start implementing the MCP server or assume that a context timeout proves SQL drainage.
 
-All 42 feature tasks remain unchecked. This guide accompanies the design fixes after `/speckit.analyze`; inspect `git status`, recent commits and any remaining diff before working. Preserve existing changes, including unrelated libsignal backlog edits. No prerequisite experiment, implementation, new dependency or owner design review has run.
+All 42 feature tasks remain unchecked. This guide accompanies the design fixes after `/speckit.analyze`; inspect `git status`, recent commits and any remaining diff before working. Preserve existing changes, including unrelated libsignal backlog edits. Preliminary cancellation runs have completed; no implementation, new dependency or owner design review has run.
 
 The working design is explicitly BLOCKED on U1. A review can provide feedback now, but cannot replace the missing supported isolation/completion mechanism. Resolve the prerequisite first, update the design, then commit under the authorized workflow and obtain owner-judge design review. No commit, push or account action is authorized merely by this guide.
+
+## Progress: 2026-11-17
+
+- Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, pinned `modernc.org/sqlite v1.61.0`; synthetic scratch harness and WAL database under `D:\tmp\kilo\u1-spike`, no real account data.
+- The aggregate was confirmed entered by a registered scalar callback. An initial `QueryContext` returned `context canceled` 0.542 ms after cancellation. A later `rows.Next` returned 2.476 s after cancellation with `Next=true` and `rows.Err()=context canceled`; uncancelled comparison was 1.723 s. Rows/transaction cleanup and a subsequent write were observed after the operation returned.
+- The callback ran once per aggregate row and affects the timing; these single samples are not production query timings or upper bounds. The source indicates that the driver's initial-query interrupt watcher does not remain installed for later `Next`. See research R6 and verification.md for exact commands, source references, timestamps, error and resource-return observations.
+- Candidate direction, not an approved solution: indexed, bounded batches with explicit candidate/byte ceilings and bounded aggregation, while retaining one snapshot and real accounting. Establish semantics, query plans, shared SQLite/temp/WAL limits and actual completion before relying on it.
+- Still open: realistic grouping/sorting and folding, connection acquisition and close races, worst-case and proposed query plans for all five operations, deterministic ordinary/device admission schedules, resource/WAL bounds, integrated pressure, and other native targets. The 1 s/10 s timers remain requests to cancel, not verified completion deadlines. T001 and implementation readiness remain BLOCKED.
+
+### Follow-up: Query Plans and WAL
+
+- The existing synthetic `TestQueryPlans` passed all 24 subtests on Windows/amd64. Its assertions cover representative plans for all five read operations: ordered index scans for chat listing/contact chats, indexed point lookups for get/direct chat, and temporary B-trees for contact grouping and name ordering. It does not prove bounded candidates, worst-case behavior or proposed 006 query plans. See verification.md for command and results.
+- Static query analysis: filtered chat listing and contact-chat membership can scan many candidates even when `LIMIT` is small. Contact search groups aliases and sorts before paging; a bounded implementation must preserve grouping, all four name fields, phone-name preference and global ordering. Get/direct chat are primarily indexed lookups but still need pre-materialization source-length and latest-message budgets. See research R6 for file references and candidate approaches.
+- A separate synthetic WAL experiment with the default 1,000-page autocheckpoint held a read transaction open while 4,000 rows were inserted. Passive checkpoint reported 1,465 WAL frames and zero checkpointed; the WAL was 6,035,832 bytes. After the reader rolled back, a truncate checkpoint returned the WAL to zero bytes. This demonstrates snapshot retention in that fixture, not an upper bound or a production-store integration test.
+- Next: prototype and measure bounded candidate keysets including mixed-direction/null ordering and contact alias grouping; demonstrate cancellation/close and WAL release during actual later steps. Model and test admission atomically across ordinary, device and tool paths. Establish realistic worst-case work, memory and disk ceilings rather than choosing them from the sample measurements.
+
+### Follow-up: Activity Keyset and Admission Analysis
+
+- A scratch-only activity-order prototype walked 235 synthetic chats with timestamp ties and NULLs, using batch sizes 1, 7, 50 and 200. Every traversal matched a full SQL ordering, without duplicates or omissions. The test does not yet validate paged/filter semantics, source-byte budgets, snapshot concurrency, actual VM work, or production queries.
+- On this driver and fixture, `EXPLAIN QUERY PLAN` for an initial NULL continuation without an explicit `last_message_time IS NULL` showed only the expression prefix of `chats_last_activity`, not a `jid` range. Adding the logically redundant explicit null predicate produced `(<expr>=? AND last_message_time=? AND jid>?)`. Merely naming an index does not establish a candidate-work bound. See verification.md for commands, plans and limitations.
+- Source analysis suggests a candidate single-lock admission design: register ordinary arrivals before deciding grants, prioritize waiting ordinary/device work, fail tool admission without queueing, and count any tool within the existing 16 active and four reader totals through actual return. Device nested work must reuse its existing lease. This is a proposal, not code or test evidence: admission alone cannot prevent an already-running tool from consuming shared SQLite memory or retaining WAL after cancellation. Continuous ordinary traffic may starve tools.
+- Next: test pagination and budget-exhaustion/no-partial-result cases for bounded candidate scans, including rare matches and high offsets; prototype contact grouping and verify actual plans and work; test atomic gate/close/device schedules. U1 and T001 remain BLOCKED.
+
+### Focused 006 Follow-up: List Chats Paging
+
+- A scratch-only `list_chats` activity-order model used the existing 235-chat synthetic fixture. Nine successful cases matched a full SQL baseline for JID substring filtering, offsets and page limits, including rare/no matches, NULLs and ties. Three budget-exhaustion cases returned an error with no partial rows. See verification.md for commands and individual counts.
+- The model intentionally covers only JID filtering; actual 006 also needs folded name/JID matching, source-size checks, optional latest messages and the real store. Candidate counting occurs after SQLite's `rows.Next` call; the call that discovers exhaustion can already step one more row, and an SQL batch can do work before returning it. Thus the result establishes page behavior for these cases, **not** an SQLite work or actual-completion bound.
+- Continue only with controls necessary for 006: bounded execution of its five reads, shared ingest/device admission and real completion. Contact grouping and name sorting remain necessary because they are exposed by those five tools; unrelated store operations are outside this spike. T001 remains BLOCKED.
+
+### Focused 006 Follow-up: Candidate Budget Boundary
+
+- The synthetic activity-list model now caps each SQL `LIMIT` by the remaining candidate allowance and stops before another `rows.Next` when that allowance is exhausted. Thirteen cases passed on Windows/amd64: nine baseline-equivalent pages and four expected errors with no partial result, including the exact-budget boundary. The full-page case can succeed at exactly its budget.
+- A partial page at exactly the candidate limit returns `resource_limit` even if the last inspected candidate happens to be the last row: detecting end-of-input would require a further probe. This is a conservative trade-off in the scratch model, not an approved feature rule or compatibility claim.
+- This closes only the model's extra-returned-candidate issue. An indexed SQL step can still do more work than one row, and the experiment does not bound SQLite VM instructions, field bytes, memory, WAL, cancellation or competing writes. Real 006 query semantics and the other four tools remain unverified. See verification.md; T001 remains BLOCKED.
+
+### T001 Decision Point: Cancellation, Writes and Isolation
+
+- A Windows/amd64 synthetic two-connection case held a later `Next` inside a deliberately blocked scalar callback after a real read snapshot was established. After cancellation, the step was still active at 100 ms; 1,000 synthetic writes succeeded while it was held, but a passive checkpoint showed 336 WAL frames and zero checkpointed, 1,384,352 bytes retained. After releasing the callback and waiting for actual `Next`/transaction return, a truncate checkpoint reduced WAL to zero. This is an intentionally noncooperative test, not a claim that production folding blocks for that duration, that ingest failed, or that the observed size is an upper bound. Full command and caveats: verification.md.
+- The pinned driver's public APIs examined do not supply a per-connection later-`Next` interrupt/progress budget or tool-only heap quota. Its `sqlite.Limit` controls specific SQLite limits; `DBStatus` measures but does not reserve resources. The process-wide hard heap limit, WAL and disk remain shared with ingest. A candidate-count cap and priority gate do not alone provide the completion and shared-resource controls required by the contract.
+- A conditional admission counterexample also rules out an unconditional no-interference claim: with a tool still holding one of 16 slots after cancellation, 15 ordinary active operations and 64 ordinary waiters, a further ingest write hits the existing immediate waiter-cap error; without the tool the same arrival can instead be waiter 64. This is a source-derived schedule, not an executed test, and FR-017 does not explicitly require universal equivalence to a no-tool run. It demonstrates why the exact accepted interference model matters; it does not prove all possible compliant designs impossible.
+- **Conclusion:** A concrete supported isolation/completion mechanism has not been established within the current pin, architecture and budgets; a cancellation-only or candidate-only design cannot clear T001. No design PASS, numeric bound, revised requirement or implementation is implied. The documented stop rule requires an explicit owner prerequisite decision if the missing controls cannot be justified; options and trade-offs are in research.md. Other native platforms and integrated real Store tests are not verified.
 
 ## Question to Answer
 
@@ -47,7 +88,7 @@ Record monotonic elapsed times for operation start, cancellation request, actual
 
 The current 1 s store and 10 s tool values are cancellation-request proposals, not assumed completed-work bounds. Do not implement an outer `select` timeout and call it successful cancellation while the query goroutine continues. Retain real accounting until return and do not admit a replacement snapshot during delayed drainage.
 
-Static research raised a possible difference between cancellation during initial query execution and later Next in the pinned driver. Treat that as a hypothesis to test, not an already reproduced defect. Inspect supported APIs/source paths; no unsafe/private-handle access or driver patch is authorized.
+The preliminary synthetic run and source inspection show a difference between cancellation during initial query execution and a later Next for the pinned driver. Do not generalize the observed duration into a bound; extend the experiment to realistic query stages and inspect supported APIs/source paths. No unsafe/private-handle access or driver patch is authorized.
 
 ## Experiment 2: Admission and Ordinary-Work Priority
 

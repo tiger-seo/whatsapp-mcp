@@ -2,7 +2,7 @@
 
 ## Current State
 
-2026-11-17: Analysis remediation is documented for the five-tool design; all 42 tasks remain unchecked (setup 3, foundation 15, US1 8, US2 6, polish/evidence 10). **Implementation/design-PASS readiness is BLOCKED** by supported store isolation and actual query-completion controls, not established by one snapshot/context deadlines. T001 first performs synthetic scratch prerequisite research and records its outcome, then obtains owner design review; T002-T042 cannot start before both clear. No prerequisite spike, runtime implementation, dependency change, account action or owner verdict has run. Both login tools and configurable read restrictions remain deferred. The previous artifact-completeness statements below are historical checks, not evidence that this newly identified blocker is resolved.
+2026-11-17: Analysis remediation is documented for the five-tool design; all 42 tasks remain unchecked (setup 3, foundation 15, US1 8, US2 6, polish/evidence 10). **Implementation/design-PASS readiness is BLOCKED** by supported store isolation and actual query-completion controls. T001 scratch research has begun with a later-Next cancellation counterexample below; all other prerequisite cases and the isolation mechanism remain open. T002-T042 cannot start before the prerequisite and owner design review clear. No runtime implementation, dependency change, account action or owner verdict has run. Both login tools and configurable read restrictions remain deferred. Earlier artifact checks do not resolve the blocker.
 
 ## Planning Evidence
 
@@ -25,7 +25,7 @@
 
 | Gate | Status |
 | --- | --- |
-| Supported store-isolation/query-resource/completion prerequisite | BLOCKED, not run; pinned-driver static research is not a mechanism proof or design approval. |
+| Supported store-isolation/query-resource/completion prerequisite | BLOCKED; one preliminary later-Next experiment run, remaining cases and mechanism not established. |
 | Five tools through official in-memory transport | Not run; no implementation yet. |
 | Schema/default/output consistency and all acceptance scenarios | Not run. |
 | Input/dispatch/notification/output and memory bounds | Not run; fixed values are review proposals, not measured guarantees. |
@@ -53,6 +53,98 @@ The user authorized documentation fixes after the read-only analysis. No constit
 | C2 - default 235-chat traversal absent | T020/quickstart explicitly traverse all 235 chats with omitted limit (30), 1 and 200, asserting completeness and uniqueness. | Test assignment corrected; tests not run. |
 
 Static source research used the actual `go.mod` SQLite pin v1.61.0 and existing store admission/SQL; it ran no cancellation/isolation experiment. No module was downloaded/updated. The implementation permission and quiet-stop/marker requirements remain unchanged. Design approval must cover the corrected full feature directory after the prerequisite is resolved; artifact consistency review is not owner-judge.
+
+## U1 Scratch Experiment: Later Next (2026-11-17)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, repository module with `modernc.org/sqlite v1.61.0`. Synthetic WAL database and scratch harness: `D:\tmp\kilo\u1-spike\main.go` and `synthetic.db`; no real account data. One cancelled later-step case, one uncancelled comparison and one cancelled initial-query case; no skipped cases in these three runs. All commands exited 0 directly:
+
+```powershell
+$env:CGO_ENABLED='0'; go run 'D:\tmp\kilo\u1-spike\main.go'; exit $LASTEXITCODE
+$env:CGO_ENABLED='0'; $env:U1_BASELINE='1'; go run 'D:\tmp\kilo\u1-spike\main.go'; exit $LASTEXITCODE
+$env:CGO_ENABLED='0'; $env:U1_INITIAL='1'; go run 'D:\tmp\kilo\u1-spike\main.go'; exit $LASTEXITCODE
+```
+
+The harness opens one `database/sql` connection, begins a context-owned transaction, and runs `SELECT 1 UNION ALL SELECT sum(x + spike_mark() * 0) FROM (WITH RECURSIVE r(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM r WHERE x<2000000) SELECT x FROM r)`. After consuming the first row, the second `Next` runs in a goroutine. The public registered scalar `spike_mark` signals its first invocation within the aggregate, before cancellation; the callback itself runs once per aggregate row and affects measured runtime. The harness waits for actual `Next`, closes rows, rolls back or observes automatic rollback, then performs a write using the same single-connection pool. The retained scratch source contains the full reproduction and a 20 s failure watchdog; watchdog termination is not considered a successful drain.
+
+| Case | Query return / entered | Request / actual return | Close and reuse |
+| --- | --- | --- | --- |
+| Cancel | Query 0.559 ms; aggregate entered 1.107 ms | Cancel at 1.107 ms; `Next=true`, `rows.Err()=context canceled` at 2.477 s, 2.476 s after cancellation. | `rows.Close` nil at 2.478 s; rollback reports already rolled back; write nil at 2.479 s, pool in-use 0. |
+| Baseline | Query 0.622 ms; aggregate entered 1.172 ms | No cancel; `Next=true`, nil error at 1.724 s, 1.723 s after entry. | Close and rollback nil; write nil at 1.729 s, pool in-use 0. |
+| Initial query | Aggregate entered 1.094 ms | Cancel at 1.094 ms; `QueryContext` returned `context canceled` at 1.636 ms, 0.542 ms later. | Rollback reports already rolled back; write nil at 9.812 ms, pool in-use 0. |
+
+These are individual observations, not calibrated upper bounds. The scratch query and callback do not establish the duration or memory of production queries, SQLite VM-only cancellation, or all transaction-close races. Broader initial-query cancellation, folding, connection-acquisition cancellation, query plans, resource/WAL bounds, admission schedules and native Linux/macOS remain not verified. U1 stays BLOCKED; no completion policy or owner approval is inferred.
+
+Documentation checks on 2026-11-17: `git diff --check` exit 0; `git ls-files --eol -- specs/006-mcp-stdio-tools` exit 0, all eleven tracked feature files `i/lf w/lf`. These checks do not verify the runtime mechanism.
+
+## U1 Follow-up: Query Plans and WAL (2026-11-17)
+
+Native Windows/amd64, Go 1.27.4, pinned SQLite driver, `CGO_ENABLED=0`; synthetic data only. Direct command results:
+
+| Command | Result |
+| --- | --- |
+| `$env:CGO_ENABLED='0'; go test ./internal/store -run '^TestQueryPlans$' -count=1 -v -timeout 5m; exit $LASTEXITCODE` | Exit 0; one test with 24 passing subtests, zero skips, 57.139 s package time. Representative existing plans assert activity/name ordered scans, keyed get/direct lookups, indexed contact-chat membership probes, and contact-search GROUP BY/ORDER BY temporary B-trees. Assertions cover these fixtures only and do not prove scan/resource ceilings. |
+| `$env:CGO_ENABLED='0'; go run 'D:\tmp\kilo\u1-spike\wal.go'; exit $LASTEXITCODE` | Exit 0; initial scratch version explicitly disabled autocheckpoint and held a snapshot across 1,000 synthetic 1 KiB inserts. Passive checkpoint reported busy/log/checkpointed `0,360,0`, WAL 1,483,232 bytes; after rollback, truncate checkpoint `0,0,0`, WAL zero. The retained harness was subsequently extended to 4,000 inserts and an environment-controlled default autocheckpoint. |
+| `$env:CGO_ENABLED='0'; $env:U1_DEFAULT_CHECKPOINT='1'; go run 'D:\tmp\kilo\u1-spike\wal.go'; exit $LASTEXITCODE` | Exit 0; default autocheckpoint 1,000 pages; snapshot saw zero rows before and after 4,000 inserts in 40 transactions, 111.474 ms write time. Passive checkpoint `0,1465,0`, WAL 6,035,832 bytes; after rollback truncate checkpoint `0,0,0`, WAL zero. |
+
+The WAL harness uses two public `database/sql` connections against a separate synthetic database, not the actual Store admission layer or its full production pragmas. It explicitly runs a passive checkpoint and later a truncate checkpoint; no checkpoint-duration, disk-ceiling, writer-isolation or worst-case claim follows. It demonstrates that a small read result and automatic checkpoint setting do not by themselves release a held snapshot's WAL. At that stage no batch prototype, admission schedule or cross-platform runtime evidence had been established; see the subsequent activity-keyset experiment below.
+
+## U1 Follow-up: Activity Keyset (2026-11-17)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, `modernc.org/sqlite v1.61.0`; scratch source `D:\tmp\kilo\u1-spike\keyset.go` and synthetic database `keyset.db`. No production code or account data. Both executions of `$env:CGO_ENABLED='0'; go run 'D:\tmp\kilo\u1-spike\keyset.go'; exit $LASTEXITCODE` exited 0. Between runs the NULL continuation was edited to add the explicit `last_message_time IS NULL` predicate; the retained source is the second version.
+
+The fixture has 235 distinct JIDs, five repeated non-NULL timestamps and NULL timestamps. It compares the complete activity-order traversal against `ORDER BY (last_message_time IS NULL), last_message_time DESC, jid`. Batch sizes 1, 7, 50 and 200 respectively used 242, 42, 11 and 6 SQL queries; all returned exactly 235 entries equal to baseline. Each traversal also counted 102 JIDs containing `00`; that count is not a paging/filter acceptance test. The full traversal is materialized by the scratch harness and is not a production bounded-memory implementation.
+
+| Query shape | Reported plan on final run |
+| --- | --- |
+| First non-NULL candidates | `SEARCH chats USING COVERING INDEX chats_last_activity (<expr>=?)` |
+| Equal timestamp, later JID | `SEARCH chats USING COVERING INDEX chats_last_activity (<expr>=? AND last_message_time=? AND jid>?)` |
+| Lower timestamps | `SEARCH chats USING COVERING INDEX chats_last_activity (<expr>=? AND last_message_time<?)` |
+| First NULL candidates | `SEARCH chats USING COVERING INDEX chats_last_activity (<expr>=?)` |
+| Later NULL JID, explicit `last_message_time IS NULL` | `SEARCH chats USING COVERING INDEX chats_last_activity (<expr>=? AND last_message_time=? AND jid>?)` |
+
+The first version's later-NULL query omitted the explicit null predicate and reported only `(<expr>=?)`, despite `jid>?`; it did not demonstrate a JID range seek. Plan output describes planner strategy, not measured VM steps or a guarantee for other query shapes/statistics. The experiment has no page/offset, source-size, candidate-exhaustion, concurrent write, SQLite heap, WAL or actual-completion measurements. The query strategy, numeric limits, contact grouping and full admission policy remain unverified; U1 is still BLOCKED.
+
+## U1 Focused Follow-up: List Chats Paging (2026-11-17)
+
+Native Windows/amd64, Go 1.27.4, pinned `modernc.org/sqlite v1.61.0`, `CGO_ENABLED=0`. Synthetic scratch sources and database under `D:\tmp\kilo\u1-spike`; no account data or production code. Both commands exited 0 directly:
+
+```powershell
+$env:CGO_ENABLED='0'; go run 'D:\tmp\kilo\u1-spike\keyset.go'; exit $LASTEXITCODE
+$env:CGO_ENABLED='0'; go run 'D:\tmp\kilo\u1-spike\page.go'; exit $LASTEXITCODE
+```
+
+`keyset.go` rebuilds the 235-chat fixture. `page.go` keeps a single read transaction, walks activity-index candidates in batches, filters synthetic JIDs in Go, and compares pages against full SQL ordering/filtering. Twelve cases ran, zero skips: nine successful baseline comparisons and three expected candidate-budget errors with a nil result, not a partial page.
+
+| Case | Filter / offset / limit / batch / budget | Inspected / returned | Outcome |
+| --- | --- | --- | --- |
+| 1 | empty / 0 / 30 / 7 / 235 | 30 / 30 | Matches baseline |
+| 2 | empty / 100 / 30 / 7 / 235 | 130 / 30 | Matches baseline |
+| 3 | empty / 234 / 30 / 7 / 235 | 235 / 1 | Matches baseline |
+| 4 | `00` / 0 / 30 / 1 / 235 | 53 / 30 | Matches baseline |
+| 5 | `00` / 30 / 30 / 50 / 235 | 130 / 30 | Matches baseline |
+| 6 | `00` / 100 / 30 / 7 / 235 | 235 / 2 | Matches baseline |
+| 7 | `0234` / 0 / 20 / 7 / 235 | 235 / 1 | Matches baseline |
+| 8 | `absent` / 0 / 20 / 7 / 235 | 235 / 0 | Matches baseline |
+| 9 | empty / 100 / 30 / 7 / 110 | 110 / 0 | Budget error, no partial result |
+| 10 | `absent` / 0 / 20 / 50 / 234 | 234 / 0 | Budget error, no partial result |
+| 11 | `00` / 0 / 30 / 200 / 10 | 10 / 0 | Budget error, no partial result |
+| 12 | empty / 0 / 30 / 7 / 30 | 30 / 30 | Matches baseline at exact budget |
+
+Counts are candidates inspected by Go, not SQLite VM steps: `rows.Next` is called before checking whether the candidate budget is exhausted, and may execute SQLite work for one additional row; SQL itself may do more than one unit of work per returned row. This model does not implement folded name/JID matching, latest messages, source-length checks, resource accounting, real admission, cancellation or concurrent writes. Results do not clear T001.
+
+### Candidate Budget Boundary Follow-up (2026-11-17)
+
+The scratch `page.go` was subsequently revised in place: each statement's SQL `LIMIT` is `min(batch size, remaining candidate budget)`, the iteration loop stops at that limit, and the next statement is not issued when no candidate budget remains. Thus the retained source reproduces this run, not the earlier pre-check version. Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, SQLite v1.61.0, same 235-row synthetic fixture. Command `$env:CGO_ENABLED='0'; go run 'D:\tmp\kilo\u1-spike\page.go'; exit $LASTEXITCODE` exited 0; **13 cases, zero skips**: the previous nine successful baseline comparisons and three no-partial budget failures, plus one exact-budget failure.
+
+The successful full page at budget 30 inspected and returned 30 candidates. With an absent filter and budget 235, after inspecting all 235 fixture rows the model returned a budget error with no rows because it did not probe for end-of-input; at budget 236 the same empty page succeeded. The former is a deliberate conservative false-positive resource error, not proof that it is the final approved API policy. SQL execution/VM work can exceed the number of returned candidates, and no timing, heap, WAL, actual cancellation, production query or ingest-isolation bound follows from these cases. T001 stays BLOCKED.
+
+## U1 Focused Cancellation and Concurrent Writes (2026-11-17)
+
+Native Windows/amd64, Go 1.27.4, pinned SQLite v1.61.0, `CGO_ENABLED=0`. Synthetic scratch program `D:\tmp\kilo\u1-spike\cancel-wal.go` uses a separate synthetic WAL database, two `database/sql` connections and a scalar callback deliberately held by a channel. No real account or Store admission path was used. Command `$env:CGO_ENABLED='0'; go run 'D:\tmp\kilo\u1-spike\cancel-wal.go'; exit $LASTEXITCODE` exited 0; one controlled scenario, no skips.
+
+After a read transaction's first result established a snapshot, a later `Next` entered the held callback. The context was cancelled and the handler was confirmed still running at 100.312 ms. While held, 1,000 synthetic 1 KiB rows were committed; passive checkpoint returned `busy=0, log=336, checkpointed=0`, WAL 1,384,352 bytes at 123.970 ms. The callback was then released; `Next=true` with `rows.Err()=context canceled`; rows close returned nil and rollback reported the transaction already rolled back. After actual return, truncate checkpoint returned `0,0,0` and WAL size zero.
+
+The callback is intentionally blocked to make the schedule deterministic; it does not establish a normal folding duration, production query timing, a maximum retained WAL, or an ingest error. Writes succeeded in this run. It demonstrates that cancellation and a successful concurrent writer do not by themselves prove snapshot return. The source-derived near-capacity gate schedule and decision alternatives in research.md are reasoning, not an executed stress test. T001 remains BLOCKED; native Linux/macOS, actual store/device contention and a complete enforcement mechanism remain not verified.
 
 ### Remediation Validation
 
