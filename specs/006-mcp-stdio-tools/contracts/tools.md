@@ -69,7 +69,7 @@ When latest is requested but absent, include `latest_message: null`. When activi
 | `not_found` | Requested singular chat/direct chat does not exist; no internal-error substitution. |
 | `busy` | Tool credit or immediate store admission unavailable; retry later. No read queue or automatic retry. |
 | `resource_limit` | Fields, store result, preflight encoding or response budget exceeded; suggest a smaller page or disabling latest detail where applicable. No partial success. |
-| `timeout` | Operation/snapshot deadline exceeded; cancel and actually drain. |
+| `timeout` | Cancellation deadline reached; request cancellation and retain actual work/lease accounting until return under T001's validated completion policy. The error is not proof the snapshot drained. |
 | `cancelled` | Client/connection cancellation; response is best-effort if transport is still writable. |
 | `unavailable` | Store is closed or cannot serve the read; no empty-success substitute. |
 | `storage_error` | Sanitized genuine storage failure; no SQL/driver detail/keys/local paths. |
