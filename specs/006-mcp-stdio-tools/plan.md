@@ -4,7 +4,7 @@
 
 **Input**: Feature specification from `specs/006-mcp-stdio-tools/spec.md`
 
-**Status**: Phase 0 research and Phase 1 design complete. No implementation or runtime acceptance has run. Next is task generation, followed by the required committed design review before implementation.
+**Status**: Phase 0 research, Phase 1 design and task generation complete. No implementation or runtime acceptance has run. Next is the required committed design review before implementation; `tasks.md` T001 is the gate.
 
 ## Summary
 
@@ -68,7 +68,7 @@ specs/006-mcp-stdio-tools/
   quickstart.md
   verification.md
   checklists/requirements.md
-  tasks.md                       # generated later by /speckit-tasks
+  tasks.md                       # dependency-ordered work; design review first
 ```
 
 ### Source Code (repository root)

@@ -2,7 +2,7 @@
 
 ## Current State
 
-2026-11-17: Phase 0 research and Phase 1 design written for five tools. No implementation, dependency addition or live-account action has run. `get_login_status`, `get_pairing_qr` and configurable read restrictions remain in their owner-approved backlog items. Next: `/speckit-tasks`, then committed owner design review before implementation.
+2026-11-17: Phase 0 research, Phase 1 design and task generation complete for five tools. `tasks.md` contains 42 unchecked tasks: setup 3, foundation 15, US1 8, US2 6, polish/evidence 10. No implementation, dependency addition or live-account action has run. `get_login_status`, `get_pairing_qr` and configurable read restrictions remain in their owner-approved backlog items. Next: committed owner design review before T002 or any other implementation; T001 is not yet complete.
 
 ## Planning Evidence
 
@@ -15,6 +15,11 @@
 | 2026-11-17 | `git diff --check`; `git diff --cached --check` | Both exit 0; documentation whitespace validation only. |
 | 2026-11-17 | `git ls-files --eol -- specs/006-mcp-stdio-tools` | Exit 0; all nine tracked/staged feature files show `i/lf w/lf`, no CRLF. |
 | 2026-11-17 | Internal read-only artifact consistency pass (not owner-judge) | Corrected seven design gaps: pre-handler credit retirement, blocked stderr, numeric-ID precision, SDK error sanitization, subscription defaults, valid page zero and notification boundary. No runtime tests or owner verdict inferred. |
+| 2026-11-17 | `.specify/scripts/bash/setup-tasks.sh --json`, via Git Bash | Exit 0; resolved feature `specs/006-mcp-stdio-tools`, active task template and all four optional design-document groups. No implementation or runtime tests executed. |
+| 2026-11-17 | Initial PowerShell task-format validator using `rg` | Exit 1 before validation: `rg` is not available on this shell PATH. Replaced only the search executable with Git's no-index search; no task result inferred from this failure. |
+| 2026-11-17 | PowerShell assertions over `git grep --no-index -h -E '^- \[[ xX]\]' -- specs/006-mcp-stdio-tools/tasks.md` | Exit 0; 42 sequential unchecked IDs, 8 US1/6 US2 labels, 14 parallel markers, checklist format and file references present on every task; no story labels outside story phases. Artifact validation only. |
+| 2026-11-17 | Internal read-only task coverage check (not owner-judge) | One missing diagnostic-emission obligation identified and added explicitly to T017/T018/T025: bounded tool/component name, time, outcome and secret-free category, including pre-dispatch and terminal faults. No circular setup dependency found; no runtime tests or approval inferred. |
+| 2026-11-17 | Task-generation `git diff --check`, `git diff --cached --check` and `git ls-files --eol -- specs/006-mcp-stdio-tools` | Exit 0; task-related staged patch is whitespace-clean; all ten tracked/staged feature files show `i/lf w/lf`, no CRLF. Runtime gates remain not run. |
 
 ## Runtime Gates
 
