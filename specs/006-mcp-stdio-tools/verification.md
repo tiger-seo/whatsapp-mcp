@@ -316,10 +316,31 @@ Interpretation and limits: the 5 s request covers the measured reads with margin
 | 2026-11-17 | `git ls-files --eol -- specs/006-mcp-stdio-tools` | Exit 0: all ten tracked feature files show i/lf and w/lf, no CRLF. |
 | 2026-11-17 | Internal read-only remediation consistency pass and focused logger follow-up | Added explicit outer Enabled admission before ordinary severity filtering for real WARN sources at error level; corrected Handler ordering/current TextHandler terminology. No runtime tests, owner review or isolation proof. U1 remains OPEN/BLOCKED. |
 
+## Owner-Accepted Amendment to the Isolation Policy (2026-11-18)
+
+The design review of `87c3a11` returned CONCERNS. The owner accepted it without a further review, with the amendment below. It is recorded here, not in `contracts/store-and-lifecycle.md`, so that the reviewed commit stays current for the review gate; **it is binding for T004 and T005 and overrides sections 4 and 5 of that contract where they differ.** The code review checks the implementation against both. Fold it into the contract at the next design change that needs a review anyway.
+
+**M1: the recovery checkpoint is tool-class work.**
+
+1. A pending or running recovery checkpoint occupies the tool place in the gate, exactly like a tool read: while it is pending or running, tool reads are refused with `busy`, and a tool read and a checkpoint never hold the tool place together.
+2. It starts only under the tool admission conditions: no ordinary operation waiting and an active slot free. It never waits for a slot. If those conditions do not hold, it is not started; the next refused tool call tries again, subject to the 30 s rate limit.
+3. While it holds its slot, the ordinary waiter cap is 65, as for a tool read, so ordinary capacity stays 80.
+4. Because it never coexists with a tool snapshot, its busy-handler wait is only for ordinary reads, which are short.
+5. It does not count as a reader (it uses the writer connection). Ordinary writes queue behind it on the single writer connection for its duration (measured 0.55–0.96 s). Unlike a tool read, it is not cancelled by waiting ordinary work, because SQLite's checkpoint does not stop on interrupt in a useful state; the rate limit bounds how often this happens.
+6. T004 adds two schedules: (a) a checkpoint pending or running while a tool call arrives: refused with `busy`, no tool snapshot while the checkpoint holds the place; (b) checkpoint holding a slot with 15 ordinary active and 64 waiting: the next ordinary operation becomes waiter 65, and only the 81st ordinary operation gets `ErrBusy`.
+
+**Low findings, also binding for T005:**
+
+- If reading the `-wal` file size fails, the tool read is refused with `busy` and an ordinary `store.limit` event; it is not admitted on an unknown WAL size. A missing `-wal` file counts as size 0.
+- The free-space check (`diskGuard.check`, which may call the OS) and the `-wal` size checks run outside the gate's mutex. The gate decides on values read before it takes the lock; a check that has become stale between reading and deciding at most admits one tool read that the 128 MiB cancellation then bounds.
+- The checkpoint does not use `Store.write`, which opens a `BEGIN IMMEDIATE` transaction in which `wal_checkpoint` cannot run. It runs `PRAGMA wal_checkpoint(TRUNCATE)` directly on a writer connection under its own gate entry, and does not consult the disk guard: it frees disk space, so it must run even while the guard refuses writes.
+- Stale text superseded by `tasks.md` Current state, the contract's "Isolation Policy" and this amendment: `spike.md` "Resume Here" lines 12-13 and the "1 s store timer" mention near line 130; `research.md` R6 lines that say "Keep T001 blocked" or call the ceilings "not approved"; this file's "No review has run for 006" under the reviews table.
+
 ## Owner Reviews
 
 | Stage | Date | Commit | Verdict | Owner decision |
 | --- | --- | --- | --- | --- |
 | design | 2026-11-18 | 68ce167 | CONCERNS | Amend and review again: 5 s store timer, recovery TRUNCATE checkpoint, low-disk refusal accepted; all low findings fixed in the design |
+| design | 2026-11-18 | 87c3a11 | CONCERNS | Accepted without another review; M1 and the low findings fixed by the owner-accepted amendment in this file (binding for T004/T005) |
 
-No review has run for 006. The required design review follows task generation; the required code review follows implementation and evidence. A planning conformance table is not either review.
+Design reviews are recorded above. The required design review follows task generation; the required code review follows implementation and evidence. A planning conformance table is not either review.
