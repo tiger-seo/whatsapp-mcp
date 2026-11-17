@@ -21,7 +21,7 @@ Proposed fixed implementation constants, subject to the feature's design review.
 | Input partial-frame time | 10 s from first byte to complete newline. No timeout for a fully idle input before the first byte. |
 | Input fields | Query 1,024 UTF-8 bytes; JID/contact 256 bytes; bounded initialization metadata inside the outer frame cap. |
 | Tool cancellation | Request cancellation no later than 10 s after tool admission; earlier cancellation wins. This is not a claim of completed response or drain within 10 s. |
-| Store cancellation | Request cancellation no later than 1 s after tool-read admission, or immediately on ordinary store activity. Actual transaction/connection return remains accounted. Enforceable completion/resource isolation is a blocking prerequisite in contracts/store-and-lifecycle.md, not an assumed consequence of this timer. |
+| Store cancellation | Request cancellation no later than 1 s after tool-read admission, or immediately when ordinary work must wait, a fourth ordinary read needs the reader or the -wal passes 128 MiB. Actual transaction/connection return remains accounted. The first-step read form makes the request effective; see the isolation policy in contracts/store-and-lifecycle.md. |
 | Structured result | At most 2 MiB encoded JSON, precharged before marshaling. |
 | Text result | At most 2 MiB ASCII-safe JSON representation of the same value. |
 | Final output frame | At most 8 MiB including both representations, JSON-RPC envelope and newline; count actual serialized bytes. Fixed-size errors also obey the cap. |

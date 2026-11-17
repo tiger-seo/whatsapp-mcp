@@ -79,7 +79,7 @@ Group and unsupported-domain rows are excluded. Group aliases before matching/pa
 
 ### Store Snapshot
 
-`not_admitted -> active -> cancellation_requested? -> committed_read/rolled_back -> connection_returned`. There is no tool-store admission wait state. Request cancellation at 1 s or earlier according to the reviewed ordinary-work priority policy. Actual completion/resource bounds are the blocking T001 prerequisite in contracts/store-and-lifecycle.md; this timer is not their proof. Retain accounting until real transaction/connection return, admit no replacement snapshot while work remains, and latch unsuccessful shutdown on a validated-control failure. No tool-read policy is enabled before the prerequisite and design review clear.
+`not_admitted -> active -> cancellation_requested? -> committed_read/rolled_back -> connection_returned`. There is no tool-store admission wait state. Request cancellation at 1 s or earlier under the isolation policy in contracts/store-and-lifecycle.md (waiting ordinary work, reader contention, WAL guard, caller). Admission additionally requires no ordinary waiter, a free slot and reader, -wal ≤ 64 MiB and ≥ 640 MiB free disk. Retain accounting until real transaction/connection return, admit no replacement snapshot while work remains, and latch unsuccessful shutdown if a cancelled read has not returned within the 5 s admission wait.
 
 ### Pump Lifetime
 

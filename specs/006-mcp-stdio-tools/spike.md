@@ -1,12 +1,12 @@
 # U1 Spike: Store Isolation and Actual Query Completion
 
 **Created**: 2026-11-17
-**Status**: Started; preliminary native initial-query and later-Next cancellation cases are recorded below and in verification.md. No supported isolation solution or owner approval has been established.
+**Status**: Spike complete (2026-11-18); its policy is in contracts/store-and-lifecycle.md ("Isolation Policy"), with the owner's prerequisite decisions recorded in verification.md. T001 closes with the owner-judge design review.
 **Task**: T001 in [tasks.md](tasks.md), before formal implementation-readiness review and T002-T042.
 
 ## Resume Here
 
-Continue experiments 1 and 3: validate bounded query strategies and the remaining cancellation/close cases, then test atomic admission and integrated resource isolation. Do not start implementing the MCP server or assume that a context timeout proves SQL drainage.
+All four experiments now have a candidate mechanism with evidence (sections below; owner decisions of 2026-11-18 recorded in verification.md). Next: the owner's acceptance of the WAL guard and of the platform plan (see "Candidate Admission and WAL Guard"), then fold the mechanism into plan.md, the contracts and the affected tasks, commit under the authorized workflow and run the owner-judge design review. Do not start implementing the MCP server or assume that a context timeout proves SQL drainage.
 
 All 42 feature tasks remain unchecked. This guide accompanies the design fixes after `/speckit.analyze`; inspect `git status`, recent commits and any remaining diff before working. Preserve existing changes, including unrelated libsignal backlog edits. Preliminary cancellation runs have completed; no implementation, new dependency or owner design review has run.
 
@@ -52,6 +52,38 @@ The working design is explicitly BLOCKED on U1. A review can provide feedback no
 - The pinned driver's public APIs examined do not supply a per-connection later-`Next` interrupt/progress budget or tool-only heap quota. Its `sqlite.Limit` controls specific SQLite limits; `DBStatus` measures but does not reserve resources. The process-wide hard heap limit, WAL and disk remain shared with ingest. A candidate-count cap and priority gate do not alone provide the completion and shared-resource controls required by the contract.
 - A conditional admission counterexample also rules out an unconditional no-interference claim: with a tool still holding one of 16 slots after cancellation, 15 ordinary active operations and 64 ordinary waiters, a further ingest write hits the existing immediate waiter-cap error; without the tool the same arrival can instead be waiter 64. This is a source-derived schedule, not an executed test, and FR-017 does not explicitly require universal equivalence to a no-tool run. It demonstrates why the exact accepted interference model matters; it does not prove all possible compliant designs impossible.
 - **Conclusion:** A concrete supported isolation/completion mechanism has not been established within the current pin, architecture and budgets; a cancellation-only or candidate-only design cannot clear T001. No design PASS, numeric bound, revised requirement or implementation is implied. The documented stop rule requires an explicit owner prerequisite decision if the missing controls cannot be justified; options and trade-offs are in research.md. Other native platforms and integrated real Store tests are not verified.
+
+### Candidate Mechanism: All Work in the First Step
+
+- Each page query is wrapped as one aggregate row (`json_group_array(... ORDER BY <page order>)` over the current query with its `LIMIT`/`OFFSET`), so SQLite does all its work inside the first `step`, where the pinned driver's interrupt watcher runs. The later `Next` that cannot be interrupted then only returns a row that is already computed. Public API only; no driver change.
+- Scratch prototype `firststep.go` (verification.md, 2026-11-17), 300,000 chats and 100,000 contacts: 23 of 23 pages identical to the current SQL. Cancellation of the wrapped chat query returned faster than the timer could resolve, while the current form's later `Next` ran on for up to 280 ms. Contacts (the sort already runs in the first step) returned in at most 9 ms. Wrapping adds no measurable SQLite heap.
+- Supported per-connection size controls: `sqlite.Limit(SQLITE_LIMIT_LENGTH)` on the tool reader makes an oversized page fail in the first step, and does not affect other connections. `octet_length` checks a 64 MiB value without loading it, so fields can be length-guarded before folding.
+- Part 2 (`firststep2.go`, `rollback.go`): ContactChats keys 14 of 14 and latest messages 44 of 44 identical to the current SQL. Cancelling the wrapped key walk released the connection within 125 µs, against up to 508 ms streamed. Under concurrent writes, a TRUNCATE checkpoint issued at cancel emptied the WAL in 3–5 ms wrapped, against 441–682 ms streamed. An `octet_length` guard lets GetChat report a 64 MiB latest message that the current query fails to load.
+- Two rules for the eventual tool reader: (1) open and close a pooled connection per read, as `Store.read` does. `database/sql` rolls a cancelled transaction back asynchronously and only `Conn.Close` waits for it; a connection held across reads kept the old transaction open in 33–72% of cancelled runs. (2) Check the context after a successful read: streamed forms returned complete results after their deadline in up to 10% of runs; wrapped forms never did.
+- What this does not settle: ContactChats and filtered ListChats still walk every chat, so their work grows with the chat count; the memory of the contact grouping grows with the contact count (about 10 MB above baseline at 100,000 entries), so it needs a count ceiling or a precheck rather than a candidate walk. The other three tools, latest messages, concurrent ingest, WAL retention under the wrapped form and other native targets are untested. The admission interference model and the 100,000 offset cap still need owner decisions.
+
+### Candidate Ceilings: Chat Walks and Contact Grouping (2026-11-18)
+
+Scratch `ceiling.go`, real `mcp_fold` (exact copy of `internal/store/fold.go`), store read pragmas; evidence in verification.md.
+
+- **Chat walk ceiling C = 100,200** (maxOffset + maxListSize), for `list_chats` and `get_contact_chats`: the wrapped query walks at most C chats in index order, then filters and pages. A full page is exact; a short page is exact only if the table holds at most C chats, otherwise `resource_limit`. Unfiltered pages never hit it. At C on 300,303 chats: ≤ 468 ms, ≤ 2.2 MB SQLite heap (page cache), cancellation ≤ 119 µs; 50 pages identical to the current SQL, 42 correct refusals, no false refusal when the table fits.
+- **Query shape matters:** the outer page query must order by an aliased walk column (`... IS NULL AS k0`, then `ORDER BY k0, ...`). Written with the raw expression, SQLite adds a sorter of offset+limit rows (7.6 MB at offset 100,000 with short names, roughly 100 MB with 1 KiB names). The plan must be asserted in a test.
+- **Contact ceilings** for `search_contacts`, checked in the same statement before any grouping or folding: at most E = 100,000 person entries, S = 4 MiB of chosen-name bytes, A = 16 MiB across all four name fields, and no field over 1 KiB. SQLite heap is about 63 B per entry plus 4.8 B per chosen-name byte, so entry count alone is not enough: 20,000 entries with 1 KiB names used 100 MB and up to 9.5 s. At the ceilings the worst measured case is 23.6 MB and 2.3 s; refusals take ≤ 550 ms with no folds; cancellation ≤ 37 ms.
+- `get_chat` and `get_direct_chat_by_contact` need no walk ceiling: point lookups plus the `octet_length` guard. Latest messages for a page are ≤ 200 point lookups.
+
+**Owner decisions (all four approved 2026-11-18):** (1) a SQLite heap share for one tool read; the ceilings are sized for 32 MiB of the 256 MiB process limit. (2) Keep the 100,000 offset cap, which now also sets C. (3) Accept conservative `resource_limit` for short pages on stores over C chats, including a contact whose chats all lie beyond the newest 100,200. (4) The admission interference model (counterexample above). Still not verified: ingest's own SQLite heap alongside a tool read, the Store gate and device paths, real-store integration, other native targets. T001 remains BLOCKED.
+
+### Candidate Admission and WAL Guard (2026-11-18)
+
+The owner approved the four decisions above and one extra ordinary waiter place. Evidence in verification.md (experiments 2 and 4).
+
+- **Admission (scratch model, 8 schedule tests plus stress, native and `-race` on WSL2):** a tool read never lowers ordinary capacity or overtakes waiting work. The earlier counterexample's ingest write is admitted as waiter 65, and an ordinary `ErrBusy` needs 80 ordinary operations in flight, as without tools. Tools starve under saturation. If a tool read fails to return within the 5 s admission wait, the waiting ordinary operation gets `ErrBusy`, so the first-step cancellation latency is what this rests on.
+- **Real store, SQLite heap:** not the constraint. A tool read at the ceilings plus continuous maximal ingest peaked at 24.3 MB.
+- **Real store, WAL: new finding.** Back-to-back tool reads keep a snapshot open all the time, so the WAL grows with all ingest: 603–757 MB in 20 s, against 41 MB without tools. A per-read byte budget does not help, because the snapshots chain. Guard: admit a tool read only while the -wal file is ≤ 64 MiB (`walLimitBytes`), and cancel it once the file passes 128 MiB. Measured peak 160.5 MB under continuous maximal ingest, no ingest errors, back to 64 MiB straight afterwards. Under light ingest, all tool reads completed and the WAL peaked at 2.8 MB.
+- **Proposed, untested:** also admit tool reads only while free disk is at least 640 MiB (`diskResume` + 2 × `walLimitBytes`), so the extra WAL cannot by itself push free space below the 256 MiB reserve.
+- One real-store tool read at the ceilings exceeded the 10 s operation limit once; other runs took 3.1–4.5 s. Cancellation reported it correctly, but the worst case is closer to the 10 s timer than the scratch runs suggested.
+
+**Owner-approved 2026-11-18:** the WAL guard and its thresholds (transient WAL up to about 2 × 64 MiB plus one batch), the free-space condition, and the platform plan (Linux and macOS recorded as not verified now; the cancellation, ceiling, admission and WAL tests become implementation tests that CI runs on all three OSes). The design now carries this policy; T001 closes with the design review.
 
 ## Question to Answer
 
