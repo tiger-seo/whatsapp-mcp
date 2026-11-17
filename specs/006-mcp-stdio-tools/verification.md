@@ -2,7 +2,7 @@
 
 ## Current State
 
-2026-11-17: Analysis remediation is documented for the five-tool design; all 42 tasks remain unchecked (setup 3, foundation 15, US1 8, US2 6, polish/evidence 10). **Implementation/design-PASS readiness is BLOCKED** by supported store isolation and actual query-completion controls. T001 scratch research has begun with a later-Next cancellation counterexample below; all other prerequisite cases and the isolation mechanism remain open. T002-T042 cannot start before the prerequisite and owner design review clear. No runtime implementation, dependency change, account action or owner verdict has run. Both login tools and configurable read restrictions remain deferred. Earlier artifact checks do not resolve the blocker.
+2026-11-18: All 42 tasks remain unchecked; no runtime implementation, dependency change or account action. T001's spike is complete and its isolation policy is in contracts/store-and-lifecycle.md. The first owner-judge design review (`68ce167`) returned CONCERNS; the design is amended and awaits a renewed design review. T002-T042 start only after that review clears. Earlier sections below are dated evidence; where they say BLOCKED or OPEN they describe the state at their date.
 
 ## Planning Evidence
 
@@ -45,7 +45,7 @@ The user authorized documentation fixes after the read-only analysis. No constit
 | Finding | Document action | Status / remaining evidence |
 | --- | --- | --- |
 | C1 - mandatory reports discarded | SEC-006, stdio contract/R3, plan/DTO state and T015/T016/T018/T036/T037 separate mandatory records from ordinary logs; fixed acknowledgment/failure latch makes overflow/failed delivery an unsuccessful normal stop. Outer Handler.Enabled admits WARN/ERROR at error level, then mandatory routing precedes the ordinary configured filter; audit uses a typed independent reporter. | Design corrected; delivery/overflow/loss-warning/severity/EOF-race tests not run. No claim that an undelivered record was recorded downstream. |
-| U1 - ingest isolation not enforced | Withdraw opportunistic shared-gate proof and PASS; contracts/R6/T001 require a supported admission/resource/control argument, exact ceilings and adversarial/native evidence before design PASS or implementation. No implicit extra lease/reader, pin change or ErrBusy retry. | **OPEN, blocking prerequisite**. Static inspection identifies relevant driver limitations, not a verified solution. Stop for an explicit owner prerequisite decision if existing architecture cannot meet FR-017. |
+| U1 - ingest isolation not enforced | Withdraw opportunistic shared-gate proof and PASS; contracts/R6/T001 require a supported admission/resource/control argument, exact ceilings and adversarial/native evidence before design PASS or implementation. No implicit extra lease/reader, pin change or ErrBusy retry. | **OPEN at 2026-11-17**; policy specified 2026-11-18 (contracts/store-and-lifecycle.md), design review pending. Static inspection identifies relevant driver limitations, not a verified solution. Stop for an explicit owner prerequisite decision if existing architecture cannot meet FR-017. |
 | I1 - mapped-LID fallback | FR-007/cross-story acceptance and T027 now explicitly prefer exact phone chat then exact mapped LID; phone/JID/LID inputs return the LID row when only it exists. | Artifact inconsistency corrected; runtime acceptance not run. |
 | A1 - timer called completion ceiling | Contracts/plan/R6/tasks distinguish 1 s/10 s cancellation requests and 5 s public output-wait termination from actual SQL/transaction/pump completion. Real resource accounting stays until return. | Wording corrected; establishing actual supported store completion bounds remains part of OPEN U1/T001, not an assumed one-second drain. |
 | I2 - US1 requires US2 discovery | US1 independently discovers two chat tools; a separate cross-story acceptance/T031 requires exactly five after both stories. | Story/dependency inconsistency corrected; no reduced final feature scope. |
@@ -283,6 +283,30 @@ Alone: a tool read at the ceilings 3.1–3.7 s and 23.8 MB SQLite heap above use
 
 Interpretation and limits: SQLite heap is not the binding constraint (24.3 MB together, against 256 MiB). WAL retention is: tool reads that follow each other keep a snapshot open continuously, and the WAL then grows with all ingest; no ingest error occurred within 20 s, but on a real disk that growth ends at the disk guard, which refuses writes. A -wal size admission guard (≤ 64 MiB, the existing `walLimitBytes`) with cancellation at 128 MiB bounded the peak to 2 × 64 MiB plus one batch here. The store has no public WAL hook in the pinned driver (it exposes commit, rollback and pre-update hooks), so the guard reads the file size; a file of at most 64 MiB implies a WAL reset since the last growth beyond it. Not shown: behaviour on a nearly full disk (a proposed free-space condition is in research.md R6), guarded device operations under load, the real coordinated gate, other native targets. Single host, single runs; timings are not bounds. T001 remains BLOCKED.
 
+## U1 Design-Review Follow-up: 5 s Timer and WAL Recovery (2026-11-18)
+
+After the design review of `68ce167` (CONCERNS), the owner accepted a 5 s tool-store timer, a recovery TRUNCATE checkpoint and the low-disk refusal. Scratch test `D:\tmp\kilo\u1-spike\zz_u1_timer_test.go`, copied into `internal/store` only for the run and deleted afterwards (`git status` clean under `internal/`). Real store (`openTest`), synthetic device with the `edge_e` contact set (100,000 entries, four 40-byte U+0390 names), 150,000 chats with two messages in every tenth, written through the writer. Native Windows/amd64, Go 1.27.4.
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `U1_SPIKE=1 CGO_ENABLED=0 go test ./internal/store -run '^TestU1Timer$' -count=1 -v -timeout 30m` | 0 | `PASS` in 100.07 s; output in `timer.out`. |
+
+| Read through `Store.read` with a 5 s cancellation request, 15 runs each | Timeouts | Min / median / p90 / max |
+| --- | --- | --- |
+| `search_contacts` at the ceilings, offset 0 | 0 | 1.645 / 1.835 / 2.351 / 2.669 s |
+| `search_contacts` at the ceilings, offset 100,000 | 0 | 1.854 / 2.079 / 2.375 / 2.590 s |
+| `list_chats` activity, no-match walk of C = 100,200 | 0 | 130 / 141 / 167 / 173 ms |
+| `list_chats` name, no-match walk | 0 | 93 / 120 / 149 / 171 ms |
+| `list_chats` unfiltered, offset 100,000 | 0 | 107 / 120 / 181 / 192 ms |
+| `get_contact_chats` walk | 0 | 234 / 247 / 315 / 357 ms |
+
+| WAL recovery without writes | Result |
+| --- | --- |
+| Three rounds: an ordinary read snapshot held while six 15 MiB batches commit, then released, then no writes for 200 ms | -wal 209,642,112 / 226,183,912 / 241,015,912 bytes after release, unchanged without writes (the size guard would refuse every tool read: the defect the review found). `PRAGMA wal_checkpoint(TRUNCATE)` on the writer: busy 0, took 698 / 959 / 784 ms, -wal 0 bytes afterwards. |
+| TRUNCATE issued while an ordinary read stays open for 300 ms | Waited in the busy handler, then succeeded: 550 ms, -wal 0 bytes. |
+
+Interpretation and limits: the 5 s request covers the measured reads with margin on this host. Earlier real-store runs at the contact ceilings took 3.1–4.5 s and one cold run over 10 s, so slower hosts can still return `timeout`; the CI tests assert mechanisms, not durations. The recovery checkpoint costs about 1 s of writer time for a WAL near 2 × 64 MiB plus batches, and runs at most once per 30 s. Not shown: the gate-driven trigger itself (implementation, T004/T005), a near-full disk, other native targets.
+
 ### Remediation Validation
 
 | Date | Command / check | Result |
@@ -296,5 +320,6 @@ Interpretation and limits: SQLite heap is not the binding constraint (24.3 MB to
 
 | Stage | Date | Commit | Verdict | Owner decision |
 | --- | --- | --- | --- | --- |
+| design | 2026-11-18 | 68ce167 | CONCERNS | Amend and review again: 5 s store timer, recovery TRUNCATE checkpoint, low-disk refusal accepted; all low findings fixed in the design |
 
 No review has run for 006. The required design review follows task generation; the required code review follows implementation and evidence. A planning conformance table is not either review.

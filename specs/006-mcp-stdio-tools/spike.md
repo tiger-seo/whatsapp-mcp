@@ -6,7 +6,7 @@
 
 ## Resume Here
 
-All four experiments now have a candidate mechanism with evidence (sections below; owner decisions of 2026-11-18 recorded in verification.md). Next: the owner's acceptance of the WAL guard and of the platform plan (see "Candidate Admission and WAL Guard"), then fold the mechanism into plan.md, the contracts and the affected tasks, commit under the authorized workflow and run the owner-judge design review. Do not start implementing the MCP server or assume that a context timeout proves SQL drainage.
+The spike is complete and its policy is in contracts/store-and-lifecycle.md ("Isolation Policy"). The first design review (`68ce167`, CONCERNS) led to the amendments in "Design Review Amendments" below. Next: the renewed owner-judge design review of the amended commit (tasks.md Current State). Do not start implementing the MCP server or assume that a context timeout proves SQL drainage.
 
 All 42 feature tasks remain unchecked. This guide accompanies the design fixes after `/speckit.analyze`; inspect `git status`, recent commits and any remaining diff before working. Preserve existing changes, including unrelated libsignal backlog edits. Preliminary cancellation runs have completed; no implementation, new dependency or owner design review has run.
 
@@ -84,6 +84,15 @@ The owner approved the four decisions above and one extra ordinary waiter place.
 - One real-store tool read at the ceilings exceeded the 10 s operation limit once; other runs took 3.1–4.5 s. Cancellation reported it correctly, but the worst case is closer to the 10 s timer than the scratch runs suggested.
 
 **Owner-approved 2026-11-18:** the WAL guard and its thresholds (transient WAL up to about 2 × 64 MiB plus one batch), the free-space condition, and the platform plan (Linux and macOS recorded as not verified now; the cancellation, ceiling, admission and WAL tests become implementation tests that CI runs on all three OSes). The design now carries this policy; T001 closes with the design review.
+
+### Design Review Amendments (2026-11-18)
+
+The owner-judge review of `68ce167` returned CONCERNS. The owner accepted the recommended fixes:
+
+- **5 s store timer** instead of 1 s. Re-measured on the real store (scratch `zz_u1_timer_test.go`): 0 of 90 reads timed out; contact search at the ceilings 1.6–2.7 s, chat walks ≤ 357 ms.
+- **Recovery checkpoint.** Confirmed defect: after a held snapshot and no further writes, the -wal stayed at 210–241 MB, so the size guard would refuse every tool read. A TRUNCATE checkpoint took 0.70–0.96 s and left 0 bytes; the gate now starts one, rate-limited, when it refuses on size and no tool read is active.
+- **Low disk** below 640 MiB refuses tool reads with `unavailable` ("low disk space"), also while disconnected.
+- Clarified: every gated reader-pool user counts as a reader; the 128 MiB check runs after each gated write; a failed free-space measurement does not refuse; one SQL definition per read; the command observes `tool_store_not_quiescent`; T040 also updates README.md and AGENTS.md.
 
 ## Question to Answer
 

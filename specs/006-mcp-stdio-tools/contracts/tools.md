@@ -67,11 +67,11 @@ When latest is requested but absent, include `latest_message: null`. When activi
 | --- | --- |
 | `invalid_input` | Name the invalid field and a fixed actionable reason; do not echo rejected content. |
 | `not_found` | Requested singular chat/direct chat does not exist; no internal-error substitution. |
-| `busy` | Tool credit or immediate store admission unavailable; retry later. No read queue or automatic retry. |
+| `busy` | Tool credit or immediate store admission unavailable (ordinary work waiting, no free slot or reader, or the WAL guard); retry later. No read queue or automatic retry. |
 | `resource_limit` | Fields, store result, preflight encoding or response budget exceeded; suggest a smaller page or disabling latest detail where applicable. No partial success. |
 | `timeout` | Cancellation deadline reached; request cancellation and retain actual work/lease accounting until return under T001's validated completion policy. The error is not proof the snapshot drained. |
 | `cancelled` | Client/connection cancellation; response is best-effort if transport is still writable. |
-| `unavailable` | Store is closed or cannot serve the read; no empty-success substitute. |
+| `unavailable` | Store is closed or cannot serve the read, including the fixed "low disk space" refusal (less than 640 MiB free); no empty-success substitute. |
 | `storage_error` | Sanitized genuine storage failure; no SQL/driver detail/keys/local paths. |
 
 Tool errors set `CallToolResult.IsError = true`, with the common structured `error` object and matching text. Protocol-level malformed envelopes, unknown methods/tools and transport framing failures use the pinned SDK/MCP protocol errors or connection failure as applicable; they are not misreported as a tool's successful result. Sanitize SDK-generated error text/data, including errors before middleware/handler entry, so malformed params are never echoed. Calls to the two deferred tools are unknown-tool failures with zero account activity.
