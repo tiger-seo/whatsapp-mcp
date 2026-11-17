@@ -13,9 +13,9 @@ require (
 	go.mau.fi/libsignal v0.2.2
 	go.mau.fi/util v0.11.0
 	go.mau.fi/whatsmeow v0.0.0-20261109152745-f1b798561919
-	golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2
+	golang.org/x/crypto v0.59.0
 	golang.org/x/sys v0.50.0
-	golang.org/x/text v0.43.0
+	golang.org/x/text v0.44.0
 	google.golang.org/protobuf v1.36.12
 	modernc.org/libc v1.80.1
 	modernc.org/sqlite v1.62.0
@@ -37,7 +37,7 @@ require (
 	github.com/vektah/gqlparser/v2 v2.5.27 // indirect
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e // indirect
 	golang.org/x/net v0.62.0 // indirect
-	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
