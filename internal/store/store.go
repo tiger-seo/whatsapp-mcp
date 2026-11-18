@@ -341,7 +341,7 @@ func (s *Store) LoadDevice(ctx context.Context) (*wastore.Device, *DeviceBarrier
 	}
 
 	op := newOpID()
-	release, opCtx, err := s.gate.enter(ctx)
+	release, opCtx, err := s.gate.enterRead(ctx)
 	if err != nil {
 		return nil, nil, s.report(op, err)
 	}

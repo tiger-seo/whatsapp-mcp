@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -204,14 +206,41 @@ func getMessage(ctx context.Context, q querier, chatJID, id string) (MessageView
 
 // latestMessage is the newest message of a chat, or nil.
 func latestMessage(ctx context.Context, q querier, chatJID string) (*MessageView, error) {
-	v, err := scanMessage(q.QueryRowContext(ctx,
-		messageSelect+`WHERE m.chat_jid = ? ORDER BY m.time DESC, m.id DESC LIMIT 1`, chatJID))
+	badNames := `(EXISTS (SELECT 1 FROM whatsmeow_contacts WHERE our_jid = ` + currentDevice +
+		` AND (their_jid = m.sender_jid OR their_jid = (` + counterpartJID + `)) AND (` +
+		`coalesce(octet_length(full_name), 0) > 1024 OR coalesce(octet_length(first_name), 0) > 1024 OR ` +
+		`coalesce(octet_length(push_name), 0) > 1024 OR coalesce(octet_length(business_name), 0) > 1024)) OR ` +
+		`EXISTS (SELECT 1 FROM chats WHERE jid = m.sender_jid AND name_quality >= 2 AND octet_length(name) > 1024))`
+	guarded := strings.Replace(messageSelect, `CASE WHEN m.from_me = 1 THEN '' ELSE coalesce(`,
+		`CASE WHEN m.from_me = 1 OR `+badNames+` THEN '' ELSE coalesce(`, 1)
+	guarded = strings.Replace(guarded, `m.text, m.caption, m.media_type `,
+		`CASE WHEN octet_length(m.text) <= 262144 THEN m.text END, `+
+			`CASE WHEN octet_length(m.caption) <= 262144 THEN m.caption END, `+
+			`m.media_type, octet_length(m.text), octet_length(m.caption), `+
+			`CASE WHEN m.from_me = 1 THEN 0 ELSE `+badNames+` END `, 1)
+	var v MessageView
+	var ms int64
+	var fromMe int
+	var text, caption sql.NullString
+	var textBytes, captionBytes int64
+	var oversizedName bool
+	err := q.QueryRowContext(ctx, guarded+`WHERE m.chat_jid = ? ORDER BY m.time DESC, m.id DESC LIMIT 1`, chatJID).
+		Scan(&v.ID, &v.ChatJID, &v.ChatName, &v.SenderJID, &v.SenderPhone, &v.SenderName,
+			&ms, &fromMe, &text, &caption, &v.MediaType, &textBytes, &captionBytes, &oversizedName)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	if textBytes > maxTextBytes || captionBytes > maxCaptionBytes {
+		return nil, limitErr("message bytes")
+	}
+	if oversizedName {
+		return nil, limitErr("name bytes")
+	}
+	v.Text, v.Caption = text.String, caption.String
+	v.Time, v.FromMe = time.UnixMilli(ms).UTC(), fromMe == 1
 	return &v, nil
 }
 
@@ -280,23 +309,60 @@ func (s *Store) ListChats(ctx context.Context, query string, sort ChatSort, with
 	if err := validText("query", query, maxSearchBytes); err != nil {
 		return nil, s.report(newOpID(), err)
 	}
-	text := `SELECT jid, name, last_message_time FROM chats `
-	var args []any
-	if f := fold(query); f != "" {
-		text += `WHERE instr(name_fold, ?) > 0 OR instr(jid, ?) > 0 `
-		args = append(args, f, f)
+	first, rest := `last_message_time IS NULL`, `last_message_time DESC, jid`
+	if sort == ByName {
+		first, rest = `name_quality = 0`, `name_fold, jid`
 	}
-	text += `ORDER BY ` + order + ` LIMIT ? OFFSET ?`
-	args = append(args, p.Limit, p.Offset)
+	text := `SELECT count(*), json_group_array(json_array(hex(CAST(jid AS BLOB)), ` +
+		`CASE WHEN octet_length(name) <= 1024 THEN hex(CAST(name AS BLOB)) END, last_message_time) ` +
+		`ORDER BY k0, ` + rest + `), ` +
+		`CASE WHEN count(*) < ?2 THEN (SELECT count(*) FROM (SELECT jid FROM chats LIMIT 100201)) ELSE 0 END ` +
+		`FROM (SELECT jid, name, last_message_time, name_fold, k0 FROM (` +
+		`SELECT jid, name, last_message_time, name_fold, ` + first + ` AS k0 FROM chats ORDER BY ` + order + ` LIMIT 100200) ` +
+		`WHERE ?1 = '' OR instr(name_fold, ?1) > 0 OR instr(jid, ?1) > 0 ` +
+		`ORDER BY k0, ` + rest + ` LIMIT ?2 OFFSET ?3)`
 
 	var out []ChatView
 	err := s.snapshot(ctx, "ListChats", func(ctx context.Context, q querier) error {
-		rows, err := q.QueryContext(ctx, text, args...)
-		if err != nil {
+		var count, total int
+		var data string
+		if err := q.QueryRowContext(ctx, text, fold(query), p.Limit, p.Offset).Scan(&count, &data, &total); err != nil {
 			return err
 		}
-		if out, err = scanChats(rows); err != nil {
-			return err
+		if count < p.Limit && total > maxOffset+maxListSize {
+			return limitErr("chat walk")
+		}
+		var rows [][]json.RawMessage
+		if err := json.Unmarshal([]byte(data), &rows); err != nil {
+			return ioError("chat_result")
+		}
+		for _, row := range rows {
+			if len(row) != 3 {
+				return ioError("chat_result")
+			}
+			var jidHex string
+			var nameHex *string
+			var last *int64
+			if json.Unmarshal(row[0], &jidHex) != nil || json.Unmarshal(row[1], &nameHex) != nil || json.Unmarshal(row[2], &last) != nil {
+				return ioError("chat_result")
+			}
+			if nameHex == nil {
+				return limitErr("name bytes")
+			}
+			jid, err := hex.DecodeString(jidHex)
+			if err != nil {
+				return ioError("chat_result")
+			}
+			name, err := hex.DecodeString(*nameHex)
+			if err != nil {
+				return ioError("chat_result")
+			}
+			c := ChatView{JID: string(jid), Name: string(name), IsGroup: strings.HasSuffix(string(jid), "@"+serverGroup)}
+			if last != nil {
+				t := time.UnixMilli(*last).UTC()
+				c.LastActivity = &t
+			}
+			out = append(out, c)
 		}
 		return finishChats(ctx, q, out, withLatest)
 	})
@@ -306,33 +372,43 @@ func (s *Store) ListChats(ctx context.Context, query string, sort ChatSort, with
 	return out, nil
 }
 
-func getChat(ctx context.Context, q querier, jid string) (ChatView, error) {
-	rows, err := q.QueryContext(ctx, `SELECT jid, name, last_message_time FROM chats WHERE jid = ?`, jid)
-	if err != nil {
-		return ChatView{}, err
-	}
-	chats, err := scanChats(rows)
-	if err != nil {
-		return ChatView{}, err
-	}
-	if len(chats) == 0 {
+func getChat(ctx context.Context, q querier, jid string, withLatest bool) (ChatView, error) {
+	var c ChatView
+	var last sql.NullInt64
+	var name sql.NullString
+	err := q.QueryRowContext(ctx, `SELECT jid, CASE WHEN octet_length(name) <= 1024 THEN name END, `+
+		`last_message_time FROM chats WHERE jid = ?`, jid).Scan(&c.JID, &name, &last)
+	if errors.Is(err, sql.ErrNoRows) {
 		return ChatView{}, &NotFoundError{ChatJID: jid}
 	}
-	if err := finishChats(ctx, q, chats, true); err != nil {
+	if err != nil {
+		return ChatView{}, err
+	}
+	if !name.Valid {
+		return ChatView{}, limitErr("name bytes")
+	}
+	c.Name = name.String
+	c.IsGroup = strings.HasSuffix(c.JID, "@"+serverGroup)
+	if last.Valid {
+		t := time.UnixMilli(last.Int64).UTC()
+		c.LastActivity = &t
+	}
+	chats := []ChatView{c}
+	if err := finishChats(ctx, q, chats, withLatest); err != nil {
 		return ChatView{}, err
 	}
 	return chats[0], nil
 }
 
-// GetChat returns a chat with its latest message.
-func (s *Store) GetChat(ctx context.Context, jid string) (ChatView, error) {
+// GetChat returns a chat and, when requested, its latest message.
+func (s *Store) GetChat(ctx context.Context, jid string, withLatest bool) (ChatView, error) {
 	parsed, err := parseChatJID("chat_jid", jid)
 	if err != nil {
 		return ChatView{}, s.report(newOpID(), err)
 	}
 	var out ChatView
 	err = s.snapshot(ctx, "GetChat", func(ctx context.Context, q querier) (err error) {
-		out, err = getChat(ctx, q, parsed.String())
+		out, err = getChat(ctx, q, parsed.String(), withLatest)
 		return err
 	})
 	return out, err
@@ -350,7 +426,7 @@ func (s *Store) DirectChat(ctx context.Context, contact string) (ChatView, error
 			if jid == "" {
 				continue
 			}
-			c, err := getChat(ctx, q, jid)
+			c, err := getChat(ctx, q, jid, true)
 			if err == nil {
 				out = c
 				return nil
@@ -376,45 +452,39 @@ func (s *Store) ContactChats(ctx context.Context, contact string, p Page) ([]Cha
 		if err != nil {
 			return err
 		}
-		var direct, probes []string
-		var directArgs, probeArgs []any
-		if ids.phoneJID != "" {
-			direct, directArgs = append(direct, "?"), append(directArgs, ids.phoneJID)
-			probes = append(probes, `EXISTS (SELECT 1 FROM messages WHERE chat_jid = chats.jid AND sender_phone = ?)`)
-			probeArgs = append(probeArgs, ids.phone)
-		}
-		if ids.lidJID != "" {
-			direct, directArgs = append(direct, "?"), append(directArgs, ids.lidJID)
-			probes = append(probes, `EXISTS (SELECT 1 FROM messages WHERE chat_jid = chats.jid AND sender_jid = ?)`)
-			probeArgs = append(probeArgs, ids.lidJID)
-		}
-		keySQL := `SELECT jid FROM chats WHERE jid IN (` + strings.Join(direct, ", ") + `) ` +
-			`OR (jid LIKE '%@g.us' AND (` + strings.Join(probes, ` OR `) + `)) ` +
-			`ORDER BY ` + chatOrder[ByLastActivity] + ` LIMIT ? OFFSET ?`
-		args := append(append(directArgs, probeArgs...), p.Limit, p.Offset)
-		rows, err := q.QueryContext(ctx, keySQL, args...)
-		if err != nil {
+		const keySQL = `SELECT count(*), json_group_array(hex(CAST(jid AS BLOB)) ` +
+			`ORDER BY k0, last_message_time DESC, jid), ` +
+			`CASE WHEN count(*) < ?5 THEN (SELECT count(*) FROM (SELECT jid FROM chats LIMIT 100201)) ELSE 0 END ` +
+			`FROM (SELECT jid, last_message_time, k0 FROM (` +
+			`SELECT jid, last_message_time, last_message_time IS NULL AS k0 FROM chats ` +
+			`ORDER BY last_message_time IS NULL, last_message_time DESC, jid LIMIT 100200) AS walk ` +
+			`WHERE (jid = ?1 AND ?1 <> '') OR (jid = ?2 AND ?2 <> '') OR ` +
+			`(jid LIKE '%@g.us' AND ((?3 <> '' AND EXISTS ` +
+			`(SELECT 1 FROM messages WHERE chat_jid = walk.jid AND sender_phone = ?3)) OR ` +
+			`(?4 <> '' AND EXISTS (SELECT 1 FROM messages WHERE chat_jid = walk.jid AND sender_jid = ?4)))) ` +
+			`ORDER BY k0, last_message_time DESC, jid LIMIT ?5 OFFSET ?6)`
+		var count, total int
+		var data string
+		if err := q.QueryRowContext(ctx, keySQL, ids.phoneJID, ids.lidJID, ids.phone, ids.lidJID, p.Limit, p.Offset).
+			Scan(&count, &data, &total); err != nil {
 			return err
 		}
-		var jids []string
-		for rows.Next() {
-			var jid string
-			if err := rows.Scan(&jid); err != nil {
-				rows.Close()
-				return err
-			}
-			jids = append(jids, jid)
+		if count < p.Limit && total > maxOffset+maxListSize {
+			return limitErr("chat walk")
 		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return err
+		var encoded []string
+		if err := json.Unmarshal([]byte(data), &encoded); err != nil {
+			return ioError("chat_result")
 		}
 		// Each chat is counted as it is read, so a result that crosses the bound stops there and not after every
 		// latest message has been held.
 		budget := &resultBudget{}
-		for _, jid := range jids {
-			c, err := getChat(ctx, q, jid)
+		for _, value := range encoded {
+			jid, err := hex.DecodeString(value)
+			if err != nil {
+				return ioError("chat_result")
+			}
+			c, err := getChat(ctx, q, string(jid), true)
 			if err != nil {
 				return err
 			}

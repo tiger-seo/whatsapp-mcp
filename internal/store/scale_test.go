@@ -214,7 +214,7 @@ func scaleCases() []scaleCase {
 	return []scaleCase{
 		// Constant cost: lookups, and every listing at offset 0.
 		{name: "GetChat", kind: constantCost, run: func(ctx context.Context, st *Store, _ scaleShape) error {
-			_, err := st.GetChat(ctx, scaleGroup)
+			_, err := st.GetChat(ctx, scaleGroup, true)
 			return err
 		}},
 		{name: "DirectChat", kind: constantCost, run: func(ctx context.Context, st *Store, _ scaleShape) error {

@@ -266,7 +266,7 @@ func TestIngestHistoryFlushesInBoundedBatches(t *testing.T) {
 			t.Fatalf("name offer %+v", u)
 		}
 	}
-	chat, err := h.st.GetChat(context.Background(), peerJID().String())
+	chat, err := h.st.GetChat(context.Background(), peerJID().String(), true)
 	if err != nil || chat.Name != "Peer Name" {
 		t.Fatalf("chat %+v, %v", chat, err)
 	}
@@ -429,7 +429,7 @@ func TestIngestHistoryNeverMovesLastActivityBack(t *testing.T) {
 				h.deliver(t, 1)
 				h.in.HandleMessage(live)
 			}
-			chat, err := h.st.GetChat(context.Background(), peerJID().String())
+			chat, err := h.st.GetChat(context.Background(), peerJID().String(), true)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -113,7 +113,7 @@ func TestNoSecretsInLogsOrErrors(t *testing.T) {
 	c.noteErr(err)
 	_, err = st.SearchContacts(ctx, "SECRET-NAME", page(10, 0))
 	c.noteErr(err)
-	_, err = st.GetChat(ctx, alice)
+	_, err = st.GetChat(ctx, alice, true)
 	c.noteErr(err)
 	_, err = st.GetMessage(ctx, alice, "S1")
 	c.noteErr(err)

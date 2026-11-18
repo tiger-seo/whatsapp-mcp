@@ -1,9 +1,13 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 )
 
 // entryName is one device-store entry's name in the order full, first, push, business; empty when it has none.
@@ -56,29 +60,65 @@ func (s *Store) SearchContacts(ctx context.Context, query string, p Page) ([]Con
 		GROUP BY person
 		HAVING ?1 = '' OR max(hit)`
 
+	const bounded = `WITH pre AS (
+		SELECT count(*) AS n, coalesce(sum(nb), 0) AS bytes, coalesce(max(fb), 0) AS longest,
+		       coalesce(sum(ab), 0) AS allb FROM (
+		  SELECT coalesce(nullif(octet_length(c.full_name), 0), nullif(octet_length(c.first_name), 0),
+		                  nullif(octet_length(c.push_name), 0), nullif(octet_length(c.business_name), 0), 0) AS nb,
+		         coalesce(octet_length(c.full_name), 0) + coalesce(octet_length(c.first_name), 0) +
+		         coalesce(octet_length(c.push_name), 0) + coalesce(octet_length(c.business_name), 0) AS ab,
+		         max(coalesce(octet_length(c.full_name), 0), coalesce(octet_length(c.first_name), 0),
+		             coalesce(octet_length(c.push_name), 0), coalesce(octet_length(c.business_name), 0)) AS fb
+		  FROM whatsmeow_contacts c WHERE c.our_jid = ` + currentDevice + ` AND c.their_jid NOT LIKE '%@g.us' LIMIT 100001))
+		SELECT n, bytes, longest, allb,
+		  CASE WHEN n <= 100000 AND bytes <= 4194304 AND longest <= 1024 AND allb <= 16777216 THEN
+		    (SELECT json_group_array(json_array(person, phone, hex(CAST(name AS BLOB))) ORDER BY mcp_fold(name), person)
+		     FROM (SELECT person, phone, name FROM (` + people + `) ORDER BY mcp_fold(name), person LIMIT ?3 OFFSET ?4))
+		  END FROM pre`
 	var out []Contact
 	err = s.snapshot(ctx, "SearchContacts", func(ctx context.Context, q querier) error {
-		rows, err := q.QueryContext(ctx,
-			`SELECT person, phone, name FROM (`+people+`) ORDER BY mcp_fold(name), person LIMIT ?3 OFFSET ?4`,
-			text, digits, p.Limit, p.Offset)
-		if err != nil {
+		var count, chosenBytes, longest, allBytes int64
+		var data sql.NullString
+		if err := q.QueryRowContext(ctx, bounded, text, digits, p.Limit, p.Offset).
+			Scan(&count, &chosenBytes, &longest, &allBytes, &data); err != nil {
 			return err
 		}
-		defer rows.Close()
+		if !data.Valid {
+			return limitErr("contact source")
+		}
+		var rows [][]json.RawMessage
+		if err := json.Unmarshal([]byte(data.String), &rows); err != nil {
+			return ioError("contact_result")
+		}
 		budget := &resultBudget{}
-		for rows.Next() {
-			var c Contact
-			var phone, name sql.NullString
-			if err := rows.Scan(&c.JID, &phone, &name); err != nil {
-				return err
+		for _, row := range rows {
+			if len(row) != 3 {
+				return ioError("contact_result")
 			}
-			c.Phone, c.Name = phone.String, name.String
+			var c Contact
+			fields := []*string{&c.JID, &c.Phone, &c.Name}
+			for i, raw := range row {
+				var value any
+				decoder := json.NewDecoder(bytes.NewReader(raw))
+				decoder.UseNumber()
+				if err := decoder.Decode(&value); err != nil {
+					return ioError("contact_result")
+				}
+				if value != nil {
+					*fields[i] = fmt.Sprint(value)
+				}
+			}
+			name, err := hex.DecodeString(c.Name)
+			if err != nil {
+				return ioError("contact_result")
+			}
+			c.Name = string(name)
 			if err := budget.add(len(c.JID) + len(c.Phone) + len(c.Name) + 48); err != nil {
 				return err
 			}
 			out = append(out, c)
 		}
-		return rows.Err()
+		return nil
 	})
 	if err != nil {
 		return nil, err

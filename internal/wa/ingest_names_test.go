@@ -541,7 +541,7 @@ func TestIngestNameOfferNeverRecreatesAMergedAwayChat(t *testing.T) {
 			if err := r.st.MergeLID(ctx, lid.String(), phone); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := r.st.GetChat(ctx, lid.String()); !errors.Is(err, store.ErrNotFound) {
+			if _, err := r.st.GetChat(ctx, lid.String(), true); !errors.Is(err, store.ErrNotFound) {
 				t.Fatalf("the merge left the LID chat: %v", err)
 			}
 			// The offer arrives late, after the merge.
@@ -556,7 +556,7 @@ func TestIngestNameOfferNeverRecreatesAMergedAwayChat(t *testing.T) {
 					t.Fatal("offerHistoryNames reported a terminal failure")
 				}
 			}
-			if _, err := r.st.GetChat(ctx, lid.String()); !errors.Is(err, store.ErrNotFound) {
+			if _, err := r.st.GetChat(ctx, lid.String(), true); !errors.Is(err, store.ErrNotFound) {
 				t.Errorf("a late name offer recreated the merged-away LID chat: %v", err)
 			}
 		})

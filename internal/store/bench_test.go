@@ -319,7 +319,7 @@ func TestQueryPlans(t *testing.T) {
 				return err
 			}},
 		{name: "GetChat", want: []string{chatByKey, latest},
-			run: func(ctx context.Context, st *Store) error { _, err := st.GetChat(ctx, unmapped); return err }},
+			run: func(ctx context.Context, st *Store) error { _, err := st.GetChat(ctx, unmapped, true); return err }},
 		{name: "DirectChat", want: []string{chatByKey, "whatsmeow_lid_map_2 (pn=?)"},
 			run: func(ctx context.Context, st *Store) error {
 				_, err := st.DirectChat(ctx, "+49 152 0000005")
@@ -445,7 +445,7 @@ func BenchmarkQueries(b *testing.B) {
 		{"ListChats/activity", func() error { _, err := st.ListChats(ctx, "", ByLastActivity, true, page(50, 0)); return err }},
 		{"ListChats/name", func() error { _, err := st.ListChats(ctx, "", ByName, true, page(50, 0)); return err }},
 		{"ListChats/search", func() error { _, err := st.ListChats(ctx, "4915200", ByLastActivity, true, page(50, 0)); return err }},
-		{"GetChat", func() error { _, err := st.GetChat(ctx, unmapped); return err }},
+		{"GetChat", func() error { _, err := st.GetChat(ctx, unmapped, true); return err }},
 		{"DirectChat", func() error { _, err := st.DirectChat(ctx, unmapped); return err }},
 		{"ContactChats/phone", func() error { _, err := st.ContactChats(ctx, bigPhone, page(50, 0)); return err }},
 		{"ContactChats/lid", func() error { _, err := st.ContactChats(ctx, lidJID(bigLID), page(50, 0)); return err }},

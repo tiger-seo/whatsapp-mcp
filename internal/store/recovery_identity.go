@@ -10,7 +10,7 @@ func (s *Store) RecoveryIdentityPresent(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	release, opCtx, err := s.gate.enter(ctx)
+	release, opCtx, err := s.gate.enterRead(ctx)
 	if err != nil {
 		return false, err
 	}

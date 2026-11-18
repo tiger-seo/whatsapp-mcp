@@ -10,7 +10,7 @@ var ErrUnsafeRun = errors.New("unsafe run requires offline recovery")
 
 // RunGuard reports the committed singleton and its five collection-transfer bits.
 func (s *Store) RunGuard(ctx context.Context) (string, uint8, error) {
-	release, c, err := s.gate.enter(ctx)
+	release, c, err := s.gate.enterRead(ctx)
 	if err != nil {
 		return "", 0, err
 	}
@@ -107,6 +107,7 @@ func (s *Store) RecoverRunGuard(ctx context.Context, removeIdentity bool) error 
 		return err
 	}
 	defer release()
+	defer s.checkToolWAL()
 	if err := s.disk.check(); err != nil {
 		return err
 	}
@@ -244,6 +245,7 @@ func (s *Store) changeRunGuard(ctx context.Context, from, to string) error {
 		return err
 	}
 	defer release()
+	defer s.checkToolWAL()
 	if err := s.disk.check(); err != nil {
 		return err
 	}
