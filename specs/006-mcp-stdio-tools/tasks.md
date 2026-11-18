@@ -16,6 +16,8 @@
 
 **Resume order:** First obtain authorization for the required revised-design commit and renew the owner-judge design review; the task/contract split made the prior verdict stale. After that gate clears, write T043's failing command tests, implement the narrow observer in T044, then reassess T004/T005 against all their remaining requirements. Do not start full T024, register tools, install unfinished MCP transport/reporting or mark T004/T005 complete merely because T043/T044 pass.
 
+**Rebase checkpoint:** The original T001 spike used SQLite v1.61.0. The branch now inherits v1.62.0 from `main`; the focused store suite and held-later-step WAL experiment were repeated on Windows. Review the reconciled design against this pin and rerun acceptance on it; the historical spike is not a full v1.62.0 revalidation.
+
 **Preserved boundaries:** No commits, dependency/pin changes, review waivers or real-account actions were performed. Existing uncommitted work was preserved. This handoff changes only Current State text and does not itself renew the review or authorize implementation.
 
 **Phase 2 resume point:**

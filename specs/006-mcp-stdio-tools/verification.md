@@ -30,6 +30,14 @@
 
 ## Runtime Gates
 
+### Post-rebase SQLite Check (2026-11-19)
+
+On rebased tip `ca86799` with the existing uncommitted store edits, native Windows/amd64 and `CGO_ENABLED=0`, `go test -p 1 ./internal/store -run '^TestTool' -count=1 -json -timeout 5m` ran against `modernc.org/sqlite v1.62.0` and exited 0 in 35.623 s: 44 parent tests and 74 subtests passed, with zero skips or failures. The finite ingest fixture completed 120 light writes and twelve 64-message maximum-byte batches without ingest errors. The maximum-byte run observed 16,332 successful reads, 41,374 busy refusals, zero cancelled reads and a sampled post-write WAL peak of 67,984,152 bytes.
+
+On the same platform, `CGO_ENABLED=0 go run D:/tmp/kilo/u1-spike/cancel-wal.go` exited 0 (one synthetic scenario, zero skips). While a cancelled later `Next` was held in a scalar callback, the writer completed 1,000 inserts; the passive checkpoint reported 336 log frames and zero checkpointed frames. After releasing the callback, closing rows and ending the transaction, the truncate checkpoint reported zero WAL bytes. In v1.62.0, `stmt.go` and `sqlite.go` still scope the query's interrupt/progress handler to the initial query call; `rows.go` adds context-aware lock waits on later steps, not a general later-step interruption mechanism.
+
+These reruns support the existing first-step design but do not revalidate the full T001 spike, which used v1.61.0, or establish full-store, command-shutdown or native Linux/macOS acceptance. The reconciled design needs renewed review. T004/T005 remain unchecked.
+
 ### T004/T005 Store Follow-up (2026-11-18/19)
 
 Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`; synthetic temporary stores only. Dates below are local (UTC+02:00). Existing uncommitted changes in `bench_test.go`, `tool_reader_test.go`, `tasks.md` and this file were preserved. No implementation commit, account action or optional heavy/soak/measurement run was performed.
