@@ -471,6 +471,40 @@ func TestDiagnosticsHumanFailure(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsPrivateDirectoryFallback(t *testing.T) {
+	for _, tc := range []struct{ fix, want string }{
+		{"run: chmod 700 ignored", "chmod 700 '<data-directory>'"},
+		{"run: icacls ignored", "/inheritance:r"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			w := &diagnosticWriter{}
+			d := NewDiagnostics(w, slog.LevelInfo)
+			if !d.ReportPrivateDirectory(strings.Repeat("secret", 200), tc.fix) || !d.Finalize(nil) {
+				t.Fatal("fallback not delivered")
+			}
+			got := w.String()
+			if !strings.Contains(got, tc.want) || strings.Contains(got, "secret") || len(got) > 1024 {
+				t.Fatalf("unsafe or incomplete fallback: %q", got)
+			}
+			if strings.Contains(tc.fix, "icacls") && (!strings.Contains(got, "/grant:r") || !strings.Contains(got, "/remove:g") || !strings.Contains(got, "S-1-5-18") || !strings.Contains(got, "S-1-5-32-544")) {
+				t.Fatalf("incomplete Windows remedy: %q", got)
+			}
+		})
+	}
+}
+
+func TestDiagnosticsPrivateDirectoryControlFallback(t *testing.T) {
+	w := &diagnosticWriter{}
+	d := NewDiagnostics(w, slog.LevelInfo)
+	path := "synthetic\a-secret"
+	if !d.ReportPrivateDirectory(path, "run: chmod 700 '"+path+"'") || !d.Finalize(nil) {
+		t.Fatal("fallback not delivered")
+	}
+	if got := w.String(); strings.Contains(got, "synthetic") || !strings.Contains(got, "<data-directory>") {
+		t.Fatalf("control-bearing path did not use fallback: %q", got)
+	}
+}
+
 func TestDiagnosticsOrdinarySeverityIdentity(t *testing.T) {
 	w := &diagnosticWriter{}
 	d := NewDiagnostics(w, slog.LevelDebug)

@@ -261,3 +261,122 @@ func TestStdioDiagnosticFailureWinsShutdown(t *testing.T) {
 		})
 	}
 }
+
+func TestStdioDiagnosticOrdinaryFailureAndDrop(t *testing.T) {
+	for _, blocked := range []bool{false, true} {
+		name := "failed_sink"
+		if blocked {
+			name = "full_queue"
+		}
+		t.Run(name, func(t *testing.T) {
+			old := newOwner
+			defer func() { newOwner = old }()
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			defer close(release)
+			var once sync.Once
+			writer := diagnosticTestWriter(func(p []byte) (int, error) {
+				once.Do(func() { close(entered) })
+				if blocked {
+					<-release
+					return len(p), nil
+				}
+				return 0, io.ErrClosedPipe
+			})
+			newOwner = func(deps ownerDeps) (*ownerHandle, error) {
+				h := newHeldOwner()
+				h.startHook = func() {
+					deps.log.Info("config")
+					<-entered
+					for i := 0; i < 32; i++ {
+						deps.log.Info("config")
+					}
+				}
+				return &ownerHandle{owner: &diagnosticChildOwner{heldOwner: h, stop: h.complete}}, nil
+			}
+			var stdout bytes.Buffer
+			dir := privateDir(t)
+			if code := run([]string{"stdio", "--data-dir", dir}, strings.NewReader(""), &stdout, writer, nil); code != exitOK || stdout.Len() != 0 {
+				t.Fatalf("ordinary-only exit=%d stdout=%q", code, stdout.String())
+			}
+			requireReleasedLock(t, dir)
+		})
+	}
+}
+
+func TestStdioDiagnosticOverflowRetainsMarker(t *testing.T) {
+	old := newOwner
+	defer func() { newOwner = old }()
+	sink := &diagnosticHoldSink{entered: make(chan struct{}), release: make(chan struct{})}
+	defer close(sink.release)
+	newOwner = func(deps ownerDeps) (*ownerHandle, error) {
+		h := newHeldOwner()
+		h.startHook = func() {
+			if err := deps.store.ArmRunGuard(context.Background()); err != nil {
+				t.Errorf("arm marker: %v", err)
+			}
+			deps.log.Warn("loss", "event", "history_incomplete")
+			<-sink.entered
+			for i := 0; i < 17; i++ {
+				deps.log.Warn("loss", "event", "receive_overload")
+			}
+		}
+		return &ownerHandle{owner: &diagnosticChildOwner{heldOwner: h, stop: h.complete}}, nil
+	}
+	dir := privateDir(t)
+	var stdout bytes.Buffer
+	if code := run([]string{"stdio", "--data-dir", dir, "--log-level", "error"}, strings.NewReader(""), &stdout, sink, nil); code != exitError || stdout.Len() != 0 {
+		t.Fatalf("overflow exit=%d stdout=%q", code, stdout.String())
+	}
+	requireReleasedLock(t, dir)
+	if got := markerState(t, dir); got != "unsafe" {
+		t.Fatalf("diagnostics changed owner marker: %s", got)
+	}
+}
+
+func TestStdioDiagnosticExpiryStopsRunningCommand(t *testing.T) {
+	old := newOwner
+	defer func() { newOwner = old }()
+	sink := &diagnosticHoldSink{entered: make(chan struct{}), release: make(chan struct{})}
+	defer close(sink.release)
+	retiring := make(chan struct{})
+	owner := newHeldOwner()
+	defer owner.complete()
+	newOwner = func(deps ownerDeps) (*ownerHandle, error) {
+		owner.startHook = func() { deps.log.Warn("loss", "event", "history_incomplete") }
+		return &ownerHandle{owner: &diagnosticChildOwner{heldOwner: owner, stop: func() { close(retiring) }}}, nil
+	}
+	in, input := io.Pipe()
+	defer in.Close()
+	defer input.Close()
+	dir := privateDir(t)
+	var stdout bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		done <- run([]string{"stdio", "--data-dir", dir, "--log-level", "error"}, in, &stdout, sink, nil)
+	}()
+	select {
+	case <-sink.entered:
+	case <-time.After(8 * time.Second):
+		t.Fatal("mandatory write did not start")
+	}
+	select {
+	case <-retiring:
+	case <-time.After(8 * time.Second):
+		t.Fatal("missing acknowledgment did not stop running owner")
+	}
+	if l, err := lock.Acquire(dir); err == nil {
+		l.Release()
+		t.Fatal("lock released while owner still running")
+	}
+	owner.complete()
+	select {
+	case code := <-done:
+		if code != exitError || stdout.Len() != 0 {
+			t.Fatalf("expiry exit=%d stdout=%q", code, stdout.String())
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("blocked diagnostic delayed cleanup")
+	}
+	requireReleasedLock(t, dir)
+}
