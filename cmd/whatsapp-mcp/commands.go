@@ -194,6 +194,9 @@ var newOwner = productionOwner
 // lifecycleFactory builds the lifecycle; tests replace it to drive signals.
 var lifecycleFactory = newLifecycle
 
+// Tests can inject the one-way failure latch without forcing a SQLite failure.
+var toolStoreFailureSignal = (*store.Store).ToolStoreNotQuiescent
+
 var recoveryInteractive = terminalStreams
 
 // stopStep is the owner's ordered cleanup: stop, then wait for the drain, before the store closes.
@@ -506,7 +509,7 @@ func runStdio(cmd *command, args []string, s *streams) int {
 // request, then shuts down. The signal handler is installed before anything else, so an early signal
 // still releases what was taken. The body's result makes a start failure an unsuccessful exit; a message-storage
 // failure is reported after the stop and is an unsuccessful exit too.
-func runShell(kind string, cmd *command, args []string, s *streams, body func(context.Context, *lifecycle, *slog.Logger, *store.Store, *streams, *wa.LIDCursor) (*ownerHandle, bool)) int {
+func runShell(kind string, cmd *command, args []string, s *streams, body func(context.Context, *lifecycle, *slog.Logger, *store.Store, *streams, *wa.LIDCursor) (*ownerHandle, bool)) (result int) {
 	lc := lifecycleFactory(slog.New(slog.NewTextHandler(s.stderr, nil)))
 	cfg, logger, code, ok := startup(cmd, args, s)
 	if !ok {
@@ -536,6 +539,35 @@ func runShell(kind string, cmd *command, args []string, s *streams, body func(co
 		return code
 	}
 	lc.addStoreStop(st.Close, st.Quiesced())
+	if kind == "stdio" {
+		failed := toolStoreFailureSignal(st)
+		select {
+		case <-failed:
+			lc.shutdown()
+			return exitError
+		default:
+		}
+		observed := make(chan struct{})
+		go func() {
+			defer close(observed)
+			select {
+			case <-failed:
+				// Do not make cancellation wait for a diagnostic write.
+				lc.cancel()
+			case <-lc.ctx.Done():
+			}
+		}()
+		defer func() {
+			<-observed
+			// The closed channel is the latch. Even if EOF won the select, a
+			// failure during cleanup takes precedence over the normal exit.
+			select {
+			case <-failed:
+				result = exitError
+			default:
+			}
+		}()
+	}
 	if lc.ctx.Err() != nil {
 		return lc.shutdown()
 	}
