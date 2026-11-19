@@ -27,6 +27,20 @@ The `owner-judge` review at `7d4336b` returned `PASS` for the revised WAL fence 
 
 ## Runtime Gates
 
+### Phase 2 Acceptance CI (2026-11-19)
+
+[Push CI at `1548d2c7880647b4c629f4967caae02a0e7293cf`](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44598888828) passed with `CGO_ENABLED=0`. `go test -timeout 30m ./...` exited 0 on all three runners. The static and cross-build checks also passed. The opt-in heavy store job was skipped by design on push.
+
+| Runner | Full suite (`internal/store` elapsed) | Focused native diagnostic step |
+| --- | --- | --- |
+| [Linux/amd64](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44598888828/job/135824598500) | Exit 0 (140.295 s) | Started 19:32:40 UTC; exit 0, 7 passes, 0 failures, 0 skips |
+| [Darwin/arm64](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44598888828/job/135824597789) | Exit 0 (149.179 s) | Started 19:33:36 UTC; exit 0, 7 passes, 0 failures, 0 skips |
+| [Windows](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44598888828/job/135824598639) | Exit 0 (160.075 s) | Not applicable to the Unix subprocess subset |
+
+The focused command was `go test -count=1 -json -timeout 3m -run '^TestMCPDiagnosticShutdownNative$' ./cmd/whatsapp-mcp`. Each Unix runner passed the parent and all six named cases: `blocked_startup`, `blocked_operation`, `blocked_drain`, `closed_stderr`, `first_signal`, and `forced_second_signal`. Every child reported `child_exit=1 expected_exit=1 signal=none`; only `forced_second_signal` reported `forced_callback=true`.
+
+Together with the prior red/green, WAL fence, and T043/T044 evidence below, this closes the Phase 2 store and diagnostic gates (T004/T005, T045/T046, and T015/T016). The earlier macOS saved-session shutdown delay did not recur in this run; its cause was not established. The result does not cover the integrated MCP shutdown or sustained-ingest delivery gates, and Phase 3 has not started.
+
 ### Phase 2 Native CI and Triage (2026-11-19)
 
 [Push CI at `3b70355`](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44594097004), `CGO_ENABLED=0`: the static checks and Ubuntu job passed. `go test -timeout 30m ./...` reported `internal/store` passing on all three platforms. The full macOS and Windows jobs failed; this is not a green acceptance run.
