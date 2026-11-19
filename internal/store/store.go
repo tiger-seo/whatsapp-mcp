@@ -69,15 +69,16 @@ type testHooks struct {
 	afterCheck         func() // after the artifact checks and the preflight, before the writer opens
 	afterCreate        func() // after a new database file was created, before the writer opens
 	beforeCommit       func(ctx context.Context)
-	afterSenderMerge   func() error                           // MergeLID, after the sender rewrite
-	afterChatInsert    func() error                           // StoreMessages, after the chat insert
-	free               func(dir string) (uint64, error)       // free-space measurement
-	queryHold          func(ctx context.Context, name string) // a query holds its reader here
-	wrapReader         func(q querier) querier                // a read operation runs its queries through the wrapper
-	onRead             func(conn *sql.Conn) (done func())     // a read operation starts on conn; done runs when it ends
-	devicePutHold      func(ctx context.Context) error        // a guarded device Save holds here, before the raw put
-	devicePutCommitted func()                                 // after Save commits, before publishing recovery state
-	protectedHold      func()                                 // after protected admission check, before readiness check
+	writerWAL          func(size int64, err error) (int64, error) // after SQL, before the writer handoff
+	afterSenderMerge   func() error                               // MergeLID, after the sender rewrite
+	afterChatInsert    func() error                               // StoreMessages, after the chat insert
+	free               func(dir string) (uint64, error)           // free-space measurement
+	queryHold          func(ctx context.Context, name string)     // a query holds its reader here
+	wrapReader         func(q querier) querier                    // a read operation runs its queries through the wrapper
+	onRead             func(conn *sql.Conn) (done func())         // a read operation starts on conn; done runs when it ends
+	devicePutHold      func(ctx context.Context) error            // a guarded device Save holds here, before the raw put
+	devicePutCommitted func()                                     // after Save commits, before publishing recovery state
+	protectedHold      func()                                     // after protected admission check, before readiness check
 }
 
 // Open checks, creates if missing, preflights, upgrades and opens <dataDir>/whatsapp.db. The caller holds the

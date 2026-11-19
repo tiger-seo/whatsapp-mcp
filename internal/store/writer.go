@@ -68,6 +68,9 @@ func (g *gate) beginWriter(ctx context.Context) error {
 
 func (s *Store) endWriter() {
 	size, err := s.walSize()
+	if s.hooks.writerWAL != nil {
+		size, err = s.hooks.writerWAL(size, err)
+	}
 	g := s.gate
 	g.mu.Lock()
 	if g.toolReader && (err != nil || size > 2*walLimitBytes) {
