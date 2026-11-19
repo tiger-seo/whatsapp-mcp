@@ -39,6 +39,8 @@ go test ./internal/mcp ./cmd/whatsapp-mcp -run 'TestMCPFlood|TestMCPIngestPressu
 
 Expected after T001 and implementation: false latest inclusion skips the query; literal searches/aliases and bounded source fields match the contract. Prove the isolation policy in contracts/store-and-lifecycle.md (first-step reads, C = 100,200 walk, contact ceilings, coordinated admission with the 65-waiter cap, WAL guard) under ordinary/device arrivals before/after tool entry, pending work and repeated readmission; no extra active slot/reader, queued tool or bypass of ordinary capacity. Exercise initial SQL, expensive later Next, folding and transaction close, not only initial QueryContext. Measure 5 s/10 s cancellation requests separately from actual termination/resource-return bounds established by T001. Delayed return retains accounting and forbids replacement snapshots; control failure produces unsuccessful normal cleanup, no premature unlock. Flood evidence must accompany the supported mechanism argument and show no MCP-induced ingest stop, bounded heap/temp/WAL and actual return. Ingest ErrBusy remains terminal.
 
+For the transaction fence, hold a synthetic snapshot after cancellation and prove the next ordinary transaction cannot get the writer until the reader connection actually returns. Repeat across device lease and autocommit boundaries and repeated tool admission, and verify timely resumption, existing control-failure timeout and recovery to 64 MiB. Record transaction ordering separately from physical peak WAL size and verify free-space assumptions separately; a passing stress peak cannot establish the fence or disk bound.
+
 ## 4. Raw Framing and Response Budgets
 
 ```bash

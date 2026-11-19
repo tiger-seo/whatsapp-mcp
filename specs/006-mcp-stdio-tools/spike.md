@@ -2,6 +2,8 @@
 
 **Created**: 2026-11-17
 **Status**: Spike complete (2026-11-18); its policy is in contracts/store-and-lifecycle.md ("Isolation Policy"), with the owner's prerequisite decisions recorded in verification.md. T001 closes with the owner-judge design review.
+
+**2026-11-19:** The WAL cancellation-only design was blocked in review. The peaks and time-to-release observations below remain historical. The proposed transaction fence and separate free-space proof are in [the current contract](contracts/store-and-lifecycle.md#5-wal-guard); do not infer either from this spike.
 **Task**: T001 in [tasks.md](tasks.md), before formal implementation-readiness review and T002-T042.
 
 ## Resume Here
