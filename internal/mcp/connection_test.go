@@ -45,6 +45,10 @@ func TestGuardSDKErrorLatch(t *testing.T) {
 }
 
 func TestGuardSDKResponseConstructionFailure(t *testing.T) {
+	synctest.Test(t, testGuardSDKResponseConstructionFailure)
+}
+
+func testGuardSDKResponseConstructionFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	latch := NewSDKErrorLatch()
@@ -62,6 +66,8 @@ func TestGuardSDKResponseConstructionFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The client may receive initialize before the server retires its credit.
+	synctest.Wait()
 	done := make(chan struct{})
 	go func() { defer close(done); _, _ = client.CallTool(ctx, &sdk.CallToolParams{Name: "broken"}) }()
 	select {
