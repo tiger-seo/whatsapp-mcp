@@ -2,7 +2,9 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"math"
 	"reflect"
 	"strings"
@@ -132,8 +134,8 @@ func TestResultHTMLMetacharacterCharges(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			text := safeResultText(encoded, 0)
-			if uint64(len(encoded)) > charge.structured || uint64(len(text)) > charge.text {
+			text := safeResultText(encoded, int(charge.text))
+			if text == "" || uint64(len(encoded)) > charge.structured || uint64(len(text)) > charge.text {
 				t.Fatalf("undercharged: structured %d/%d, text %d/%d", len(encoded), charge.structured, len(text), charge.text)
 			}
 			message.Caption = strings.Repeat(char, 256<<10)
@@ -321,7 +323,7 @@ func TestResultActualTextTwoMiBBoundary(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		remaining := target - len(safeResultText(base, 0))
+		remaining := target - len(safeResultText(base, resultBudget))
 		for i := range page.Chats {
 			m := *page.Chats[i].LatestMessage
 			for _, field := range []*string{&m.Content, &m.Caption} {
@@ -341,15 +343,18 @@ func TestResultActualTextTwoMiBBoundary(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		text := safeResultText(structured, 0)
+		text := safeResultText(structured, resultBudget)
+		if target > resultBudget {
+			if text != "" || !encodeResult(page).IsError {
+				t.Fatal("oversized text accepted")
+			}
+			continue
+		}
 		if len(text) != target {
 			t.Fatalf("safe text %d, target %d", len(text), target)
 		}
 		if got := resultSizesFit(uint64(len(structured)), uint64(len(text))); got != (target <= resultBudget) {
 			t.Fatalf("actual text size %d: %v", target, got)
-		}
-		if target > resultBudget && !encodeResult(page).IsError {
-			t.Fatal("oversized text accepted")
 		}
 	}
 }
@@ -418,6 +423,49 @@ func TestResultSuccessfulNearLimitAllocations(t *testing.T) {
 		}
 	})
 	t.Logf("structured=%d text=%d full-path=%d bytes/op %d allocs/op", len(structured), len(text), measure.AllocedBytesPerOp(), measure.AllocsPerOp())
+}
+
+func TestResultNearLimitPassesFramePreflight(t *testing.T) {
+	page := ChatPage{Source: "local_store", UntrustedData: true, Limit: 4, Count: 4, Chats: make([]Chat, 4)}
+	for i := range page.Chats {
+		m := &Message{Timestamp: "2026-11-18T00:00:00Z", Content: strings.Repeat(`"`, 240<<10)}
+		page.Chats[i].LatestMessage = &m
+	}
+	result := encodeResult(page)
+	if result.IsError {
+		t.Fatal("bounded result refused")
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := jsonrpc.MakeID(strings.Repeat(`\`, 63))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := &jsonrpc.Response{ID: id, Result: raw}
+	wire, err := jsonrpc.EncodeMessage(response)
+	if err != nil || len(wire)+1 <= frameBudget/2 || len(wire)+1 > frameBudget {
+		t.Fatalf("fixture frame = %d bytes, err = %v", len(wire)+1, err)
+	}
+	if !preflightFrame(response) {
+		t.Fatalf("framer refused bounded SDK response of %d bytes", len(wire)+1)
+	}
+	input, inputWriter := io.Pipe()
+	defer input.Close()
+	defer inputWriter.Close()
+	var out bytes.Buffer
+	conn, err := newFramedTransport(input, &out).Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.Write(context.Background(), response); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != len(wire)+1 || !bytes.Equal(out.Bytes()[:len(wire)], wire) || out.Bytes()[len(wire)] != '\n' {
+		t.Fatal("framed response differed from SDK encoding plus newline")
+	}
 }
 
 func TestResultOutputSchemas(t *testing.T) {

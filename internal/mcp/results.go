@@ -298,26 +298,67 @@ func encodeResult(value any) *sdk.CallToolResult {
 	if !chargeResult(reflect.ValueOf(value), "", &c) || !validResult(value) || !resultFrameFits(c.structured, c.text) {
 		return resourceLimit()
 	}
+	// Encode the normalized page directly, avoiding its nested MarshalJSON copy.
+	switch p := value.(type) {
+	case ChatPage:
+		type page ChatPage
+		if p.Chats == nil {
+			p.Chats = []Chat{}
+		}
+		value = page(p)
+	case ContactPage:
+		type page ContactPage
+		if p.Contacts == nil {
+			p.Contacts = []Contact{}
+		}
+		value = page(p)
+	}
 	structured, err := json.Marshal(value)
-	if err != nil || len(structured) > resultBudget {
+	if err != nil || uint64(len(structured)) > c.structured {
 		return resourceLimit()
 	}
 	text := safeResultText(structured, int(c.text))
-	if !resultFrameFits(uint64(len(structured)), uint64(len(text))) {
+	if text == "" || !resultFrameFits(uint64(len(structured)), uint64(len(text))) {
 		return resourceLimit()
 	}
 	_, isError := value.(ErrorResult)
-	return &sdk.CallToolResult{IsError: isError, StructuredContent: json.RawMessage(structured), Content: []sdk.Content{&sdk.TextContent{Text: string(text)}}}
+	return &sdk.CallToolResult{IsError: isError, StructuredContent: json.RawMessage(structured), Content: []sdk.Content{&sdk.TextContent{Text: text}}}
 }
 
-func safeResultText(structured []byte, capacity int) []byte {
-	text := make([]byte, 0, capacity)
+// safeResultText expects compact JSON from json.Marshal, which already escapes
+// C0 and HTML characters. Size the ASCII rendering before allocating it.
+func safeResultText(structured []byte, limit int) string {
+	if limit < 0 || limit > resultBudget || len(structured) > limit {
+		return ""
+	}
+	size := 0
+	for remaining := structured; len(remaining) > 0; {
+		r, n := utf8.DecodeRune(remaining)
+		switch {
+		case r > 0xffff:
+			size += 12
+		case r >= 0x7f:
+			size += 6
+		default:
+			size += n
+		}
+		if size > limit {
+			return ""
+		}
+		remaining = remaining[n:]
+	}
+	var text strings.Builder
+	text.Grow(size)
 	for remaining := structured; len(remaining) > 0; {
 		r, n := utf8.DecodeRune(remaining)
 		if r == 0x7f || r >= 0x80 {
 			appendUnit := func(u rune) {
 				const hex = "0123456789abcdef"
-				text = append(text, '\\', 'u', hex[(u>>12)&15], hex[(u>>8)&15], hex[(u>>4)&15], hex[u&15])
+				text.WriteString(`\u`)
+				text.WriteByte(hex[(u>>12)&15])
+				text.WriteByte(hex[(u>>8)&15])
+				text.WriteByte(hex[(u>>4)&15])
+				text.WriteByte(hex[u&15])
 			}
 			if r > 0xffff {
 				r -= 0x10000
@@ -327,9 +368,9 @@ func safeResultText(structured []byte, capacity int) []byte {
 				appendUnit(r)
 			}
 		} else {
-			text = append(text, remaining[:n]...)
+			text.WriteByte(remaining[0])
 		}
 		remaining = remaining[n:]
 	}
-	return text
+	return text.String()
 }

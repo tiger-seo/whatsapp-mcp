@@ -432,7 +432,7 @@ func fitsOutputFrame(encodedBytes int) bool {
 	return encodedBytes >= 0 && encodedBytes < maxOutputFrame
 }
 
-// Reserve conservatively for JSON escaping, including SDK intermediate copies.
+// Bound the SDK's wire encoder before it allocates a frame.
 func preflightFrame(msg jsonrpc.Message) bool {
 	remaining := maxOutputFrame - 1024
 	charge := func(n, factor int) bool {
@@ -440,6 +440,26 @@ func preflightFrame(msg jsonrpc.Message) bool {
 			return false
 		}
 		remaining -= n * factor
+		return true
+	}
+	raw := func(b []byte) bool {
+		if !charge(len(b), 1) {
+			return false
+		}
+		// Raw JSON is embedded, not quoted. Reserve for any additional HTML
+		// and line-separator escaping; existing escapes do not grow.
+		for i, c := range b {
+			switch {
+			case c == '<' || c == '>' || c == '&':
+				if !charge(5, 1) {
+					return false
+				}
+			case c == 0xe2 && len(b)-i >= 3 && b[i+1] == 0x80 && (b[i+2] == 0xa8 || b[i+2] == 0xa9):
+				if !charge(3, 1) {
+					return false
+				}
+			}
+		}
 		return true
 	}
 	id := func(v any) bool {
@@ -454,16 +474,16 @@ func preflightFrame(msg jsonrpc.Message) bool {
 	}
 	switch m := msg.(type) {
 	case *jsonrpc.Request:
-		return m != nil && id(m.ID.Raw()) && charge(len(m.Method), 6) && charge(len(m.Params), 2)
+		return m != nil && id(m.ID.Raw()) && charge(len(m.Method), 6) && raw(m.Params)
 	case *jsonrpc.Response:
-		if m == nil || !id(m.ID.Raw()) || !charge(len(m.Result), 2) {
+		if m == nil || !id(m.ID.Raw()) || !raw(m.Result) {
 			return false
 		}
 		if m.Error == nil {
 			return true
 		}
 		e, ok := m.Error.(*jsonrpc.Error)
-		return ok && e != nil && charge(len(e.Message), 6) && charge(len(e.Data), 2)
+		return ok && e != nil && charge(len(e.Message), 6) && raw(e.Data)
 	default:
 		return false
 	}

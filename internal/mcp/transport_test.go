@@ -187,7 +187,7 @@ func TestFramingDecodedParamsSurviveBufferReuse(t *testing.T) {
 }
 
 func TestFramingPreflightBoundary(t *testing.T) {
-	limit := (maxOutputFrame - 1024) / 2
+	limit := maxOutputFrame - 1024
 	for _, tc := range []struct {
 		size   int
 		accept bool
@@ -208,6 +208,21 @@ func TestFramingPreflightBoundary(t *testing.T) {
 		w.Close()
 		if (err == nil) != tc.accept {
 			t.Fatalf("write size %d: %v", tc.size, err)
+		}
+	}
+}
+
+func TestFramingPreflightRawEscapes(t *testing.T) {
+	for _, escaped := range []struct {
+		literal string
+		growth  int
+	}{{"<&>", 15}, {"\u2028\u2029", 6}} {
+		for _, extra := range []int{0, 1} {
+			n := maxOutputFrame - 1024 - 2 - len(escaped.literal) - escaped.growth + extra
+			raw := []byte(`"` + escaped.literal + strings.Repeat("x", n) + `"`)
+			if got := preflightFrame(&jsonrpc.Response{Result: raw}); got != (extra == 0) {
+				t.Fatalf("raw escape charge for %q, extra %d: %t", escaped.literal, extra, got)
+			}
 		}
 	}
 }
