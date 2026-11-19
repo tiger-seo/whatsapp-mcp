@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -22,14 +23,14 @@ import (
 var binary string
 
 func TestMain(m *testing.M) {
-	if os.Getenv("WA_TEST_FORCED_SHUTDOWN_DIR") != "" {
+	if os.Getenv("WA_TEST_FORCED_SHUTDOWN_DIR") != "" || os.Getenv("WA_TEST_NATIVE_DIAGNOSTICS") != "" {
 		os.Exit(m.Run())
 	}
 	if len(os.Args) > 1 && os.Args[1] == "--synthetic-process" {
 		newOwner = func(ownerDeps) (*ownerHandle, error) {
 			fake := wa.NewFake(wa.FakeFixtures{})
 			fake.SetFailure("pair", errors.New("synthetic pairing disabled"))
-			return &ownerHandle{owner: fake}, nil
+			return &ownerHandle{owner: &readyProcessOwner{Owner: fake, path: os.Getenv("WA_TEST_PROCESS_READY")}}, nil
 		}
 		os.Exit(run(os.Args[2:], os.Stdin, os.Stdout, os.Stderr, os.Environ()))
 	}
@@ -55,6 +56,18 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+type readyProcessOwner struct {
+	wa.Owner
+	path string
+}
+
+func (o *readyProcessOwner) Start(ctx context.Context) error {
+	if err := o.Owner.Start(ctx); err != nil {
+		return err
+	}
+	return os.WriteFile(o.path, nil, 0o600)
+}
+
 // proc is a running whatsapp-mcp process with its output captured.
 type proc struct {
 	cmd    *exec.Cmd
@@ -63,6 +76,7 @@ type proc struct {
 	stderr *syncBuffer
 	done   chan struct{}
 	code   int
+	ready  string
 }
 
 // childEnv is the test's environment without any whatsapp-mcp variable, plus extra.
@@ -90,7 +104,8 @@ func start(t *testing.T, openStdin bool, env []string, args ...string) *proc {
 		args = append([]string{"--synthetic-process"}, args...)
 	}
 	p := &proc{cmd: exec.Command(executable, args...), stdout: &syncBuffer{}, stderr: &syncBuffer{}, done: make(chan struct{})}
-	p.cmd.Env = env
+	p.ready = filepath.Join(t.TempDir(), "owner-ready")
+	p.cmd.Env = append(env, "WA_TEST_PROCESS_READY="+p.ready)
 	p.cmd.Stdout = p.stdout
 	p.cmd.Stderr = p.stderr
 	startForSignal(p.cmd)
@@ -123,6 +138,37 @@ func start(t *testing.T, openStdin bool, env []string, args ...string) *proc {
 		}
 	})
 	return p
+}
+
+func (p *proc) waitOwner(t *testing.T) {
+	t.Helper()
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if _, err := os.Stat(p.ready); err == nil {
+			return
+		}
+		select {
+		case <-p.done:
+			t.Fatalf("owner did not start: exit %d, stderr %s", p.code, p.stderr)
+		case <-deadline.C:
+			t.Fatal("timed out waiting for owner readiness")
+		case <-tick.C:
+		}
+	}
+}
+
+func requireReleasedLock(t *testing.T, dir string) {
+	t.Helper()
+	l, err := lock.Acquire(dir)
+	if err != nil {
+		t.Fatalf("lock after shutdown: %v", err)
+	}
+	if err := l.Release(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (p *proc) waitFor(t *testing.T, line string, timeout time.Duration) {
@@ -192,7 +238,11 @@ func TestProcessSingleInstance(t *testing.T) {
 		if elapsed := time.Since(begin); elapsed > time.Second {
 			t.Errorf("%s took %v to fail", name, elapsed)
 		}
-		if !strings.Contains(p.stderr.String(), held) {
+		if name == "stdio" {
+			if !strings.Contains(p.stderr.String(), "reason=lock_held pid="+fmt.Sprint(holder.cmd.Process.Pid)) || p.stdout.String() != "" {
+				t.Errorf("stdio did not report the lock holder on stderr: %q", p.stderr)
+			}
+		} else if !strings.Contains(p.stderr.String(), held) {
 			t.Errorf("%s: stderr = %q, want %q", name, p.stderr, held)
 		}
 	}
@@ -204,9 +254,10 @@ func TestProcessSingleInstance(t *testing.T) {
 	}
 
 	other := start(t, true, env, "stdio", "--data-dir", dir+"-b")
-	other.waitFor(t, "stdio: connection owner running", 10*time.Second)
+	other.waitOwner(t)
 	other.stdin.Close()
 	other.expectExit(t, exitOK, 10*time.Second)
+	requireReleasedLock(t, dir+"-b")
 
 	if err := holder.cmd.Process.Kill(); err != nil {
 		t.Fatal(err)
@@ -217,7 +268,9 @@ func TestProcessSingleInstance(t *testing.T) {
 }
 
 func TestProcessStdoutStaysEmpty(t *testing.T) {
-	p := start(t, true, childEnv(), "stdio", "--data-dir", privateDir(t), "--log-level", "debug")
+	dir := privateDir(t)
+	p := start(t, true, childEnv(), "stdio", "--data-dir", dir, "--log-level", "debug")
+	p.waitOwner(t)
 	if _, err := io.WriteString(p.stdin, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n"); err != nil {
 		t.Fatal(err)
 	}
@@ -228,11 +281,7 @@ func TestProcessStdoutStaysEmpty(t *testing.T) {
 	if n := len(p.stdout.String()); n != 0 {
 		t.Errorf("stdio wrote %d bytes to stdout: %q", n, p.stdout)
 	}
-	for _, want := range []string{`reason="stdin closed"`, "level=DEBUG msg=config", `msg="lock acquired"`, "msg=stopped"} {
-		if !strings.Contains(p.stderr.String(), want) {
-			t.Errorf("stderr does not contain %q:\n%s", want, p.stderr)
-		}
-	}
+	requireReleasedLock(t, dir)
 }
 
 func testStopSignal(t *testing.T, sig, reason string) {
@@ -317,7 +366,7 @@ func TestProcessUnpairedShellsStayOffline(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			dir := privateDir(t)
 			p := start(t, true, env, kind, "--data-dir", dir)
-			p.waitFor(t, kind+": connection owner running", 10*time.Second)
+			p.waitOwner(t)
 			// Give any unsolicited connection attempt a realistic window to show up.
 			deadline := time.Now().Add(2 * time.Second)
 			for time.Now().Before(deadline) {
@@ -340,6 +389,7 @@ func TestProcessUnpairedShellsStayOffline(t *testing.T) {
 			if kind == "stdio" {
 				p.stdin.Close()
 				p.expectExit(t, exitOK, 10*time.Second)
+				requireReleasedLock(t, dir)
 			} else {
 				if err := p.cmd.Process.Kill(); err != nil {
 					t.Fatal(err)

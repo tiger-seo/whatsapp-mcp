@@ -451,7 +451,7 @@ func TestCommandCompletionFirstSignalDrainsRealStore(t *testing.T) {
 			if kind == "stdio" {
 				wantReason = "stdin closed"
 			}
-			if !strings.Contains(logs.String(), `reason="`+wantReason+`"`) {
+			if kind != "stdio" && !strings.Contains(logs.String(), `reason="`+wantReason+`"`) {
 				t.Fatalf("missing actual shutdown reason %q: %s", wantReason, logs.String())
 			}
 			signals <- os.Interrupt

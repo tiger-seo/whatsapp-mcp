@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -26,7 +27,8 @@ type result struct {
 // runIn calls run in process with empty stdin and the given environment.
 func runIn(t *testing.T, environ []string, args ...string) result {
 	t.Helper()
-	var stdout, stderr bytes.Buffer
+	var stdout bytes.Buffer
+	var stderr syncBuffer
 	code := run(args, strings.NewReader(""), &stdout, &stderr, environ)
 	return result{code, stdout.String(), stderr.String()}
 }
@@ -103,9 +105,13 @@ func TestUsageErrors(t *testing.T) {
 		{nil, "whatsapp-mcp: missing command", true},
 		{[]string{"frobnicate"}, `whatsapp-mcp: unknown command "frobnicate"`, true},
 		{[]string{"--log-level", "debug", "stdio"}, `whatsapp-mcp: flags go after the command, e.g. "whatsapp-mcp stdio --log-level debug"`, false},
-		{[]string{"stdio", "--foo"}, "whatsapp-mcp: stdio: flag provided but not defined: -foo", false},
 		{[]string{"status", "x"}, `whatsapp-mcp: status: unexpected argument "x"`, false},
 		{[]string{"version", "--log-level", "debug"}, "whatsapp-mcp: version: flag provided but not defined: -log-level", false},
+	}
+	r := runIn(t, nil, "stdio", "--foo")
+	r.expect(t, exitUsage)
+	if r.stdout != "" || !strings.Contains(r.stderr, "reason=invalid_arguments") || !strings.Contains(r.stderr, "whatsapp-mcp stdio --help") {
+		t.Fatalf("stdio usage refusal: %+v", r)
 	}
 	for _, tt := range tests {
 		r := runIn(t, nil, tt.args...)
@@ -263,7 +269,11 @@ func TestLockHeld(t *testing.T) {
 		if elapsed := time.Since(start); elapsed > time.Second {
 			t.Errorf("%s took %v with the lock held", name, elapsed)
 		}
-		if !strings.Contains(r.stderr, want) {
+		if name == "stdio" {
+			if !strings.Contains(r.stderr, fmt.Sprintf("reason=lock_held pid=%d", os.Getpid())) || !strings.Contains(r.stderr, "use a different data directory") {
+				t.Errorf("stdio did not give actionable lock refusal: %q", r.stderr)
+			}
+		} else if !strings.Contains(r.stderr, want) {
 			t.Errorf("%s: stderr = %q, want %q", name, r.stderr, want)
 		}
 	}
@@ -295,14 +305,13 @@ func TestLockHeld(t *testing.T) {
 }
 
 func TestStdioStdinClosed(t *testing.T) {
-	r := runIn(t, nil, "stdio", "--data-dir", privateDir(t))
+	dir := privateDir(t)
+	r := runIn(t, nil, "stdio", "--data-dir", dir)
 	r.expect(t, exitOK)
-	for _, want := range []string{"stdio: connection owner running", `msg="shutting down" reason="stdin closed"`, "msg=stopped"} {
-		if !strings.Contains(r.stderr, want) {
-			t.Errorf("stderr does not contain %q:\n%s", want, r.stderr)
-		}
+	if r.stdout != "" {
+		t.Errorf("stdout = %q, want empty", r.stdout)
 	}
-	checkLogLines(t, r)
+	requireReleasedLock(t, dir)
 }
 
 // exposeDir gives other users access to an existing directory: mode 0755 on Unix, read access for
@@ -330,7 +339,15 @@ func TestOpenDataDirRefused(t *testing.T) {
 		if r.stdout != "" {
 			t.Errorf("%s: stdout = %q, want empty", name, r.stdout)
 		}
-		if want := "whatsapp-mcp: data directory " + dir + ": other users can access it"; !strings.HasPrefix(r.stderr, want) {
+		if name == "stdio" {
+			remedy := "chmod 700"
+			if runtime.GOOS == "windows" {
+				remedy = "icacls"
+			}
+			if !strings.Contains(r.stderr, "path="+strconv.QuoteToASCII(dir)) || !strings.Contains(r.stderr, remedy) {
+				t.Errorf("missing path or permission remedy: %q", r.stderr)
+			}
+		} else if want := "whatsapp-mcp: data directory " + dir + ": other users can access it"; !strings.HasPrefix(r.stderr, want) {
 			t.Errorf("%s: stderr = %q, want prefix %q", name, r.stderr, want)
 		}
 		if strings.Contains(r.stderr, "level=DEBUG") {

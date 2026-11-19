@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/tiger-seo/whatsapp-mcp/internal/config"
+	"github.com/tiger-seo/whatsapp-mcp/internal/mcp"
 )
 
 const (
@@ -19,10 +20,11 @@ const (
 
 // streams are the process's standard streams and environment, passed in so tests can call run in process.
 type streams struct {
-	stdin   io.Reader
-	stdout  io.Writer
-	stderr  io.Writer
-	environ []string
+	stdin       io.Reader
+	stdout      io.Writer
+	stderr      io.Writer
+	environ     []string
+	diagnostics *mcp.Diagnostics
 }
 
 type command struct {
@@ -92,11 +94,19 @@ func parseFlags(cmd *command, args []string, s *streams) (flags map[string]strin
 			writeCommandHelp(s.stdout, cmd)
 			return nil, exitOK, false
 		}
+		if s.diagnostics != nil {
+			s.diagnostics.ReportHuman(mcp.HumanUsageFailure, 0)
+			return nil, exitUsage, false
+		}
 		fmt.Fprintf(s.stderr, "whatsapp-mcp: %s: %s\n", cmd.name, config.Printable(err.Error()))
 		writeCommandHelp(s.stderr, cmd)
 		return nil, exitUsage, false
 	}
 	if fs.NArg() > 0 {
+		if s.diagnostics != nil {
+			s.diagnostics.ReportHuman(mcp.HumanUsageFailure, 0)
+			return nil, exitUsage, false
+		}
 		fmt.Fprintf(s.stderr, "whatsapp-mcp: %s: unexpected argument %q\n", cmd.name, fs.Arg(0))
 		return nil, exitUsage, false
 	}

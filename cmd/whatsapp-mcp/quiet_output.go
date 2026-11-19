@@ -3,7 +3,9 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 
+	"github.com/tiger-seo/whatsapp-mcp/internal/mcp"
 	"github.com/tiger-seo/whatsapp-mcp/internal/store"
 	"github.com/tiger-seo/whatsapp-mcp/internal/wa"
 )
@@ -13,6 +15,15 @@ import (
 // in the quiet_stop_failed event.
 func reportShellStop(kind string, owner wa.Owner, stopErr error, s *streams) {
 	h := owner.Health()
+	if s.diagnostics != nil {
+		switch {
+		case stopErr != nil && errors.Is(stopErr, store.ErrUnsafeRun):
+			s.diagnostics.ReportHuman(mcp.HumanRunMarkerFailure, 0)
+		case stopErr == nil && h.QuietPassed:
+			slog.New(s.diagnostics.Handler()).Info("stopped. The saved session can be reused.")
+		}
+		return
+	}
 	switch {
 	case stopErr != nil && errors.Is(stopErr, store.ErrUnsafeRun) && h.QuietReason != "":
 		fmt.Fprintf(s.stderr, "whatsapp-mcp: %s: offline recovery required (%s)\n", kind, h.QuietReason)

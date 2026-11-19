@@ -17,6 +17,7 @@ import (
 	"github.com/tiger-seo/whatsapp-mcp/internal/buildinfo"
 	"github.com/tiger-seo/whatsapp-mcp/internal/config"
 	"github.com/tiger-seo/whatsapp-mcp/internal/lock"
+	"github.com/tiger-seo/whatsapp-mcp/internal/mcp"
 	"github.com/tiger-seo/whatsapp-mcp/internal/private"
 	"github.com/tiger-seo/whatsapp-mcp/internal/store"
 	"github.com/tiger-seo/whatsapp-mcp/internal/wa"
@@ -316,6 +317,11 @@ const storageFailedMessage = "whatsapp-mcp: message storage failed; messages may
 func reportStorageFailure(owner wa.Owner, s *streams) bool {
 	select {
 	case <-owner.Terminal():
+		if s.diagnostics != nil {
+			s.diagnostics.ReportTerminal(mcp.TerminalIngest)
+			s.diagnostics.ReportHuman(mcp.HumanStorageFailure, 0)
+			return true
+		}
 		fmt.Fprintln(s.stderr, storageFailedMessage)
 		return true
 	default:
@@ -492,6 +498,10 @@ func runServe(cmd *command, args []string, s *streams) int {
 }
 
 func runStdio(cmd *command, args []string, s *streams) int {
+	mcp.SetupDiagnosticSignals()
+	local := *s
+	local.diagnostics = mcp.NewDiagnostics(s.stderr, slog.LevelInfo)
+	s = &local
 	return runShell("stdio", cmd, args, s, func(ctx context.Context, lc *lifecycle, logger *slog.Logger, st *store.Store, s *streams, from *wa.LIDCursor) (*ownerHandle, bool) {
 		oh, failed := attachOwner("stdio", lc, logger, st, s, from)
 		if !failed {
@@ -510,10 +520,36 @@ func runStdio(cmd *command, args []string, s *streams) int {
 // still releases what was taken. The body's result makes a start failure an unsuccessful exit; a message-storage
 // failure is reported after the stop and is an unsuccessful exit too.
 func runShell(kind string, cmd *command, args []string, s *streams, body func(context.Context, *lifecycle, *slog.Logger, *store.Store, *streams, *wa.LIDCursor) (*ownerHandle, bool)) (result int) {
-	lc := lifecycleFactory(slog.New(slog.NewTextHandler(s.stderr, nil)))
+	handler := slog.Handler(slog.NewTextHandler(s.stderr, nil))
+	if s.diagnostics != nil {
+		handler = s.diagnostics.Handler()
+	}
+	lc := lifecycleFactory(slog.New(handler))
+	defer lc.close()
+	if d := s.diagnostics; d != nil {
+		lc.keepSignalsDuringCleanup = true
+		observed := make(chan struct{})
+		if d.Failed() {
+			lc.cancel()
+		}
+		go func() {
+			defer close(observed)
+			select {
+			case <-d.Wake():
+				lc.cancel()
+			case <-lc.ctx.Done():
+			}
+		}()
+		defer func() {
+			lc.cancel()
+			<-observed
+			if !d.Finalize(lc.diagnosticFinalizing) {
+				result = exitError
+			}
+		}()
+	}
 	cfg, logger, code, ok := startup(cmd, args, s)
 	if !ok {
-		lc.close()
 		return code
 	}
 	lc.setLogger(logger)
@@ -522,7 +558,6 @@ func runShell(kind string, cmd *command, args []string, s *streams, body func(co
 	}
 	l, code, ok := acquireLock(cfg, logger, s)
 	if !ok {
-		lc.close()
 		return code
 	}
 	lc.addStop("lock", func(context.Context) error { return l.Release() })
@@ -573,7 +608,11 @@ func runShell(kind string, cmd *command, args []string, s *streams, body func(co
 	}
 	state, _, err := st.RunGuard(lc.ctx)
 	if err != nil || state != "clean" {
-		fmt.Fprintf(s.stderr, "whatsapp-mcp: %s: unsafe or invalid run marker; offline recovery is required using pair\n", kind)
+		if s.diagnostics != nil {
+			s.diagnostics.ReportHuman(mcp.HumanRunMarkerFailure, 0)
+		} else {
+			fmt.Fprintf(s.stderr, "whatsapp-mcp: %s: unsafe or invalid run marker; offline recovery is required using pair\n", kind)
+		}
 		lc.shutdown()
 		return exitError
 	}
@@ -629,7 +668,11 @@ var startupReconcile = func(ctx context.Context, st wa.LIDMergeStore, logger *sl
 func attachOwner(kind string, lc *lifecycle, logger *slog.Logger, st *store.Store, s *streams, from *wa.LIDCursor) (*ownerHandle, bool) {
 	oh, err := newOwner(ownerDeps{ctx: lc.ctx, log: logger, store: st, shell: true, reconcileFrom: from})
 	if err != nil {
-		fmt.Fprintf(s.stderr, "whatsapp-mcp: %s\n", safeError(err))
+		if s.diagnostics != nil {
+			s.diagnostics.ReportHuman(mcp.HumanStartupFailure, 0)
+		} else {
+			fmt.Fprintf(s.stderr, "whatsapp-mcp: %s\n", safeError(err))
+		}
 		lc.requestStop("owner failed")
 		return nil, true
 	}
@@ -642,7 +685,11 @@ func attachOwner(kind string, lc *lifecycle, logger *slog.Logger, st *store.Stor
 		return err
 	})
 	if err := oh.owner.Start(lc.ctx); err != nil {
-		fmt.Fprintf(s.stderr, "whatsapp-mcp: %s: %s\n", kind, safeError(err))
+		if s.diagnostics != nil {
+			s.diagnostics.ReportHuman(mcp.HumanStartupFailure, 0)
+		} else {
+			fmt.Fprintf(s.stderr, "whatsapp-mcp: %s: %s\n", kind, safeError(err))
+		}
 		lc.requestStop("owner start failed")
 		return oh, true
 	}
@@ -663,7 +710,7 @@ func startup(cmd *command, args []string, s *streams) (cfg *config.Config, logge
 		return nil, nil, code, false
 	}
 	if err := config.PrepareDataDir(cfg.DataDir); err != nil {
-		fmt.Fprintln(s.stderr, config.FormatError(err))
+		s.reportStartupError(err)
 		return nil, nil, exitError, false
 	}
 	return cfg, logger, exitOK, true
@@ -678,7 +725,7 @@ func loadStartup(cmd *command, args []string, s *streams) (cfg *config.Config, l
 	}
 	cfg, warnings, err := config.Load(config.Inputs{Flags: flags, Environ: s.environ, UserConfigDir: os.UserConfigDir})
 	if err != nil {
-		fmt.Fprintln(s.stderr, config.FormatError(err))
+		s.reportStartupError(err)
 		// An unusable data directory is a problem with the environment, not with the arguments.
 		var de *config.DataDirError
 		if errors.As(err, &de) {
@@ -686,8 +733,13 @@ func loadStartup(cmd *command, args []string, s *streams) (cfg *config.Config, l
 		}
 		return nil, nil, exitUsage, false
 	}
-	logger = slog.New(slog.NewTextHandler(s.stderr, &slog.HandlerOptions{Level: cfg.LogLevel, ReplaceAttr: utcTime}))
-	slog.SetDefault(logger)
+	if s.diagnostics != nil {
+		s.diagnostics.SetLevel(cfg.LogLevel)
+		logger = slog.New(s.diagnostics.Handler())
+	} else {
+		logger = slog.New(slog.NewTextHandler(s.stderr, &slog.HandlerOptions{Level: cfg.LogLevel, ReplaceAttr: utcTime}))
+		slog.SetDefault(logger)
+	}
 	for _, w := range warnings {
 		logger.Warn("unknown environment variable", "name", w.Name)
 	}
@@ -704,10 +756,35 @@ func acquireLock(cfg *config.Config, logger *slog.Logger, s *streams) (*lock.Loc
 		if !errors.As(err, &he) {
 			err = &config.DataDirError{Dir: cfg.DataDir, Err: err}
 		}
-		fmt.Fprintln(s.stderr, config.FormatError(err))
+		s.reportStartupError(err)
 		return nil, exitError, false
 	}
 	return l, exitOK, true
+}
+
+func (s *streams) reportStartupError(err error) {
+	if s.diagnostics == nil {
+		fmt.Fprintln(s.stderr, config.FormatError(err))
+		return
+	}
+	var held *lock.HeldError
+	var dir *config.DataDirError
+	var perms *private.Error
+	var setting *config.SettingError
+	switch {
+	case errors.As(err, &held):
+		s.diagnostics.ReportHuman(mcp.HumanLockHeld, held.PID)
+	case errors.As(err, &dir):
+		if errors.As(dir, &perms) {
+			s.diagnostics.ReportPrivateDirectory(dir.Dir, perms.Fix)
+		} else {
+			s.diagnostics.ReportHuman(mcp.HumanDataDirFailure, 0)
+		}
+	case errors.As(err, &setting) && setting.Setting == "log_level":
+		s.diagnostics.ReportHuman(mcp.HumanLogLevelFailure, 0)
+	default:
+		s.diagnostics.ReportHuman(mcp.HumanUsageFailure, 0)
+	}
 }
 
 // utcTime renders the log time in UTC.
@@ -725,7 +802,19 @@ func openStore(ctx context.Context, cfg *config.Config, logger *slog.Logger, s *
 	defer cancel()
 	st, err := store.Open(ctx, cfg.DataDir, logger)
 	if err != nil {
-		fmt.Fprintln(s.stderr, "whatsapp-mcp: "+err.Error())
+		if s.diagnostics != nil {
+			var schema *store.SchemaError
+			switch {
+			case errors.Is(err, store.ErrSchemaTooNew) && errors.As(err, &schema):
+				s.diagnostics.ReportNewerSchema(schema.Schema == "device", schema.Observed, schema.Supported)
+			case errors.Is(err, store.ErrNotDatabase):
+				s.diagnostics.ReportHuman(mcp.HumanNotDatabase, 0)
+			default:
+				s.diagnostics.ReportHuman(mcp.HumanStartupFailure, 0)
+			}
+		} else {
+			fmt.Fprintln(s.stderr, "whatsapp-mcp: "+err.Error())
+		}
 		return nil, exitError, false
 	}
 	return st, exitOK, true
