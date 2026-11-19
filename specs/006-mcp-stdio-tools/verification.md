@@ -4,7 +4,7 @@
 
 See [tasks.md](tasks.md#current-state) for the current implementation status and remaining work. The passing Windows store and focused shutdown runs are recorded under [Runtime Gates](#runtime-gates). Earlier failures and blockers are dated evidence, not current status. The [owner reviews](#owner-reviews) and the binding [isolation amendment](#owner-accepted-amendment-to-the-isolation-policy-2026-11-18) are preserved below.
 
-The T045/T046 sequencing revision is design-only. The fresh `owner-judge` review at `7d4336b` returned `PASS`: the writer-connector fence resolves the WAL ceiling blocker from `8594218`, and the diagnostic dependency order and native gates remain intact. This clears the design review gate only. The revised fence, diagnostic command wiring, and their native and integrated evidence are still pending.
+The `owner-judge` review at `7d4336b` returned `PASS` for the revised WAL fence and diagnostic dependency order. The fence is committed as `f430dd0` and the diagnostic-only stdio wiring as `12d2713`. [Local results](#phase-2-wal-fence-and-diagnostic-wiring-2026-11-19) do not clear the remaining store schedules, native Linux/macOS diagnostic gate, or integrated MCP acceptance.
 
 ## Planning Evidence
 
@@ -26,6 +26,23 @@ The T045/T046 sequencing revision is design-only. The fresh `owner-judge` review
 | 2026-11-19 | Diagnostic shutdown split; read-only dependency inspection, PowerShell marker comparison using `git grep -h -o -E` against HEAD and the worktree, `git diff --check HEAD`, and `git ls-files --eol -- specs/006-mcp-stdio-tools` | The topological order in `tasks.md` separates reporter seams from checkbox closure; neither T024 nor the full native matrix supplies foundation evidence. Marker comparison and Git checks exit 0 on Windows: all 44 original IDs and markers preserved, only unchecked T045/T046 added, feature files remain LF. Design validation only, not an owner verdict or runtime result. |
 
 ## Runtime Gates
+
+### Phase 2 WAL Fence and Diagnostic Wiring (2026-11-19)
+
+Synthetic temporary stores and fake owners only. The writer connector measures and publishes the WAL fence before the next writer reaches SQLite. Tests exercise actual reader transaction retention across cancellation, ingest and adapter transactions, expiry with retained accounting, interface parity, and a fresh tool-only free-space sample. The diagnostic slice retains stdin-discard and the store-control observer; no MCP transport or tools were registered.
+
+| Environment and command | Direct result |
+| --- | --- |
+| Windows, `go test ./internal/store -run '^(TestToolAdmissionUsesFreshDiskSample\|TestToolWALActualWritesCancelSnapshot)$' -count=1 -timeout 90s` before T005 | Exit 1, two expected failures: stale free-space acceptance and a second SQLite write before snapshot release. |
+| Windows, `go test ./internal/store -count=1 -parallel 1 -timeout 15m` | Exit 0 (390.783 s) after restoring admitted-writer shutdown grace. A subsequent focused run covered the final checkpoint validation and extra adapter tests; the full run predates those edits. |
+| Windows, `go test ./internal/store -run 'TestTool(WAL\|Admission\|ConcurrentIngest)\|TestWriterDriverInterfaceParity' -count=1 -v -timeout 70s` | Exit 0 (25.921 s), 10 parent tests and 4 subtests, no skips. Real held snapshots for ingest and multi-statement adapter transactions; stable-generation admission, fresh disk sampling, fail-fast latch, WAL recovery and parity. |
+| Windows, `go test ./cmd/whatsapp-mcp -run '^TestStdioDiagnostic' -count=1 -timeout 60s` before wiring | Exit 1, two expected refusal failures: rejected value appeared in stderr and owner startup bypassed the typed reporter. |
+| Windows, `go test ./cmd/whatsapp-mcp -count=1 -timeout 6m` | Exit 0 (134.378 s) after migrating stderr-based assertions. A later focused run verified the additional finalization and failed-delivery race tests. |
+| Windows, `go test ./cmd/whatsapp-mcp ./internal/mcp -run 'TestStdioDiagnostic\|TestDiagnostics\|TestMCPStoreFailureShutdown\|TestCommandCompletionFirstSignalDrainsRealStore' -count=1 -timeout 65s` | Both packages exit 0 on final local source (7.878 s, 6.033 s). Includes all seven T043/T044 subtests, actual store drain on first signal, redacted refusals, configured log levels, prelatched failure, operation/EOF-drain cases, and a healthy acknowledgment after cleanup. |
+| WSL2, `go test -p 1 -buildvcs=false ./cmd/whatsapp-mcp -run '^TestMCPDiagnosticShutdownNative$' -count=1 -v -timeout 3m` | Exit 0 (28.742 s), all six cases passed with no skips; each child exited 1 without signal termination. Only the forced-second-signal case observed the forced callback. Smoke evidence only, not native Linux. |
+| Windows host, `GOOS=darwin GOARCH=arm64 go vet ./cmd/whatsapp-mcp`; local `go vet ./...` | Both exit 0; neither establishes native runtime behavior. All runs used `CGO_ENABLED=0`. |
+
+**Still open:** Verify the remaining T004 transaction/lease and fault schedules and collect native store evidence. The focused CI step must produce passing named subprocess evidence, counts/skips and child outcomes on native Linux and macOS for the committed diagnostic slice. No such CI run has occurred. T015/T016 and T045/T046 remain open, and Phase 3 and T035 matched-frame, WAL-stat and `-shm` measurements are not started. No push or account activity occurred.
 
 ### Guarded MCP Foundation (2026-11-19)
 

@@ -10,13 +10,15 @@
 
 ## Current State
 
-**2026-11-19:** Phase 2 is incomplete. T004/T005 are reopened for the WAL transaction fence; their earlier passing evidence predates it. T015/T016 still need T045/T046 command evidence. Phase 3 (T019-T026) has not started. The full Windows store suite passed on SQLite v1.62.0 with `-parallel 1`, and the focused store-failure shutdown and quiet-stop regressions passed. See [verification.md](verification.md#runtime-gates) for commands and results. The WAL fence, wider command regression, sustained ingest pressure, and native Linux/macOS acceptance remain unverified.
+**2026-11-19:** Phase 2 is incomplete. The WAL fence is committed as `f430dd0` and the diagnostic-only stdio wiring as `12d2713`. The full Windows store and command suites passed during this slice; focused tests passed after the latest changes. T043/T044 were rerun. See [verification.md](verification.md#phase-2-wal-fence-and-diagnostic-wiring-2026-11-19) for the red/green and smoke results. T004/T005 verification is still open; T045/T046 and T015/T016 still require native Linux/macOS diagnostic evidence. Phase 3 (T019-T026) has not started.
 
 The reconciled design passed `owner-judge` at `889ff65`; the verdict was recorded in `2a950af`. No production MCP tools are registered. Stdio still uses its stdin-discard path; T024 owns MCP integration and must revalidate the observer with actual MCP drainage.
 
-**Design checkpoint:** T045/T046 resolve the diagnostic dependency cycle. At `8594218`, `owner-judge` confirmed the diagnostic design but returned BLOCK on the WAL ceiling. The revised [per-transaction fence](contracts/store-and-lifecycle.md#5-wal-guard) specifies the public writer connector, fresh tool-only disk admission with a WAL-retention budget, and the fence deadline for existing leases. Obtain a current acceptable `owner-judge` verdict on the committed amendment before any runtime or CI workflow changes. The BLOCK is not parked or waived.
+**Design checkpoint:** `owner-judge` returned PASS at `7d4336b` for the revised [per-transaction fence](contracts/store-and-lifecycle.md#5-wal-guard) and diagnostic dependency order; `922d3d4` records the verdict. This clears only the design gate.
 
-**T015/T016 verification:** The guarded SDK session stops on asynchronous diagnostic failure, and synthetic loss-producer and Windows blocked/closed-stderr tests passed. Actual command exit 1 after normal cleanup and native Linux/macOS pipe and signal behavior remain unverified.
+**T015/T016 verification:** Windows command tests cover exit 1 on failed delivery in operation and during owner drain, and exit 0 on timely delivery after cleanup. Six named subprocess cases passed on WSL2 as smoke evidence only; a macOS cross-vet also passed. Neither is native Linux/macOS evidence. No tests or changes involve a real WhatsApp account.
+
+**T035 follow-up:** Measure WAL-index sidecar (`-shm`) allocation separately from `-wal` retention, as noted in the [design review](verification.md#owner-reviews).
 
 The design reviews of `68ce167` and `87c3a11` returned CONCERNS; the owner accepted the second without another review. **T004 and T005 must also implement the "Owner-Accepted Amendment to the Isolation Policy" in `verification.md`** (tool-class recovery checkpoint, refusal on unknown WAL size, filesystem checks outside the gate mutex, and a checkpoint outside `Store.write` and the disk guard). Its earlier stale-stat/cancellation-only rationale is superseded by the proposed transaction fence. Where `spike.md` or `research.md` R6 describe earlier proposals, the current contract and evidence gates apply. Linux and macOS remain not verified until T004/T034/T035 run in CI.
 
