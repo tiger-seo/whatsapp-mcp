@@ -331,7 +331,8 @@ func (s *Store) ListChats(ctx context.Context, query string, sort ChatSort, with
 		`CASE WHEN count(*) < ?2 THEN (SELECT count(*) FROM (SELECT jid FROM chats LIMIT 100201)) ELSE 0 END ` +
 		`FROM (SELECT jid, name, last_message_time, name_fold, k0 FROM (` +
 		`SELECT jid, name, last_message_time, name_fold, ` + first + ` AS k0 FROM chats ORDER BY ` + order + ` LIMIT 100200) ` +
-		`WHERE ?1 = '' OR instr(name_fold, ?1) > 0 OR instr(jid, ?1) > 0 ` +
+		`WHERE ?1 = '' OR instr(name_fold, ?1) > 0 OR ` +
+		`CASE WHEN octet_length(jid) <= 256 THEN instr(mcp_fold(CAST(jid AS TEXT)), ?1) > 0 ELSE 1 END ` +
 		`ORDER BY k0, ` + rest + ` LIMIT ?2 OFFSET ?3)`
 
 	var out []ChatView

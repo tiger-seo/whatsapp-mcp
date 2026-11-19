@@ -29,6 +29,11 @@ type framedTransport struct {
 
 func newFramedTransport(r io.Reader, w io.Writer) sdk.Transport { return &framedTransport{r: r, w: w} }
 
+// ConnectStdio uses one process-lifetime input and output pump.
+func (s *Server) ConnectStdio(ctx context.Context, r io.Reader, w io.Writer) (*ServerSession, error) {
+	return s.Connect(ctx, newFramedTransport(r, w))
+}
+
 func (t *framedTransport) Connect(ctx context.Context) (sdk.Connection, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -62,11 +67,12 @@ type writeFrame struct {
 	ack  chan error
 }
 type framedConnection struct {
-	done  chan struct{}
-	once  sync.Once
-	read  chan frameEvent
-	write chan writeFrame
-	lock  chan struct{}
+	done    chan struct{}
+	stopErr error // Published by closing done.
+	once    sync.Once
+	read    chan frameEvent
+	write   chan writeFrame
+	lock    chan struct{}
 }
 
 func (c *framedConnection) watchFrames(activity <-chan frameActivity) {
@@ -93,7 +99,7 @@ func (c *framedConnection) watchFrames(activity <-chan frameActivity) {
 				expiry = timer.C
 			} else {
 				if a.at.After(deadline) {
-					c.Close()
+					c.stop(errFrame)
 					return
 				}
 				if timer != nil {
@@ -110,7 +116,7 @@ func (c *framedConnection) watchFrames(activity <-chan frameActivity) {
 				}
 			default:
 			}
-			c.Close()
+			c.stop(errFrame)
 			return
 		}
 	}
@@ -230,12 +236,12 @@ func (c *framedConnection) readHeld(ctx context.Context) (jsonrpc.Message, func(
 		}
 		select {
 		case <-c.done:
-			return nil, nil, sdk.ErrConnectionClosed
+			return nil, nil, c.stopErr
 		default:
 		}
 		select {
 		case <-c.done:
-			return nil, nil, sdk.ErrConnectionClosed
+			return nil, nil, c.stopErr
 		case <-ctx.Done():
 			c.Close()
 			return nil, nil, ctx.Err()
@@ -488,5 +494,12 @@ func preflightFrame(msg jsonrpc.Message) bool {
 		return false
 	}
 }
-func (c *framedConnection) Close() error    { c.once.Do(func() { close(c.done) }); return nil }
+func (c *framedConnection) stop(err error) {
+	c.once.Do(func() {
+		c.stopErr = err
+		close(c.done)
+	})
+}
+
+func (c *framedConnection) Close() error    { c.stop(sdk.ErrConnectionClosed); return nil }
 func (*framedConnection) SessionID() string { return "" }

@@ -135,6 +135,7 @@ type guardedConnection struct {
 	mu                                  sync.Mutex
 	active                              map[jsonrpc.ID]guardEntry
 	tool, initialized, notified, closed bool
+	closeFailed                         bool
 	notifications                       int
 	nextID                              uint64
 	done                                chan struct{}
@@ -158,10 +159,15 @@ func newGuardedConnection(c sdk.Connection) *guardedConnection {
 
 func (g *guardedConnection) SessionID() string { return g.inner.SessionID() }
 func (g *guardedConnection) Close() error {
+	return g.close(false)
+}
+
+func (g *guardedConnection) close(failed bool) error {
 	var err error
 	g.closeOnce.Do(func() {
 		g.mu.Lock()
 		g.closed = true
+		g.closeFailed = failed
 		g.mu.Unlock()
 		close(g.done)
 		err = g.inner.Close()
@@ -285,7 +291,7 @@ func (g *guardedConnection) deadlineCancellation(target jsonrpc.ID) *jsonrpc.Req
 	return nil
 }
 func (g *guardedConnection) fail() error {
-	_ = g.Close()
+	_ = g.close(true)
 	return errors.New("invalid protocol message")
 }
 
@@ -492,7 +498,7 @@ func (g *guardedConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 	for {
 		m, synthetic, err := g.readInput(ctx)
 		if err != nil {
-			_ = g.Close()
+			_ = g.close(!errors.Is(err, io.EOF) && !errors.Is(err, sdk.ErrConnectionClosed) && !errors.Is(err, context.Canceled))
 			return nil, err
 		}
 		if synthetic {
@@ -537,7 +543,7 @@ func (g *guardedConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 				g.active[id] = entry
 				if entry.writing {
 					g.mu.Unlock()
-					_ = g.Close()
+					_ = g.close(true)
 					return nil, errors.New("cancellation during response")
 				}
 				encoded, _ := json.Marshal(entry.internal.Raw())
@@ -644,7 +650,7 @@ func (g *guardedConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 			var timer *time.Timer
 			if !deadline.IsZero() {
 				writeCtx, cancel = context.WithDeadline(ctx, deadline)
-				timer = time.AfterFunc(time.Until(deadline), func() { _ = g.Close() })
+				timer = time.AfterFunc(time.Until(deadline), func() { _ = g.close(true) })
 			}
 			err := g.inner.Write(writeCtx, reply)
 			if timer != nil {
@@ -652,7 +658,7 @@ func (g *guardedConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 			}
 			cancel()
 			if err != nil || (!deadline.IsZero() && !time.Now().Before(deadline)) {
-				_ = g.Close()
+				_ = g.close(true)
 				return nil, errors.New("response write failed")
 			}
 			if !busy {
@@ -686,7 +692,7 @@ func (g *guardedConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 func (g *guardedConnection) Write(ctx context.Context, msg jsonrpc.Message) error {
 	r, ok := msg.(*jsonrpc.Response)
 	if !ok {
-		_ = g.Close()
+		_ = g.close(true)
 		return errors.New("unexpected outbound message")
 	}
 	g.mu.Lock()
@@ -708,7 +714,7 @@ func (g *guardedConnection) Write(ctx context.Context, msg jsonrpc.Message) erro
 	}
 	g.mu.Unlock()
 	if !exists {
-		_ = g.Close()
+		_ = g.close(true)
 		return errors.New("unknown response")
 	}
 	if entry.tool && entry.cancelled && r.Error == nil {
@@ -716,7 +722,7 @@ func (g *guardedConnection) Write(ctx context.Context, msg jsonrpc.Message) erro
 			IsError bool `json:"isError"`
 		}
 		if json.Unmarshal(r.Result, &result) != nil || !result.IsError {
-			_ = g.Close()
+			_ = g.close(true)
 			return errors.New("cancelled request returned success")
 		}
 	}
@@ -740,7 +746,7 @@ func (g *guardedConnection) Write(ctx context.Context, msg jsonrpc.Message) erro
 	var timer *time.Timer
 	if entry.tool {
 		writeCtx, cancel = context.WithDeadline(ctx, entry.deadline)
-		timer = time.AfterFunc(time.Until(entry.deadline), func() { _ = g.Close() })
+		timer = time.AfterFunc(time.Until(entry.deadline), func() { _ = g.close(true) })
 	}
 	err := g.inner.Write(writeCtx, &copy)
 	if timer != nil {
@@ -748,7 +754,7 @@ func (g *guardedConnection) Write(ctx context.Context, msg jsonrpc.Message) erro
 	}
 	cancel()
 	if err != nil || (entry.tool && !time.Now().Before(entry.deadline)) {
-		_ = g.Close()
+		_ = g.close(true)
 		return fmt.Errorf("response write failed")
 	}
 	g.mu.Lock()

@@ -319,6 +319,10 @@ func (d *Diagnostics) ReportTerminal(kind TerminalFailure) bool {
 	return d.report(DiagnosticTerminal, " component="+components[kind]+" tool=not_applicable category="+components[kind]+"_failure")
 }
 
+func (d *Diagnostics) ReportTransportFailure() bool {
+	return d.report(DiagnosticFailed, " component=mcp tool=not_applicable category=transport_failure")
+}
+
 func (d *Diagnostics) ordinaryRecord(r slog.Record, attrs []string) {
 	message := "ordinary diagnostic"
 	switch r.Message {

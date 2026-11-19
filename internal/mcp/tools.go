@@ -2,7 +2,9 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strconv"
 	"strings"
@@ -13,6 +15,62 @@ import (
 	"github.com/tiger-seo/whatsapp-mcp/internal/store"
 	"go.mau.fi/whatsmeow/types"
 )
+
+func chatHandler(name string, reader ChatContactReader) sdk.ToolHandler {
+	return func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+		raw := req.Params.Arguments
+		if len(raw) == 0 {
+			raw = json.RawMessage(`{}`)
+		}
+		a, invalid := validateArguments(name, raw)
+		if invalid != nil {
+			return argumentErrorResult(invalid), nil
+		}
+		if name == "get_chat" {
+			row, err := reader.GetChat(ctx, a.ChatJID, a.IncludeLastMessage)
+			if err != nil {
+				return chatReadError(err, "chat_jid"), nil
+			}
+			return encodeResult(ChatResult{Source: "local_store", UntrustedData: true, Chat: chatDTO(row, a.IncludeLastMessage)}), nil
+		}
+		order := store.ByLastActivity
+		if a.SortBy == "name" {
+			order = store.ByName
+		}
+		rows, err := reader.ListChats(ctx, a.Query, order, a.IncludeLastMessage, store.Page{Limit: a.Limit, Offset: a.Offset})
+		if err != nil {
+			return chatReadError(err, "arguments"), nil
+		}
+		chats := make([]Chat, len(rows))
+		for i, row := range rows {
+			chats[i] = chatDTO(row, a.IncludeLastMessage)
+		}
+		return encodeResult(ChatPage{Source: "local_store", UntrustedData: true, Chats: chats, Count: len(chats), Limit: a.Limit, Page: a.Page}), nil
+	}
+}
+
+func chatReadError(err error, field string) *sdk.CallToolResult {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return toolErrorResult("timeout")
+	case errors.Is(err, context.Canceled):
+		return toolErrorResult("cancelled")
+	case errors.Is(err, store.ErrInvalid):
+		return argumentErrorResult(invalidArgument(field, "must satisfy the local store's input constraints"))
+	case errors.Is(err, store.ErrNotFound):
+		return toolErrorResult("not_found")
+	case errors.Is(err, store.ErrBusy):
+		return toolErrorResult("busy")
+	case errors.Is(err, store.ErrDiskLow):
+		return toolErrorResult("low_disk")
+	case errors.Is(err, store.ErrClosed):
+		return toolErrorResult("unavailable")
+	case errors.Is(err, store.ErrResourceLimit):
+		return toolErrorResult("resource_limit")
+	default:
+		return toolErrorResult("storage_error")
+	}
+}
 
 type toolArguments struct {
 	Query, ChatJID, Contact, SortBy string

@@ -198,6 +198,8 @@ var lifecycleFactory = newLifecycle
 // Tests can inject the one-way failure latch without forcing a SQLite failure.
 var toolStoreFailureSignal = (*store.Store).ToolStoreNotQuiescent
 
+var stdioToolReader = func(st *store.Store) mcp.ChatContactReader { return st.ToolReader() }
+
 var recoveryInteractive = terminalStreams
 
 // stopStep is the owner's ordered cleanup: stop, then wait for the drain, before the store closes.
@@ -504,16 +506,57 @@ func runStdio(cmd *command, args []string, s *streams) int {
 	s = &local
 	return runShell("stdio", cmd, args, s, func(ctx context.Context, lc *lifecycle, logger *slog.Logger, st *store.Store, s *streams, from *wa.LIDCursor) (*ownerHandle, bool) {
 		oh, failed := attachOwner("stdio", lc, logger, st, s, from)
-		if !failed {
-			go func() {
-				_, _ = io.Copy(io.Discard, s.stdin)
-				lc.requestStop("stdin closed")
-			}()
+		if failed || ctx.Err() != nil {
+			return oh, failed
 		}
-		waitShell(lc, oh)
-		return oh, failed
+		deviceWake := make(chan struct{}, 1)
+		unsubscribe := oh.owner.Subscribe(func(wa.Event) {
+			select {
+			case deviceWake <- struct{}{}:
+			default:
+			}
+		})
+		defer unsubscribe()
+		if oh.owner.Health().StorageFault {
+			return oh, true
+		}
+		server := mcp.NewServer(mcp.NewSDKErrorLatch(), s.diagnostics)
+		server.RegisterChatTools(stdioToolReader(st))
+		session, err := server.ConnectStdio(ctx, s.stdin, s.stdout)
+		if err != nil {
+			if ctx.Err() != nil {
+				return oh, false
+			}
+			s.diagnostics.ReportHuman(mcp.HumanStartupFailure, 0)
+			return oh, true
+		}
+		lc.addStop("mcp", func(context.Context) error {
+			if err := session.Close(); err != nil {
+				if !s.diagnostics.Failed() {
+					s.diagnostics.ReportTransportFailure()
+				}
+				return errMCPProtocol
+			}
+			return nil
+		})
+		for {
+			select {
+			case <-ctx.Done():
+				return oh, false
+			case <-oh.owner.Terminal():
+				return oh, true
+			case <-session.Stopped():
+				return oh, false
+			case <-deviceWake:
+				if oh.owner.Health().StorageFault {
+					return oh, true
+				}
+			}
+		}
 	})
 }
+
+var errMCPProtocol = errors.New("stdio MCP session failed")
 
 // runShell takes the data directory, attaches the owner and runs until a stop signal or stop
 // request, then shuts down. The signal handler is installed before anything else, so an early signal
@@ -627,6 +670,10 @@ func runShell(kind string, cmd *command, args []string, s *streams, body func(co
 	lc.requestStop("shell finished")
 	<-lc.ctx.Done()
 	code = lc.shutdown()
+	if kind == "stdio" && oh != nil && oh.owner.Health().StorageFault {
+		s.diagnostics.ReportTerminal(mcp.TerminalDevice)
+		failed = true
+	}
 	if oh != nil && reportStorageFailure(oh.owner, s) {
 		return exitError
 	}
@@ -681,7 +728,9 @@ func attachOwner(kind string, lc *lifecycle, logger *slog.Logger, st *store.Stor
 	stopOwner := oh.stopStep()
 	lc.addStop("owner", func(ctx context.Context) error {
 		err := stopOwner(ctx)
-		reportShellStop(kind, oh.owner, err, s)
+		if kind != "stdio" || !oh.owner.Health().StorageFault || err != nil {
+			reportShellStop(kind, oh.owner, err, s)
+		}
 		return err
 	})
 	if err := oh.owner.Start(lc.ctx); err != nil {
@@ -693,7 +742,7 @@ func attachOwner(kind string, lc *lifecycle, logger *slog.Logger, st *store.Stor
 		lc.requestStop("owner start failed")
 		return oh, true
 	}
-	logger.Info(kind+": connection owner running; MCP arrives in a later feature", "event", "owner_running")
+	logger.Info(kind+": connection owner running", "event", "owner_running")
 	return oh, false
 }
 

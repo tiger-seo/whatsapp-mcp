@@ -271,7 +271,7 @@ func TestProcessStdoutStaysEmpty(t *testing.T) {
 	dir := privateDir(t)
 	p := start(t, true, childEnv(), "stdio", "--data-dir", dir, "--log-level", "debug")
 	p.waitOwner(t)
-	if _, err := io.WriteString(p.stdin, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n"); err != nil {
+	if _, err := io.WriteString(p.stdin, "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/test\"}\n"); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.stdin.Close(); err != nil {

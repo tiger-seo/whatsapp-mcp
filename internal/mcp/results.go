@@ -42,6 +42,24 @@ type Message struct {
 	MediaType  string `json:"media_type"`
 }
 
+func chatDTO(row store.ChatView, latest bool) Chat {
+	c := Chat{JID: row.JID, Name: row.Name, IsGroup: row.IsGroup}
+	if row.LastActivity != nil {
+		stamp := resultTimestamp(*row.LastActivity)
+		c.LastMessageTime = &stamp
+	}
+	if latest {
+		var detail *Message
+		if m := row.Latest; m != nil {
+			detail = &Message{ID: m.ID, ChatJID: m.ChatJID, ChatName: m.ChatName, Sender: m.SenderJID,
+				SenderName: m.SenderName, Timestamp: resultTimestamp(m.Time), IsFromMe: m.FromMe,
+				Content: m.Text, Caption: m.Caption, MediaType: m.MediaType}
+		}
+		c.LatestMessage = &detail
+	}
+	return c
+}
+
 type Contact struct {
 	JID         string  `json:"jid"`
 	PhoneNumber *string `json:"phone_number"`

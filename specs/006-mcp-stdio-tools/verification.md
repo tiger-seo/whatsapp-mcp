@@ -27,6 +27,26 @@ The `owner-judge` review at `7d4336b` returned `PASS` for the revised WAL fence 
 
 ## Runtime Gates
 
+### Phase 3 Chat Tools and Stdio (2026-11-19)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`. Only synthetic temporary data, cooperative streams, fake owners and the existing simulator were used. `list_chats` and `get_chat` are the only registered tools. The 35-chat fixture returns 30+5 and the unchanged 235-chat fixture is traversed at omitted/default limit 30 and explicit 1 and 200. The store tests assert literal NFC/case folding, stable ties, composite latest identity and no latest statement for metadata-only reads. The offline command test returns fake approval text with `untrusted_data: true`, observes no pairing request or connectivity requirement, and reopens the store to verify the fixture is unchanged. The tools hold only a local reader, with no send, pairing or recovery API.
+
+| Command | Direct result |
+| --- | --- |
+| `go test ./internal/store -run '^TestMCPChatQueries' -count=1 -v -timeout 5m` (red) | Exit 1: mixed-case Unicode stored JID failed to match two queries; three other parents and five literal-search subtests passed, no skips. |
+| `go test ./internal/mcp -run '^TestChatTools' -count=1 -v -timeout 5m` (red) | Exit 1: five parent tests failed because the tools were absent; 3 paging and 20 argument subtests failed, no skips. The earlier harness-only compilation attempt was not runtime evidence. |
+| `go test ./cmd/whatsapp-mcp -run '^TestMCPStdio(OfflineRead\|DeviceFault)$' -count=1 -v -timeout 60s` (red) | Exit 1: two parents and seven subtests failed, the serve control passed, no skips. No MCP initialization; a preexisting device fault did not stop stdio, and a fault during owner drain exited 0. |
+| `go test ./internal/store -run '^(TestMCPChatQueries\|TestTool.*(Plan\|Equivalence\|FiveReads))' -count=1 -v -timeout 5m` | Exit 0: 11 parents and 14 subtests, no skips. First-step plan and equivalence assertions stayed green after folding stored JIDs. |
+| `go test -cover ./internal/mcp -run '^TestChatTools' -count=10 -timeout 3m` | Exit 0: 50 parent and 230 subtest executions; 43.0% package statement coverage from the focused chat tests. An earlier full run exposed a test-only race between the in-memory peer receiving the response and the guard retiring its credit; the final harness observes retirement before issuing the next sequential call. No admission policy was relaxed. |
+| `go test ./cmd/whatsapp-mcp -run '^TestMCPStdioIntegratedDrain$' -count=3 -v -timeout 60s` | Exit 0: three parents and 27 subtests, no skips. See drain assertions below. |
+| `go test ./internal/mcp ./internal/store ./cmd/whatsapp-mcp ./internal/wa -run '^(TestChatTools\|TestMCPChatQueries\|TestTool.*(Plan\|Equivalence\|FiveReads)\|TestMCPStdio\|TestMCPStoreFailureShutdown\|TestStdioDiagnostic\|TestProcessStdoutStaysEmpty\|TestShellIngest\|TestStopSteps\|TestStoreNotQuiescent\|TestRetirementOrder\|TestQuietStopPasses\|TestSimulatorStopDuringQueuedAppStateFetches\|TestOwnerTerminal)' -count=1 -json -timeout 6m` | Exit 0: MCP 5 parents/23 subtests, store 11/14, command 20/35, owner 7/0; zero skips and failures. |
+| `go test ./... -count=1 -json -timeout 30m` (final source) | Exit 0: 10 packages, 1,840 parent/subtest passes, 30 skips (platform, helper-only or opt-in), zero failures. Store: 652 passes, 11 skips, 295.879 s. Command: 267 passes, 1 skip, 147.980 s. MCP: 312 passes, no skips, 101.349 s. |
+| `gofmt -l .`; `go vet ./...`; `git diff --check`; `go build -o D:\tmp\kilo\phase3-<GOOS>-<GOARCH> ./cmd/whatsapp-mcp` | Formatting, vet, whitespace and all five builds passed: windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64. Cross-builds are not native runtime results. |
+
+The prelatched store and diagnostic startup refusals never start a session. In the other latch schedules a real guarded SDK handler enters a held fake read and observes cancellation before returning. The store and lock remain owned until handler return and the subsequent fake-owner join. Runtime, EOF-race and owner-drain failures exit 1; clean EOF and the orderly test control exit 0. The second-signal callback is checked separately with an injected exit function; it is not a native process exit. Both startup refusal and shutdown leave the run marker to the existing owner rules. The injected held read/latch proves command ordering, not SQLite cancellation; the store's real-lease regressions ran separately in the full suite. `serve` still ignores a device-only fault as a terminal command signal and retains its ingest-failure exit behavior.
+
+**Not verified in Phase 3:** the full native inherited-pipe matrix (T036-T038), sustained ingest under MCP pressure and matched WAL/`-shm` evidence (T035), and five-tool discovery and feature delivery gates. Neither optional Git implementation hook ran. No real-account use, commit or push.
+
 ### Phase 2 Acceptance CI (2026-11-19)
 
 [Push CI at `1548d2c7880647b4c629f4967caae02a0e7293cf`](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44598888828) passed with `CGO_ENABLED=0`. `go test -timeout 30m ./...` exited 0 on all three runners. The static and cross-build checks also passed. The opt-in heavy store job was skipped by design on push.
