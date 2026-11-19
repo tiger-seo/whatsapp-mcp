@@ -27,6 +27,20 @@ The `owner-judge` review at `7d4336b` returned `PASS` for the revised WAL fence 
 
 ## Runtime Gates
 
+### Phase 2 Acceptance Follow-up (2026-11-19)
+
+All runs used `CGO_ENABLED=0` and synthetic data. Real SQLite tests cover rollback with a paused failed WAL stat, a queued writer at handoff, device lookups through the writer pool before and after expiry, an independent reader, an aged device lease with two autocommit writes, and a discarded writer connection. The stat hook simulates the crossing in the small scheduling fixtures; the existing ingest and device tests exercise an actual 128 MiB crossing. Capacity is tested with a deterministic gate schedule. Prepared `RETURNING` rows retain writer ownership until close and preserve metadata; cancellation and optional driver interfaces are checked separately.
+
+| Environment and command | Direct result |
+| --- | --- |
+| Windows/amd64, `go test ./internal/store -run '^(TestWriter\|TestToolWAL)' -count=1 -v -timeout 90s` | Exit 0 (19.807 s); 11 parent tests and 4 subtests, no skips. |
+| Windows/amd64, `go test ./cmd/whatsapp-mcp ./internal/mcp -run 'TestStdioDiagnostic\|TestDiagnostics\|TestMCPStoreFailureShutdown' -count=1 -timeout 90s` | Both packages exit 0 (11.187 s, 5.952 s). Includes T043/T044, ordinary-only sink failure/drop, mandatory overflow retaining the unsafe marker, expiry while running, and bounded private-directory fallback. |
+| Windows/amd64, `go test ./... -count=1 -parallel 1 -timeout 30m` | First run failed in `TestGuardOfficialInMemory`: an in-memory response may reach the client before the writer retires the credit. Synchronized the test without changing the guard. The final full run exited 0, 10 packages (store 301.730 s, command 140.089 s, MCP 90.733 s). `go test ./internal/mcp -run '^TestGuardOfficialInMemory$' -count=100 -timeout 35s` also exited 0. |
+| WSL2, `go test -p 1 -buildvcs=false ./cmd/whatsapp-mcp -run '^TestMCPDiagnosticShutdownNative$' -count=1 -v -timeout 3m` | Exit 0 (33.329 s), all six named cases passed, zero skips. Each child exited 1 without signal termination; only the forced-second-signal case observed the forced callback. Smoke test, not native Linux evidence. |
+| Windows/amd64, `go vet ./...`, `gofmt -l .`, `git diff --check HEAD` | Exit 0; no formatting or whitespace diagnostics. |
+
+Native Linux and macOS store and diagnostic evidence remains pending. No commits, push, real-account activity, or Phase 3 changes were made in this follow-up.
+
 ### Phase 2 WAL Fence and Diagnostic Wiring (2026-11-19)
 
 Synthetic temporary stores and fake owners only. The writer connector measures and publishes the WAL fence before the next writer reaches SQLite. Tests exercise actual reader transaction retention across cancellation, ingest and adapter transactions, expiry with retained accounting, interface parity, and a fresh tool-only free-space sample. The diagnostic slice retains stdin-discard and the store-control observer; no MCP transport or tools were registered.
@@ -42,7 +56,7 @@ Synthetic temporary stores and fake owners only. The writer connector measures a
 | WSL2, `go test -p 1 -buildvcs=false ./cmd/whatsapp-mcp -run '^TestMCPDiagnosticShutdownNative$' -count=1 -v -timeout 3m` | Exit 0 (28.742 s), all six cases passed with no skips; each child exited 1 without signal termination. Only the forced-second-signal case observed the forced callback. Smoke evidence only, not native Linux. |
 | Windows host, `GOOS=darwin GOARCH=arm64 go vet ./cmd/whatsapp-mcp`; local `go vet ./...` | Both exit 0; neither establishes native runtime behavior. All runs used `CGO_ENABLED=0`. |
 
-**Still open:** Verify the remaining T004 transaction/lease and fault schedules and collect native store evidence. The focused CI step must produce passing named subprocess evidence, counts/skips and child outcomes on native Linux and macOS for the committed diagnostic slice. No such CI run has occurred. T015/T016 and T045/T046 remain open, and Phase 3 and T035 matched-frame, WAL-stat and `-shm` measurements are not started. No push or account activity occurred.
+**At the end of this slice:** The remaining T004 transaction/lease and fault schedules and native store evidence were open. The follow-up above records the additional local tests. The focused CI step still must produce passing named subprocess evidence, counts/skips and child outcomes on native Linux and macOS. Phase 3 and T035 matched-frame, WAL-stat and `-shm` measurements have not started.
 
 ### Guarded MCP Foundation (2026-11-19)
 

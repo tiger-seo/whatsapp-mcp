@@ -10,6 +10,8 @@
 
 ## Current State
 
+**2026-11-19 follow-up:** The local WAL and diagnostic coverage follow-up passes the full Windows suite. The new fence cases cover rollback/stat failure before handoff, expiry through the device writer pool, an existing device lease, reconnect, capacity, and prepared rows. Command diagnostics now also cover ordinary-only loss, mandatory overflow with an unsafe marker, and expiry during operation. [Results](verification.md#phase-2-acceptance-follow-up-2026-11-19) are local; native store and diagnostic CI evidence is still pending. No foundation task was closed on local or WSL2 evidence alone.
+
 **2026-11-19:** Phase 2 is incomplete. The WAL fence is committed as `f430dd0` and the diagnostic-only stdio wiring as `12d2713`. The full Windows store and command suites passed during this slice; focused tests passed after the latest changes. T043/T044 were rerun. See [verification.md](verification.md#phase-2-wal-fence-and-diagnostic-wiring-2026-11-19) for the red/green and smoke results. T004/T005 verification is still open; T045/T046 and T015/T016 still require native Linux/macOS diagnostic evidence. Phase 3 (T019-T026) has not started.
 
 The reconciled design passed `owner-judge` at `889ff65`; the verdict was recorded in `2a950af`. No production MCP tools are registered. Stdio still uses its stdin-discard path; T024 owns MCP integration and must revalidate the observer with actual MCP drainage.
