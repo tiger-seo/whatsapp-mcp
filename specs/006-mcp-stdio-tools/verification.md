@@ -4,7 +4,7 @@
 
 See [tasks.md](tasks.md#current-state) for the current implementation status and remaining work. The passing Windows store and focused shutdown runs are recorded under [Runtime Gates](#runtime-gates). Earlier failures and blockers are dated evidence, not current status. The [owner reviews](#owner-reviews) and the binding [isolation amendment](#owner-accepted-amendment-to-the-isolation-policy-2026-11-18) are preserved below.
 
-The T045/T046 sequencing revision is design-only. The `889ff65` design PASS is historical and does not cover this revision. An authorized design commit and current acceptable `owner-judge` verdict on that commit are pending; no runtime work may start on the revised sequence before that gate clears.
+The T045/T046 sequencing revision is design-only. `owner-judge` reviewed `42827be` and returned `CONCERNS`. The owner decision is pending; no runtime work may start before the design gate clears. The `889ff65` design PASS is historical and does not cover this revision.
 
 ## Planning Evidence
 
@@ -617,5 +617,8 @@ The design review of `87c3a11` returned CONCERNS. The owner accepted it without 
 | design | 2026-11-18 | 68ce167 | CONCERNS | Amend and review again: 5 s store timer, recovery TRUNCATE checkpoint, low-disk refusal accepted; all low findings fixed in the design |
 | design | 2026-11-18 | 87c3a11 | CONCERNS | Accepted without another review; M1 and the low findings fixed by the owner-accepted amendment in this file (binding for T004/T005) |
 | design | 2026-11-19 | 889ff65 | PASS | |
+| design | 2026-11-19 | 42827be | CONCERNS | |
+
+The review of `42827be` confirmed the revised dependency order is acyclic and the integrated obligations are unchanged. It found that the current native CI test output does not surface the named diagnostic cases, skips or child exit statuses required to close the foundation. It also noted that the design needs to preserve the configured ordinary log level after config loads without creating a second stderr pump. This was a read-only design review; no runtime or native test evidence was produced.
 
 Design reviews are recorded above. The required design review follows task generation; the required code review follows implementation and evidence. A planning conformance table is not either review.
