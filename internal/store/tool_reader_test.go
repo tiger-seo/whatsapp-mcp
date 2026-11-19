@@ -746,6 +746,35 @@ func TestToolFacadeRetainsLeaseUntilReadReturns(t *testing.T) {
 	}
 }
 
+func TestToolStoreDeadlineIsCancellationNotRelease(t *testing.T) {
+	st, _ := openTestWith(t, newDataDir(t), openOptions{hooks: testHooks{
+		free: func(string) (uint64, error) { return 2 * gib, nil },
+	}})
+	start := time.Now()
+	release, ctx, err := enterTestStoreTool(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if deadline, ok := ctx.Deadline(); !ok || deadline.Before(start.Add(5*time.Second)) || deadline.After(time.Now().Add(5*time.Second)) {
+		t.Fatalf("wrong store cancellation deadline: %v", deadline)
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(7 * time.Second):
+		t.Fatal("store cancellation did not fire")
+	}
+	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		t.Fatalf("store context: %v", ctx.Err())
+	}
+	if next, _, err := enterTestStoreTool(st); !errors.Is(err, ErrBusy) {
+		if err == nil {
+			next()
+		}
+		t.Fatalf("replacement admitted while expired lease was held: %v", err)
+	}
+}
+
 func TestToolFacadeRetainsLeaseDuringConnectionCleanup(t *testing.T) {
 	entered, unblock := make(chan struct{}), make(chan struct{})
 	st, _ := openTestWith(t, newDataDir(t), openOptions{hooks: testHooks{
@@ -1280,11 +1309,15 @@ func TestToolWALActualWritesCancelSnapshot(t *testing.T) {
 		if device {
 			name = "device"
 		}
-		t.Run(name, func(t *testing.T) { toolWALActualWritesCancelSnapshot(t, device) })
+		t.Run(name, func(t *testing.T) { toolWALActualWritesCancelSnapshot(t, device, false) })
 	}
 }
 
-func toolWALActualWritesCancelSnapshot(t *testing.T, device bool) {
+func TestMCPIngestPressureWALFence(t *testing.T) {
+	toolWALActualWritesCancelSnapshot(t, false, true)
+}
+
+func toolWALActualWritesCancelSnapshot(t *testing.T, device, mixed bool) {
 	t.Helper()
 	st, _ := openTestWith(t, newDataDir(t), openOptions{hooks: testHooks{
 		free: func(string) (uint64, error) { return 2 * gib, nil },
@@ -1313,11 +1346,59 @@ func toolWALActualWritesCancelSnapshot(t *testing.T, device bool) {
 	if err := tx.QueryRowContext(toolCtx, `SELECT count(*) FROM tool_actual_wal`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
+	var stopFlood func()
+	var floodCount int
+	if mixed {
+		stop := make(chan struct{})
+		done := make(chan error, 1)
+		ready := make(chan struct{})
+		go func() {
+			tick := time.NewTicker(2 * time.Millisecond)
+			defer tick.Stop()
+			for {
+				_, err := st.ToolReader().ListChats(ctx, "", ByLastActivity, false, Page{Limit: 1})
+				if !errors.Is(err, ErrBusy) {
+					done <- fmt.Errorf("competing tool admitted while snapshot held: %v", err)
+					return
+				}
+				floodCount++
+				if floodCount == 1 {
+					close(ready)
+				}
+				select {
+				case <-stop:
+					done <- nil
+					return
+				case <-tick.C:
+				}
+			}
+		}()
+		stopFlood = sync.OnceFunc(func() {
+			close(stop)
+			if err := <-done; err != nil {
+				t.Error(err)
+			}
+		})
+		defer stopFlood()
+		select {
+		case <-ready:
+		case <-time.After(2 * time.Second):
+			t.Fatal("competing tool read did not reach the held snapshot")
+		}
+	}
+	payload := ""
+	if mixed {
+		payload = strings.Repeat("x", maxTextBytes)
+	}
 	for i := 0; i < 20; i++ {
-		if toolCtx.Err() != nil {
+		if !mixed && toolCtx.Err() != nil {
 			t.Fatalf("tool cancelled before crossing threshold: %v", toolCtx.Err())
 		}
-		if device {
+		before, err := st.walSize()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if device || (mixed && i%2 == 1) {
 			err = st.wrapped.DoTxn(ctx, nil, func(ctx context.Context) error {
 				for range 2 {
 					if _, err := st.wrapped.Exec(ctx, `INSERT INTO tool_actual_wal VALUES (zeroblob(?))`, 4*mib); err != nil {
@@ -1326,6 +1407,17 @@ func toolWALActualWritesCancelSnapshot(t *testing.T, device bool) {
 				}
 				return nil
 			})
+		} else if mixed {
+			jid := phoneJID("491511111111")
+			batch := make([]Message, 64)
+			var charge int
+			for j := range batch {
+				batch[j] = msg(jid, fmt.Sprintf("held-%02d-%02d", i, j), jid, at(i+1), withText(payload))
+				charge += MessageFieldBytes(batch[j])
+			}
+			last := &batch[len(batch)-1]
+			last.Text = last.Text[:len(last.Text)-(charge-maxBatchBytes)]
+			err = st.StoreMessages(ctx, batch)
 		} else {
 			err = st.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
 				_, err := tx.ExecContext(ctx, `INSERT INTO tool_actual_wal VALUES (zeroblob(?))`, 8*mib)
@@ -1340,13 +1432,21 @@ func toolWALActualWritesCancelSnapshot(t *testing.T, device bool) {
 			t.Fatal(err)
 		}
 		if size <= 2*walLimitBytes {
-			if toolCtx.Err() != nil {
+			st.gate.mu.Lock()
+			draining := st.gate.walDraining
+			st.gate.mu.Unlock()
+			if draining || (!mixed && toolCtx.Err() != nil) {
 				t.Fatalf("tool cancelled at WAL size %d", size)
 			}
 			continue
 		}
-		if !errors.Is(toolCtx.Err(), context.Canceled) {
+		// On a slow runner the independent 5 s timer can cancel first. The
+		// fence still has to publish at the actual crossing and block the writer.
+		if !errors.Is(toolCtx.Err(), context.Canceled) && !(mixed && errors.Is(toolCtx.Err(), context.DeadlineExceeded)) {
 			t.Fatalf("WAL size %d did not cancel snapshot: %v", size, toolCtx.Err())
+		}
+		if before > 2*walLimitBytes {
+			t.Fatalf("crossing transaction started above threshold: %d", before)
 		}
 		if _, _, err := enterTestTool(st.gate); !errors.Is(err, ErrBusy) {
 			t.Fatalf("replacement while snapshot held: %v", err)
@@ -1368,16 +1468,42 @@ func toolWALActualWritesCancelSnapshot(t *testing.T, device bool) {
 		}
 		blocked := make(chan error, 1)
 		go func() {
-			_, err := st.wrapped.Exec(ctx, `INSERT INTO tool_actual_wal VALUES (zeroblob(4096))`)
+			var err error
+			if mixed {
+				jid := phoneJID("491511111111")
+				err = st.StoreMessage(ctx, msg(jid, "after-fence", jid, at(21)))
+			} else {
+				_, err = st.wrapped.Exec(ctx, `INSERT INTO tool_actual_wal VALUES (zeroblob(4096))`)
+			}
 			blocked <- err
 		}()
+		if mixed {
+			stopFlood()
+			eventually(t, "post-crossing ingest waiting at the writer", func() bool {
+				st.gate.mu.Lock()
+				pending := st.gate.writerPending
+				st.gate.mu.Unlock()
+				return pending > 0 && st.writer.Stats().InUse == 1
+			})
+			select {
+			case err := <-blocked:
+				t.Fatalf("post-crossing ingest returned before snapshot release: %v", err)
+			default:
+			}
+			shm, err := os.Stat(st.path + "-shm")
+			if err != nil {
+				t.Error(err)
+			} else {
+				t.Logf("crossing transaction %d (device=%v): WAL before=%d after=%d shm=%d; busy tool calls=%d", i+1, i%2 == 1, before, size, shm.Size(), floodCount)
+			}
+		}
 		_ = tx.Rollback()
 		if err := conn.Close(); err != nil {
 			t.Fatal(err)
 		}
 		release()
 		if err := <-blocked; err != nil {
-			t.Fatalf("device adapter write after actual return: %v", err)
+			t.Fatalf("write after actual return: %v", err)
 		}
 		if next, _, err := enterTestStoreTool(st); !errors.Is(err, ErrBusy) {
 			if err == nil {
@@ -1433,22 +1559,163 @@ func TestToolAdmissionRejectsChangedWriterGeneration(t *testing.T) {
 }
 
 func TestToolConcurrentIngestAndReadmission(t *testing.T) {
-	t.Run("light", func(t *testing.T) { toolConcurrentIngestAndReadmission(t, 120, 1, 128*kib) })
-	t.Run("maximum-batches", func(t *testing.T) { toolConcurrentIngestAndReadmission(t, 12, 64, maxTextBytes) })
+	t.Run("light", func(t *testing.T) { toolConcurrentIngestAndReadmission(t, 120, 1, 128*kib, true) })
+	t.Run("maximum-batches-baseline", func(t *testing.T) { toolConcurrentIngestAndReadmission(t, 12, 64, maxTextBytes, false) })
+	t.Run("maximum-batches", func(t *testing.T) { toolConcurrentIngestAndReadmission(t, 12, 64, maxTextBytes, true) })
 }
 
-func toolConcurrentIngestAndReadmission(t *testing.T, writes, batchSize, textBytes int) {
+func TestMCPIngestPressureWALMeasurements(t *testing.T) {
+	var growth [2]int64
+	for _, pinned := range []bool{false, true} {
+		name := "reset"
+		if pinned {
+			name = "pinned"
+		}
+		t.Run(name, func(t *testing.T) {
+			var checks atomic.Int64
+			st, _ := openTestWith(t, newDataDir(t), openOptions{hooks: testHooks{
+				free: func(string) (uint64, error) { return 2 * gib, nil },
+				writerWAL: func(size int64, err error) (int64, error) {
+					checks.Add(1)
+					return size, err
+				},
+			}})
+			ctx := context.Background()
+			if _, err := st.writer.ExecContext(ctx, `CREATE TABLE pressure_frames (v BLOB)`); err != nil {
+				t.Fatal(err)
+			}
+			var busy, logFrames, checkpointed int
+			if err := st.writer.QueryRowContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &logFrames, &checkpointed); err != nil || busy != 0 {
+				t.Fatalf("initial checkpoint: busy=%d err=%v", busy, err)
+			}
+			var tx *sql.Tx
+			var conn *sql.Conn
+			var release func()
+			if pinned {
+				var toolCtx context.Context
+				var err error
+				release, toolCtx, err = enterTestStoreTool(st)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer release()
+				conn, err = st.reader.Conn(toolCtx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer conn.Close()
+				tx, err = conn.BeginTx(ctx, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Rollback()
+				var n int
+				if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM pressure_frames`).Scan(&n); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := st.writer.ExecContext(ctx, `INSERT INTO pressure_frames VALUES (zeroblob(?))`, 4*mib); err != nil {
+				t.Fatal(err)
+			}
+			if !pinned {
+				if err := st.writer.QueryRowContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &logFrames, &checkpointed); err != nil || busy != 0 {
+					t.Fatalf("reset checkpoint: busy=%d err=%v", busy, err)
+				}
+			}
+			before, err := st.walSize()
+			if err != nil {
+				t.Fatal(err)
+			}
+			checks.Store(0)
+			start := time.Now()
+			var beforeCommit int64
+			err = st.wrapped.DoTxn(ctx, nil, func(ctx context.Context) error {
+				for range 2 {
+					if _, err := st.wrapped.Exec(ctx, `INSERT INTO pressure_frames VALUES (zeroblob(?))`, 4*mib); err != nil {
+						return err
+					}
+				}
+				var err error
+				beforeCommit, err = st.walSize()
+				return err
+			})
+			elapsed := time.Since(start)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := checks.Load(); got != 1 {
+				t.Fatalf("two statements in outer transaction: %d writer checks, want 1", got)
+			}
+			after, err := st.walSize()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pinned {
+				growth[1] = after - before
+			} else {
+				growth[0] = after - before
+			}
+			shm, err := os.Stat(st.path + "-shm")
+			if err != nil {
+				t.Fatal(err)
+			}
+			const samples = 1000
+			start = time.Now()
+			for range samples {
+				if _, err := st.walSize(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			statTime := time.Since(start)
+			const diskSamples = 100
+			start = time.Now()
+			for range diskSamples {
+				if _, err := freeBytes(st.dir); err != nil {
+					t.Fatal(err)
+				}
+			}
+			diskTime := time.Since(start)
+			t.Logf("%s: prefix=%d before_commit=%d wal_after=%d growth=%d shm=%d transaction=%s writer_checks=1 stat_samples=%d stat_total=%s stat_mean=%s disk_samples=%d disk_total=%s disk_mean=%s", name, before, beforeCommit, after, after-before, shm.Size(), elapsed, samples, statTime, statTime/samples, diskSamples, diskTime, diskTime/diskSamples)
+			checks.Store(0)
+			var n int
+			if err := st.wrapped.QueryRow(ctx, `SELECT count(*) FROM pressure_frames`).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			if got := checks.Load(); got != 1 {
+				t.Fatalf("standalone device writer-pool read: %d checks, want 1", got)
+			}
+			checks.Store(0)
+			if _, err := st.wrapped.Exec(ctx, `INSERT INTO pressure_frames VALUES (zeroblob(1))`); err != nil {
+				t.Fatal(err)
+			}
+			if got := checks.Load(); got != 1 {
+				t.Fatalf("standalone device writer-pool write: %d checks, want 1", got)
+			}
+		})
+	}
+	if growth[0] != growth[1]+32 {
+		t.Fatalf("matched transaction frames differ beyond reset WAL header: reset=%d pinned=%d", growth[0], growth[1])
+	}
+}
+
+func toolConcurrentIngestAndReadmission(t *testing.T, writes, batchSize, textBytes int, flood bool) {
 	t.Helper()
+	var checks atomic.Int64
 	st, _ := openTestWith(t, newDataDir(t), openOptions{hooks: testHooks{
 		free: func(string) (uint64, error) { return 2 * gib, nil },
+		writerWAL: func(size int64, err error) (int64, error) {
+			checks.Add(1)
+			return size, err
+		},
 	}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	jid := phoneJID("491511111111")
 	mustStore(t, st, msg(jid, "initial", jid, at(0)))
 	type writerResult struct {
-		peak, maxBatch int64
-		err            error
+		peak, maxBatch          int64
+		elapsed, total, slowest time.Duration
+		err                     error
 	}
 	done := make(chan writerResult, 1)
 	finished := false
@@ -1462,7 +1729,9 @@ func toolConcurrentIngestAndReadmission(t *testing.T, writes, batchSize, textByt
 	go func() {
 		<-start
 		var peak, maxBatch int64
+		var total, slowest time.Duration
 		payload := strings.Repeat("x", textBytes)
+		start := time.Now()
 		for i := 0; i < writes; i++ {
 			before, err := st.walSize()
 			if err != nil {
@@ -1480,10 +1749,14 @@ func toolConcurrentIngestAndReadmission(t *testing.T, writes, batchSize, textByt
 				last := &batch[len(batch)-1]
 				last.Text = last.Text[:len(last.Text)-(bytes-maxBatchBytes)]
 			}
+			writeStart := time.Now()
 			if err := st.StoreMessages(ctx, batch); err != nil {
 				done <- writerResult{peak: peak, maxBatch: maxBatch, err: err}
 				return
 			}
+			elapsed := time.Since(writeStart)
+			total += elapsed
+			slowest = max(slowest, elapsed)
 			size, err := st.walSize()
 			if err != nil {
 				done <- writerResult{peak: peak, maxBatch: maxBatch, err: err}
@@ -1496,9 +1769,25 @@ func toolConcurrentIngestAndReadmission(t *testing.T, writes, batchSize, textByt
 				maxBatch = size - before
 			}
 		}
-		done <- writerResult{peak: peak, maxBatch: maxBatch}
+		done <- writerResult{peak: peak, maxBatch: maxBatch, elapsed: time.Since(start), total: total, slowest: slowest}
 	}()
+	checks.Store(0)
 	close(start)
+	logResult := func(r writerResult) {
+		t.Logf("flood=%v: %d messages in %s (%.0f messages/s); mean write=%s slowest=%s writer checks=%d", flood, writes*batchSize, r.elapsed, float64(writes*batchSize)/r.elapsed.Seconds(), r.total/time.Duration(writes), r.slowest, checks.Load())
+	}
+	if !flood {
+		r := <-done
+		finished = true
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		if got := checks.Load(); got != int64(writes) {
+			t.Fatalf("ordinary writer checks=%d, want %d", got, writes)
+		}
+		logResult(r)
+		return
+	}
 	var success, busy, canceled int
 	for {
 		select {
@@ -1510,9 +1799,8 @@ func toolConcurrentIngestAndReadmission(t *testing.T, writes, batchSize, textByt
 			if success == 0 {
 				t.Fatal("no tool read was admitted during ingest")
 			}
-			if result.peak > 2*walLimitBytes+result.maxBatch {
-				t.Fatalf("WAL peak %d exceeds threshold plus one batch", result.peak)
-			}
+			// Sampled batch growth is descriptive, not the writer-fence bound.
+			logResult(result)
 			t.Logf("%d ingest writes of %d messages; reads success=%d busy=%d canceled=%d; sampled post-write WAL peak=%d bytes, max observed batch growth=%d bytes", writes, batchSize, success, busy, canceled, result.peak, result.maxBatch)
 			// An earlier checkpoint attempt may still occupy the tool slot or
 			// have started the cooldown. Recovery is retried by tool calls.
