@@ -4,7 +4,7 @@
 
 See [tasks.md](tasks.md#current-state) for the current implementation status and remaining work. The passing Windows store and focused shutdown runs are recorded under [Runtime Gates](#runtime-gates). Earlier failures and blockers are dated evidence, not current status. The [owner reviews](#owner-reviews) and the binding [isolation amendment](#owner-accepted-amendment-to-the-isolation-policy-2026-11-18) are preserved below.
 
-The T045/T046 sequencing revision is design-only. `owner-judge` reviewed `42827be` and returned `CONCERNS`. The design amendment addresses both findings without accepting the earlier verdict, and incorporates the follow-up draft pre-review findings. A current design verdict on the committed amendment is still required; no runtime or CI workflow changes may start before the design gate clears. The `889ff65` design PASS is historical and does not cover this revision.
+The T045/T046 sequencing revision is design-only. `owner-judge` confirmed at `8594218` that the amendment addresses the diagnostic concerns from `42827be` and the draft pre-review, but returned `BLOCK` on the one-batch WAL ceiling. No runtime or CI workflow changes may start before a revised design resolves the blocker and a new review clears the gate. The `889ff65` design PASS is historical and does not cover this revision.
 
 ## Planning Evidence
 
@@ -618,11 +618,14 @@ The design review of `87c3a11` returned CONCERNS. The owner accepted it without 
 | design | 2026-11-18 | 87c3a11 | CONCERNS | Accepted without another review; M1 and the low findings fixed by the owner-accepted amendment in this file (binding for T004/T005) |
 | design | 2026-11-19 | 889ff65 | PASS | |
 | design | 2026-11-19 | 42827be | CONCERNS | |
+| design | 2026-11-19 | 8594218 | BLOCK | |
 
 The review of `42827be` confirmed the revised dependency order is acyclic and the integrated obligations are unchanged. It found that the current native CI test output does not surface the named diagnostic cases, skips or child exit statuses required to close the foundation. It also noted that the design needs to preserve the configured ordinary log level after config loads without creating a second stderr pump. This was a read-only design review; no runtime or native test evidence was produced.
 
 The [design amendment](tasks.md#diagnostic-command-tests-and-native-evidence-t045t046) assigns the focused native CI step to T046 and the shared ordinary threshold to T016/T046. T045 also covers healthy stderr at finalization and retains the failed-delivery exit precedence. These are planned changes, not test results or a new verdict.
 
 A read-only pre-review of the draft atop `5b14118` also flagged loss of actionable refusal text, an ambiguous forced exit 1, and existing command tests dependent on ordinary stderr. The amendment now requires bounded actionable refusal records, test-only observation of the forced callback and timely acknowledgment after cleanup, and migration of existing assertions to observable owner readiness and cleanup without losing offline, empty-stdout or refusal checks. This pre-review was not a gate verdict; no runtime evidence was produced.
+
+The independent design review of `8594218` used GPT-6.2 Sol with High reasoning and the repository `owner-judge` rubric. It confirmed that the diagnostic amendments preserve the acyclic task order and the native and integrated evidence gates. Its high-severity finding is in `contracts/store-and-lifecycle.md` section 5 and T035: the WAL guard in `internal/store/ops.go` checks size after commit and `internal/store/tool_reader.go` requests cancellation, but another batch can commit before the tool snapshot actually returns. A held snapshot can therefore pin a WAL larger than the promised 128 MiB plus one batch. Existing tests do not establish the bound for that schedule. Under FR-017 and Principle V, a revised mechanism must account for writes until actual snapshot return without weakening ingest or releasing a lease early. This is a source-derived counterexample, not an observed runtime failure. The review ran no runtime tests and produced no platform evidence.
 
 Design reviews are recorded above. The required design review follows task generation; the required code review follows implementation and evidence. A planning conformance table is not either review.
