@@ -456,7 +456,7 @@ func (s *Store) DirectChat(ctx context.Context, contact string) (ChatView, error
 	return out, err
 }
 
-// ContactChats lists the chats of a contact: its direct chats and every group it wrote in, under either identity.
+// ContactChats lists the contact's direct chats and any chat they wrote in under either identity.
 // The page's JIDs are selected first, so the walk of chats_last_activity is covering.
 func (s *Store) ContactChats(ctx context.Context, contact string, p Page) ([]ChatView, error) {
 	if err := validatePage(p); err != nil {
@@ -475,9 +475,8 @@ func (s *Store) ContactChats(ctx context.Context, contact string, p Page) ([]Cha
 			`SELECT jid, last_message_time, last_message_time IS NULL AS k0 FROM chats ` +
 			`ORDER BY last_message_time IS NULL, last_message_time DESC, jid LIMIT 100200) AS walk ` +
 			`WHERE (jid = ?1 AND ?1 <> '') OR (jid = ?2 AND ?2 <> '') OR ` +
-			`(jid LIKE '%@g.us' AND ((?3 <> '' AND EXISTS ` +
-			`(SELECT 1 FROM messages WHERE chat_jid = walk.jid AND sender_phone = ?3)) OR ` +
-			`(?4 <> '' AND EXISTS (SELECT 1 FROM messages WHERE chat_jid = walk.jid AND sender_jid = ?4)))) ` +
+			`(?3 <> '' AND EXISTS (SELECT 1 FROM messages WHERE chat_jid = walk.jid AND sender_phone = ?3)) OR ` +
+			`(?4 <> '' AND EXISTS (SELECT 1 FROM messages WHERE chat_jid = walk.jid AND sender_jid = ?4)) ` +
 			`ORDER BY k0, last_message_time DESC, jid LIMIT ?5 OFFSET ?6)`
 		var count, total int
 		var data string

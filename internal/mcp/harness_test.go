@@ -13,6 +13,7 @@ import (
 	"github.com/tiger-seo/whatsapp-mcp/internal/private"
 	"github.com/tiger-seo/whatsapp-mcp/internal/store"
 	"go.mau.fi/whatsmeow/proto/waAdv"
+	wastore "go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 )
 
@@ -52,7 +53,7 @@ func (r *countedReader) ContactChats(ctx context.Context, contact string, p stor
 	return r.store.ContactChats(ctx, contact, p)
 }
 
-func newFixture(t *testing.T) *countedReader {
+func newFixture(t *testing.T, extra ...func(*store.Store, *wastore.Device)) *countedReader {
 	t.Helper()
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "data")
@@ -108,6 +109,9 @@ func newFixture(t *testing.T) *countedReader {
 	}
 	if err := st.StoreMessages(ctx, msgs); err != nil {
 		t.Fatal(err)
+	}
+	for _, seed := range extra {
+		seed(st, dev)
 	}
 	return &countedReader{store: st.ToolReader()}
 }

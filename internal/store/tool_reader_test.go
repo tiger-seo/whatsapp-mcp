@@ -193,7 +193,7 @@ func TestToolContactCeilingsZeroFolds(t *testing.T) {
 			case "entries":
 				query = `DELETE FROM whatsmeow_contacts WHERE their_jid = '000000100001@s.whatsapp.net'`
 			case "chosen-bytes":
-				query = `UPDATE whatsmeow_contacts SET full_name = '' WHERE their_jid = '000000004097@s.whatsapp.net'`
+				query = `DELETE FROM whatsmeow_contacts WHERE their_jid = '000000004097@s.whatsapp.net'`
 			case "all-name-bytes":
 				query = `UPDATE whatsmeow_contacts SET first_name = '' WHERE their_jid = '000000004097@s.whatsapp.net'`
 			case "field-bytes":
@@ -207,6 +207,23 @@ func TestToolContactCeilingsZeroFolds(t *testing.T) {
 			}
 			if _, err := st.SearchContacts(context.Background(), "x", Page{Limit: 1}); err != nil || testContactFoldCalls.Load() == 0 {
 				t.Fatalf("at %s ceiling: err=%v, fold calls=%d", tc.name, err, testContactFoldCalls.Load())
+			}
+			if tc.name == "chosen-bytes" {
+				const fallback = "000000004097@s.whatsapp.net"
+				if _, err := st.writer.Exec(`INSERT INTO whatsmeow_contacts (our_jid, their_jid) VALUES (?, ?)`, dev.ID.String(), fallback); err != nil {
+					t.Fatal(err)
+				}
+				for _, excess := range []int{1, 0} {
+					if _, err := st.writer.Exec(`UPDATE whatsmeow_contacts SET full_name = ? WHERE their_jid = '000000000001@s.whatsapp.net'`, strings.Repeat("x", 1024-len(fallback)+excess)); err != nil {
+						t.Fatal(err)
+					}
+					testContactFoldCalls.Store(0)
+					_, err := st.SearchContacts(t.Context(), "x", Page{Limit: 1})
+					folded := testContactFoldCalls.Load()
+					if excess == 1 && (!errors.Is(err, ErrResourceLimit) || folded != 0) || excess == 0 && (err != nil || folded == 0) {
+						t.Fatalf("chosen bytes with identity fallback, excess %d: err=%v, fold calls=%d", excess, err, folded)
+					}
+				}
 			}
 		})
 	}
@@ -348,7 +365,7 @@ func TestToolContactAggregateLegacyValues(t *testing.T) {
 		{"control", "a\x00\x01b", "a\x00\x01b"},
 		{"integer", int64(1234), "1234"},
 		{"real", 1.5, "1.5"},
-		{"null", nil, ""},
+		{"null", nil, jid.String()},
 		{"blob", []byte("legacy"), "legacy"},
 		{"invalid-utf8-blob", []byte{'a', 0xff, 'b'}, string([]byte{'a', 0xff, 'b'})},
 	} {

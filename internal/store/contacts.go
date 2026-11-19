@@ -27,46 +27,40 @@ func (s *Store) SearchContacts(ctx context.Context, query string, p Page) ([]Con
 		return nil, s.report(newOpID(), err)
 	}
 	text := fold(query)
-	// A name never matches through an empty digit string: the phone is searched only for a whole phone number.
-	digits, err := NormalizePhone(query)
-	if err != nil {
-		digits = ""
-	}
 
-	// The map is joined on its own key, so each LID entry is one index search. The ?1 and ?2 values are the folded
-	// text and the digits.
+	// The map is joined on its own key, so each LID entry is one index search. The same literal query searches
+	// names and stored phone digits; only identity lookups normalize phone formatting.
 	const contactSource = `
 		FROM whatsmeow_contacts c
 		LEFT JOIN whatsmeow_lid_map m
-		  ON m.lid = CASE WHEN octet_length(c.their_jid) <= 256 AND c.their_jid LIKE '%@lid'
+		  ON m.lid = CASE WHEN octet_length(c.their_jid) <= 256 AND c.their_jid GLOB '*@lid'
 		                  THEN substr(c.their_jid, 1, length(c.their_jid) - 4) END
-		WHERE c.our_jid = ` + currentDevice + ` AND c.their_jid NOT LIKE '%@g.us'`
+		WHERE c.our_jid = ` + currentDevice + ` AND (c.their_jid GLOB '*@lid' OR c.their_jid GLOB '*@s.whatsapp.net')`
+	const phone = `CASE WHEN c.their_jid GLOB '*@lid' THEN coalesce(m.pn, '')
+	                    ELSE substr(c.their_jid, 1, instr(c.their_jid, '@') - 1) END`
 	const entries = `
 		SELECT
-		  CASE WHEN c.their_jid LIKE '%@lid' THEN coalesce(m.pn || '@s.whatsapp.net', c.their_jid) ELSE c.their_jid END AS person,
-		  c.their_jid LIKE '%@lid' AS is_lid,
-		  CASE WHEN c.their_jid LIKE '%@lid' THEN coalesce(m.pn, '')
-		       WHEN c.their_jid LIKE '%@s.whatsapp.net' THEN substr(c.their_jid, 1, instr(c.their_jid, '@') - 1)
-		       ELSE '' END AS phone,
+		  CASE WHEN c.their_jid GLOB '*@lid' THEN coalesce(m.pn || '@s.whatsapp.net', c.their_jid) ELSE c.their_jid END AS person,
+		  c.their_jid GLOB '*@lid' AS is_lid,
+		  ` + phone + ` AS phone,
 		  ` + entryName + ` AS name,
 		  (instr(mcp_fold(coalesce(c.full_name, '')), ?1) > 0 OR instr(mcp_fold(coalesce(c.first_name, '')), ?1) > 0 OR
 		   instr(mcp_fold(coalesce(c.push_name, '')), ?1) > 0 OR instr(mcp_fold(coalesce(c.business_name, '')), ?1) > 0 OR
-		   (?2 <> '' AND instr(CASE WHEN c.their_jid LIKE '%@lid' THEN coalesce(m.pn, '')
-		       WHEN c.their_jid LIKE '%@s.whatsapp.net' THEN substr(c.their_jid, 1, instr(c.their_jid, '@') - 1)
-		       ELSE '' END, ?2) > 0)) AS hit` + contactSource
+		   instr(` + phone + `, ?1) > 0) AS hit` + contactSource
 
 	const people = `
 		SELECT person, max(phone) AS phone,
-		  coalesce(nullif(max(CASE WHEN is_lid = 0 THEN name END), ''), max(CASE WHEN is_lid = 1 THEN name END), '') AS name
+		  coalesce(nullif(max(CASE WHEN is_lid = 0 THEN name END), ''), nullif(max(CASE WHEN is_lid = 1 THEN name END), ''), person) AS name
 		FROM (` + entries + `)
 		GROUP BY person
 		HAVING ?1 = '' OR max(hit)`
 
+	// Charge the identity fallback for nameless entries before grouping can use it as a display/sort key.
 	const bounded = `WITH pre AS (
-		SELECT count(*) AS n, coalesce(sum(nb), 0) AS bytes, coalesce(max(fb), 0) AS longest,
+		SELECT count(*) AS n, coalesce(sum(coalesce(nb, jb)), 0) AS bytes, coalesce(max(fb), 0) AS longest,
 		       coalesce(sum(ab), 0) AS allb, coalesce(max(jb), 0) AS longest_jid FROM (
 		  SELECT coalesce(nullif(octet_length(c.full_name), 0), nullif(octet_length(c.first_name), 0),
-		                  nullif(octet_length(c.push_name), 0), nullif(octet_length(c.business_name), 0), 0) AS nb,
+		                  nullif(octet_length(c.push_name), 0), nullif(octet_length(c.business_name), 0)) AS nb,
 		         coalesce(octet_length(c.full_name), 0) + coalesce(octet_length(c.first_name), 0) +
 		         coalesce(octet_length(c.push_name), 0) + coalesce(octet_length(c.business_name), 0) AS ab,
 		         max(coalesce(octet_length(c.full_name), 0), coalesce(octet_length(c.first_name), 0),
@@ -76,13 +70,13 @@ func (s *Store) SearchContacts(ctx context.Context, query string, p Page) ([]Con
 		SELECT n, bytes, longest, allb,
 		  CASE WHEN n <= 100000 AND bytes <= 4194304 AND longest <= 1024 AND allb <= 16777216 AND longest_jid <= 256 THEN
 		    (SELECT json_group_array(json_array(person, phone, hex(CAST(name AS BLOB))) ORDER BY mcp_fold(name), person)
-		     FROM (SELECT person, phone, name FROM (` + people + `) ORDER BY mcp_fold(name), person LIMIT ?3 OFFSET ?4))
+		     FROM (SELECT person, phone, name FROM (` + people + `) ORDER BY mcp_fold(name), person LIMIT ?2 OFFSET ?3))
 		  END FROM pre`
 	var out []Contact
-	err = s.snapshot(ctx, "SearchContacts", func(ctx context.Context, q querier) error {
+	err := s.snapshot(ctx, "SearchContacts", func(ctx context.Context, q querier) error {
 		var count, chosenBytes, longest, allBytes int64
 		var data sql.NullString
-		if err := q.QueryRowContext(ctx, bounded, text, digits, p.Limit, p.Offset).
+		if err := q.QueryRowContext(ctx, bounded, text, p.Limit, p.Offset).
 			Scan(&count, &chosenBytes, &longest, &allBytes, &data); err != nil {
 			return err
 		}
@@ -139,17 +133,20 @@ func (s *Store) ContactNames(ctx context.Context, jid string) (saved, real strin
 	}
 	err = s.snapshot(ctx, "ContactNames", func(ctx context.Context, q querier) error {
 		var sv, rl sql.NullString
-		err := q.QueryRowContext(ctx, `
-			SELECT coalesce(nullif(full_name, ''), nullif(first_name, ''), ''),
-			       coalesce(nullif(push_name, ''), nullif(business_name, ''), '')
-			FROM whatsmeow_contacts WHERE our_jid = `+currentDevice+` AND their_jid = ?`, j.String()).Scan(&sv, &rl)
+		const fields = `WITH names AS (
+			SELECT coalesce(nullif(full_name, ''), nullif(first_name, ''), '') AS saved,
+			       coalesce(nullif(push_name, ''), nullif(business_name, ''), '') AS real
+			FROM whatsmeow_contacts WHERE our_jid = ` + currentDevice + ` AND their_jid = ?1)
+			SELECT CASE WHEN octet_length(saved) <= ?2 THEN saved END,
+			       CASE WHEN octet_length(real) <= ?2 THEN real END FROM names`
+		err := q.QueryRowContext(ctx, fields, j.String(), maxNameBytes).Scan(&sv, &rl)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		if len(sv.String) > maxNameBytes || len(rl.String) > maxNameBytes {
+		if !sv.Valid || !rl.Valid {
 			return limitErr("name bytes")
 		}
 		saved, real = sv.String, rl.String

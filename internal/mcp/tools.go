@@ -16,7 +16,7 @@ import (
 	"go.mau.fi/whatsmeow/types"
 )
 
-func chatHandler(name string, reader ChatContactReader) sdk.ToolHandler {
+func readHandler(name string, reader ChatContactReader) sdk.ToolHandler {
 	return func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		raw := req.Params.Arguments
 		if len(raw) == 0 {
@@ -26,26 +26,47 @@ func chatHandler(name string, reader ChatContactReader) sdk.ToolHandler {
 		if invalid != nil {
 			return argumentErrorResult(invalid), nil
 		}
-		if name == "get_chat" {
+		page := store.Page{Limit: a.Limit, Offset: a.Offset}
+		switch name {
+		case "get_chat":
 			row, err := reader.GetChat(ctx, a.ChatJID, a.IncludeLastMessage)
 			if err != nil {
 				return chatReadError(err, "chat_jid"), nil
 			}
 			return encodeResult(ChatResult{Source: "local_store", UntrustedData: true, Chat: chatDTO(row, a.IncludeLastMessage)}), nil
+		case "get_direct_chat_by_contact":
+			row, err := reader.DirectChat(ctx, a.Contact)
+			if err != nil {
+				return chatReadError(err, "sender_phone_number"), nil
+			}
+			return encodeResult(ChatResult{Source: "local_store", UntrustedData: true, Chat: chatDTO(row, true)}), nil
+		case "get_contact_chats":
+			rows, err := reader.ContactChats(ctx, a.Contact, page)
+			if err != nil {
+				return chatReadError(err, "jid"), nil
+			}
+			return encodeResult(chatPageDTO(rows, a, true)), nil
+		case "search_contacts":
+			rows, err := reader.SearchContacts(ctx, a.Query, page)
+			if err != nil {
+				return chatReadError(err, "query"), nil
+			}
+			contacts := make([]Contact, len(rows))
+			for i, row := range rows {
+				contacts[i] = contactDTO(row)
+			}
+			return encodeResult(ContactPage{Source: "local_store", UntrustedData: true, Contacts: contacts, Count: len(contacts), Limit: a.Limit, Page: a.Page}), nil
+		default: // list_chats; unsupported names fail validation above.
+			order := store.ByLastActivity
+			if a.SortBy == "name" {
+				order = store.ByName
+			}
+			rows, err := reader.ListChats(ctx, a.Query, order, a.IncludeLastMessage, page)
+			if err != nil {
+				return chatReadError(err, "arguments"), nil
+			}
+			return encodeResult(chatPageDTO(rows, a, a.IncludeLastMessage)), nil
 		}
-		order := store.ByLastActivity
-		if a.SortBy == "name" {
-			order = store.ByName
-		}
-		rows, err := reader.ListChats(ctx, a.Query, order, a.IncludeLastMessage, store.Page{Limit: a.Limit, Offset: a.Offset})
-		if err != nil {
-			return chatReadError(err, "arguments"), nil
-		}
-		chats := make([]Chat, len(rows))
-		for i, row := range rows {
-			chats[i] = chatDTO(row, a.IncludeLastMessage)
-		}
-		return encodeResult(ChatPage{Source: "local_store", UntrustedData: true, Chats: chats, Count: len(chats), Limit: a.Limit, Page: a.Page}), nil
 	}
 }
 
@@ -354,6 +375,9 @@ func toolSchemas(tool string) (map[string]any, map[string]any) {
 	nullableText := map[string]any{"type": []string{"string", "null"}}
 	message := object(map[string]any{"id": text, "chat_jid": text, "chat_name": text, "sender": text, "sender_name": text, "timestamp": text, "is_from_me": map[string]any{"type": "boolean"}, "content": text, "caption": text, "media_type": map[string]any{"type": "string", "enum": []string{"", "image", "video", "audio", "document"}}}, []string{"id", "chat_jid", "chat_name", "sender", "sender_name", "timestamp", "is_from_me", "content", "caption", "media_type"})
 	chat := object(map[string]any{"jid": text, "name": text, "is_group": map[string]any{"type": "boolean"}, "last_message_time": nullableText, "latest_message": map[string]any{"anyOf": []any{message, map[string]any{"type": "null"}}}}, []string{"jid", "name", "is_group", "last_message_time"})
+	if tool == "get_direct_chat_by_contact" || tool == "get_contact_chats" {
+		chat["required"] = append(chat["required"].([]string), "latest_message")
+	}
 	contact := object(map[string]any{"jid": text, "phone_number": nullableText, "name": text}, []string{"jid", "phone_number", "name"})
 	successProps := map[string]any{"source": map[string]any{"const": "local_store", "type": "string"}, "untrusted_data": map[string]any{"const": true, "type": "boolean"}}
 	successRequired := []string{"source", "untrusted_data"}

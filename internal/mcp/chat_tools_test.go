@@ -26,7 +26,7 @@ func chatTestServer(t *testing.T, r ChatContactReader) chatTestClient {
 	d := NewDiagnostics(io.Discard, slog.LevelError)
 	t.Cleanup(func() { d.Finish() })
 	server := NewServer(NewSDKErrorLatch(), d)
-	server.RegisterChatTools(r)
+	server.RegisterReadTools(r)
 	ctx := context.Background()
 	st, ct := sdk.NewInMemoryTransports()
 	ss, err := server.Connect(ctx, st)
@@ -57,6 +57,16 @@ func chatJSON(t *testing.T, v any) any {
 
 func chatCall(t *testing.T, c chatTestClient, tool string, args any, bad bool) map[string]any {
 	t.Helper()
+	waitToolCredit(t, c)
+	r, err := c.CallTool(context.Background(), &sdk.CallToolParams{Name: tool, Arguments: args})
+	if err != nil {
+		t.Fatalf("%s: %v", tool, err)
+	}
+	return checkToolResult(t, tool, r, bad)
+}
+
+func waitToolCredit(t *testing.T, c chatTestClient) {
+	t.Helper()
 	// The in-memory peer can receive the previous reply before Write returns.
 	deadline := time.Now().Add(time.Second)
 	for {
@@ -71,10 +81,10 @@ func chatCall(t *testing.T, c chatTestClient, tool string, args any, bad bool) m
 		}
 		time.Sleep(time.Millisecond)
 	}
-	r, err := c.CallTool(context.Background(), &sdk.CallToolParams{Name: tool, Arguments: args})
-	if err != nil {
-		t.Fatalf("%s: %v", tool, err)
-	}
+}
+
+func checkToolResult(t *testing.T, tool string, r *sdk.CallToolResult, bad bool) map[string]any {
+	t.Helper()
 	if r.IsError != bad {
 		t.Fatalf("%s error = %v, want %v: %+v", tool, r.IsError, bad, r)
 	}

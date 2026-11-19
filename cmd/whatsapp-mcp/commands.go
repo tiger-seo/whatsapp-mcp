@@ -521,7 +521,7 @@ func runStdio(cmd *command, args []string, s *streams) int {
 			return oh, true
 		}
 		server := mcp.NewServer(mcp.NewSDKErrorLatch(), s.diagnostics)
-		server.RegisterChatTools(stdioToolReader(st))
+		server.RegisterReadTools(stdioToolReader(st))
 		session, err := server.ConnectStdio(ctx, s.stdin, s.stdout)
 		if err != nil {
 			if ctx.Err() != nil {

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tiger-seo/whatsapp-mcp/internal/buildinfo"
 	"github.com/tiger-seo/whatsapp-mcp/internal/lock"
 	"github.com/tiger-seo/whatsapp-mcp/internal/mcp"
 	"github.com/tiger-seo/whatsapp-mcp/internal/store"
@@ -337,13 +338,67 @@ func (p *stdioPeer) reply(t *testing.T, id int) json.RawMessage {
 	return r.Result
 }
 
-func (p *stdioPeer) initialize(t *testing.T) {
+func (p *stdioPeer) initialize(t *testing.T) json.RawMessage {
 	t.Helper()
 	p.send(t, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`)
-	if result := p.reply(t, 1); !bytes.Contains(result, []byte(`"whatsapp-mcp"`)) {
+	result := p.reply(t, 1)
+	if !bytes.Contains(result, []byte(`"whatsapp-mcp"`)) {
 		t.Fatalf("missing server identity: %s", result)
 	}
 	p.send(t, `{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+	return result
+}
+
+func checkStdioDiscovery(t *testing.T, p *stdioPeer, init json.RawMessage) {
+	t.Helper()
+	var hello struct {
+		Capabilities map[string]json.RawMessage
+		ServerInfo   struct{ Name, Version string }
+	}
+	if err := json.Unmarshal(init, &hello); err != nil || hello.ServerInfo.Name != "whatsapp-mcp" || hello.ServerInfo.Version != buildinfo.Get().Version ||
+		len(hello.Capabilities) != 1 || string(hello.Capabilities["tools"]) != `{}` && string(hello.Capabilities["tools"]) != `{"listChanged":false}` {
+		t.Fatalf("unexpected initialization: %s (%v)", init, err)
+	}
+	p.send(t, `{"jsonrpc":"2.0","id":10,"method":"tools/list","params":{}}`)
+	var list struct {
+		Tools []struct {
+			Name                      string
+			InputSchema, OutputSchema map[string]any
+		}
+	}
+	if err := json.Unmarshal(p.reply(t, 10), &list); err != nil || len(list.Tools) != 5 {
+		t.Fatalf("expected five discovered tools: %+v (%v)", list, err)
+	}
+	want := map[string]bool{"get_chat": true, "list_chats": true, "search_contacts": true, "get_direct_chat_by_contact": true, "get_contact_chats": true}
+	for _, tool := range list.Tools {
+		if !want[tool.Name] || tool.InputSchema["type"] != "object" || tool.InputSchema["additionalProperties"] != false || tool.OutputSchema["type"] != "object" {
+			t.Fatalf("unexpected tool: %+v", tool)
+		}
+		delete(want, tool.Name)
+	}
+	for _, tc := range []struct{ request, message string }{
+		{`"method":"tools/call","params":{"name":"get_login_status","arguments":{"approval":"synthetic-secret"}}`, "request failed"},
+		{`"method":"tools/call","params":{"name":"get_pairing_qr","arguments":{"approval":"synthetic-secret"}}`, "request failed"},
+		{`"method":"subscriptions/listen","params":{"notifications":{"toolsListChanged":true}}`, "method not found"},
+	} {
+		p.send(t, `{"jsonrpc":"2.0","id":11,`+tc.request+`}`)
+		var denied struct {
+			JSONRPC string
+			ID      int
+			Error   struct {
+				Code    int
+				Message string
+			}
+			Result json.RawMessage
+		}
+		line := awaitStdio(t, p.frames, "protocol refusal")
+		if err := json.Unmarshal(line, &denied); err != nil || denied.JSONRPC != "2.0" || denied.ID != 11 || denied.Error.Code == 0 ||
+			denied.Error.Message != tc.message || len(denied.Result) != 0 || bytes.Contains(line, []byte("synthetic-secret")) {
+			t.Fatalf("expected sanitized refusal: %s (%v)", line, err)
+		}
+		p.send(t, `{"jsonrpc":"2.0","id":12,"method":"ping","params":{}}`)
+		p.reply(t, 12)
+	}
 }
 
 func TestMCPStdioOfflineRead(t *testing.T) {
@@ -373,11 +428,17 @@ func TestMCPStdioOfflineRead(t *testing.T) {
 				done <- run([]string{"stdio", "--data-dir", dir, "--log-level", level}, p.stdin, p.stdout, io.Discard, nil)
 			}()
 			defer func() { p.close(); awaitStdio(t, done, "command cleanup") }()
-			p.initialize(t)
+			checkStdioDiscovery(t, p, p.initialize(t))
 			p.send(t, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_chat","arguments":{"chat_jid":"`+jid+`"}}}`)
 			result := p.reply(t, 2)
 			if !bytes.Contains(result, []byte(`"untrusted_data":true`)) || !bytes.Contains(result, []byte(preview)) {
 				t.Fatalf("missing untrusted stored preview: %s", result)
+			}
+			p.send(t, `{"jsonrpc":"2.0","id":3,"method":"ping","params":{}}`)
+			p.reply(t, 3)
+			p.send(t, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_direct_chat_by_contact","arguments":{"sender_phone_number":"+1 (555) 000-0001"}}}`)
+			if contactResult := p.reply(t, 4); !bytes.Equal(result, contactResult) {
+				t.Fatalf("direct contact result differs from the exact chat read: %s", contactResult)
 			}
 			if !owner.started.Load() || owner.Snapshot().Connected || owner.requestN.Load() != 0 {
 				t.Fatal("read depended on connectivity or requested pairing")

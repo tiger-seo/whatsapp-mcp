@@ -476,7 +476,7 @@ func TestResultOutputSchemas(t *testing.T) {
 		{"list_chats", ChatPage{Source: "local_store", UntrustedData: true, Limit: 30}},
 		{"get_chat", ChatResult{Source: "local_store", UntrustedData: true}},
 		{"search_contacts", ContactPage{Source: "local_store", UntrustedData: true, Limit: 50}},
-		{"get_direct_chat_by_contact", ChatResult{Source: "local_store", UntrustedData: true}},
+		{"get_direct_chat_by_contact", ChatResult{Source: "local_store", UntrustedData: true, Chat: Chat{JID: "1@lid", LatestMessage: new(*Message)}}},
 		{"get_contact_chats", ChatPage{Source: "local_store", UntrustedData: true, Limit: 20}},
 	} {
 		t.Run(tc.tool, func(t *testing.T) {

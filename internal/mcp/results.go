@@ -66,6 +66,22 @@ type Contact struct {
 	Name        string  `json:"name"`
 }
 
+func contactDTO(row store.Contact) Contact {
+	c := Contact{JID: row.JID, Name: row.Name}
+	if row.Phone != "" {
+		c.PhoneNumber = &row.Phone
+	}
+	return c
+}
+
+func chatPageDTO(rows []store.ChatView, a toolArguments, latest bool) ChatPage {
+	chats := make([]Chat, len(rows))
+	for i, row := range rows {
+		chats[i] = chatDTO(row, latest)
+	}
+	return ChatPage{Source: "local_store", UntrustedData: true, Chats: chats, Count: len(chats), Limit: a.Limit, Page: a.Page}
+}
+
 type ChatPage struct {
 	Source        string `json:"source"`
 	UntrustedData bool   `json:"untrusted_data"`

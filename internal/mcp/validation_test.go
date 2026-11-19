@@ -156,8 +156,11 @@ func TestCommonSchemaValidation(t *testing.T) {
 			if tc.name == "search_contacts" {
 				success = `{"source":"local_store","untrusted_data":true,"contacts":[],"count":0,"limit":50,"page":0}`
 			}
-			if tc.name == "get_chat" || tc.name == "get_direct_chat_by_contact" {
+			if tc.name == "get_chat" {
 				success = `{"source":"local_store","untrusted_data":true,"chat":{"jid":"1@g.us","name":"","is_group":true,"last_message_time":null}}`
+			}
+			if tc.name == "get_direct_chat_by_contact" {
+				success = `{"source":"local_store","untrusted_data":true,"chat":{"jid":"1@lid","name":"","is_group":false,"last_message_time":null,"latest_message":null}}`
 			}
 			if err := o.Validate(decode(success)); err != nil {
 				t.Errorf("success: %v", err)

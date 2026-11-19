@@ -27,6 +27,26 @@ The `owner-judge` review at `7d4336b` returned `PASS` for the revised WAL fence 
 
 ## Runtime Gates
 
+### Phase 4 Contact Tools and Five-Tool Discovery (2026-11-19)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, synthetic temporary stores and a disconnected fake owner. The guarded in-memory SDK fixture has 238 chats (235 phone chats, two LID chats, one group), 237 contact entries (235 phone entries, a mapped alias and an unmapped LID), and 475 messages. Contact search returns all 235 matches in stable pages of 50+50+50+50+35+0, matching full, first, push and business fields, plus literal stored digit substrings. A formatted identity resolves locally; the same formatting is not stripped in a text search.
+
+Five equivalent contact inputs, including phone and LID device suffixes, produce identical plural results. The store tests also prove that a mapped LID-only chat is returned for equivalent inputs, that the phone row wins when both rows exist, and that plural results keep both rows and include non-group sender participation. Repeated participation does not duplicate a chat. Tied timestamps select the actual latest by descending message ID even if another person sent it. The first-step plan and source guard assertions pass; a fallback identity used as a display name is charged to the existing 4 MiB chosen-name budget, with no folding at one byte over.
+
+Both transports discover exactly five read-only tools. Stdio rejects the two deferred tools and `subscriptions/listen`, returns only protocol frames at all four log levels, and exits 0 on EOF. The fixture still contains the same message after the command releases the lock. In-memory deferred calls make zero reader calls; valid tool calls use the narrow read-only interface with no owner API. The disconnected command made no pairing request despite synthetic approval text. Success and structured errors were checked against their output schemas and decoded once from text to compare with structured content. No real account, dependency change, commit or push.
+
+| Command | Direct result |
+| --- | --- |
+| `go test ./internal/store -run '^TestMCPContactQueries' -count=1 -v -timeout 2m` (red) | Exit 1: search and membership failed for the intended behavior; source-name limit case passed. No skips. |
+| `go test ./internal/mcp -run '^TestContactTools' -count=1 -timeout 2m` (red) | Exit 1: all four parents failed because the three tools were missing. No skips. |
+| `go test ./internal/mcp -run '^Test(Contact\|Chat)Tools' -count=1 -timeout 2m` | Exit 0 after registration; counts are included in the combined run below. |
+| `go test ./internal/mcp ./cmd/whatsapp-mcp -run '^(TestFiveToolDiscovery\|TestMCPStdioOfflineRead)$' -count=10 -timeout 3m` | Exit 0 after correcting the expected subscription refusal text; 20 parent and 40 log-level subtest executions, no skips. |
+| `go test ./internal/store ./internal/mcp ./cmd/whatsapp-mcp -run '^(TestMCP(Contact\|Chat)Queries\|TestTool.*(Plan\|Equivalence\|FiveReads\|ContactCeilings\|SourceCeiling\|LegacyValues)\|TestSearchContacts\|TestContactNames\|TestDirectChat\|TestContactChats\|TestQueryPlans\|Test(Contact\|Chat)Tools\|TestFiveToolDiscovery\|TestMCPStdio\|TestServer)' -cover -count=1 -json -timeout 5m` | Exit 0: 88 store, 85 MCP and 27 command test/subtest passes, one helper-only store skip. Focused parent-run statement coverage: store 36.3%, MCP 66.3%, command 36.7%. The initial run exposed a fixture that counted the display fallback as zero bytes; the corrected test verifies the boundary without raising it. |
+| `go test ./... -count=1 -json -timeout 30m` (final) | Exit 0: 10 packages, 1,882 test/subtest passes, 30 skips, zero failures. Store 281.630 s, MCP 103.601 s, command 140.384 s. The first run failed on two older schema fixtures that omitted mandatory latest detail from the direct-contact result; those fixtures now use `latest_message: null` when there is no message. |
+| `gofmt -l .`; `go vet ./...`; `git diff --check`; `go build -o D:\tmp\kilo\phase4-<GOOS>-<GOARCH> ./cmd/whatsapp-mcp` | Exit 0; formatting and whitespace clean, and all five CGO-free builds passed: windows/amd64, linux/amd64, linux/arm64, darwin/amd64, darwin/arm64. |
+
+**Not verified in Phase 4:** sustained-ingest and inherited-pipe acceptance, native Linux/macOS runtime behavior for this phase, and the feature delivery/code-review gates. Configurable read access and both login tools remain deferred. Both Git implementation hooks are optional and were not run.
+
 ### Phase 3 Chat Tools and Stdio (2026-11-19)
 
 Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`. Only synthetic temporary data, cooperative streams, fake owners and the existing simulator were used. `list_chats` and `get_chat` are the only registered tools. The 35-chat fixture returns 30+5 and the unchanged 235-chat fixture is traversed at omitted/default limit 30 and explicit 1 and 200. The store tests assert literal NFC/case folding, stable ties, composite latest identity and no latest statement for metadata-only reads. The offline command test returns fake approval text with `untrusted_data: true`, observes no pairing request or connectivity requirement, and reopens the store to verify the fixture is unchanged. The tools hold only a local reader, with no send, pairing or recovery API.
