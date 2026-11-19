@@ -102,12 +102,12 @@ func (s *Store) RecoverRunGuard(ctx context.Context, removeIdentity bool) error 
 	if s.deviceFinal || s.runArmed || s.runArmFailed || s.device != nil {
 		return ErrUnsafeRun
 	}
+	defer s.gate.writerIntent()()
 	release, c, err := s.gate.enter(ctx)
 	if err != nil {
 		return err
 	}
 	defer release()
-	defer s.checkToolWAL()
 	if err := s.disk.check(); err != nil {
 		return err
 	}
@@ -240,12 +240,12 @@ func transferRepairAndDelete(ctx context.Context, tx *sql.Tx, id string) error {
 }
 
 func (s *Store) changeRunGuard(ctx context.Context, from, to string) error {
+	defer s.gate.writerIntent()()
 	release, c, err := s.gate.enter(ctx)
 	if err != nil {
 		return err
 	}
 	defer release()
-	defer s.checkToolWAL()
 	if err := s.disk.check(); err != nil {
 		return err
 	}

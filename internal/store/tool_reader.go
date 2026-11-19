@@ -67,27 +67,36 @@ func (s *Store) ToolStoreNotQuiescent() <-chan struct{} { return s.gate.toolFail
 
 // enterTool reserves the tool place after the disk and WAL checks.
 func (s *Store) enterTool(ctx context.Context) (func(), context.Context, error) {
+	g := s.gate
+	g.mu.Lock()
+	if g.closed {
+		g.mu.Unlock()
+		return nil, nil, ErrClosed
+	}
+	if g.writerActive != 0 || g.writerPending != 0 || g.tool || g.toolFailed || g.waiting != 0 {
+		g.mu.Unlock()
+		return nil, nil, ErrBusy
+	}
+	epoch := g.writerEpoch
+	g.mu.Unlock()
 	op := newOpID()
 	size, statErr := s.walSize()
 	if statErr == nil && size > walLimitBytes {
-		s.startToolCheckpoint()
+		s.startToolCheckpoint(epoch)
 	}
-	err, measured := s.disk.checkMeasured()
+	free, sampleErr := s.disk.free(s.dir)
 	s.disk.mu.Lock()
-	free, refusing := s.disk.last, s.disk.refusing
+	refusing := s.disk.refusing
 	s.disk.mu.Unlock()
-	if err == nil && refusing {
-		err = &DiskLowError{Free: free, Reserve: diskReserve}
+	if sampleErr != nil {
+		err := &DiskLowError{Reserve: diskResume + 2*walLimitBytes}
+		s.ev.limit(op, "free space measurement failed", err)
+		return nil, nil, err
 	}
-	if err != nil {
+	if refusing || free < diskResume+2*walLimitBytes {
+		err := &DiskLowError{Free: free, Reserve: diskResume + 2*walLimitBytes}
 		s.ev.limit(op, "low disk space", err)
 		return nil, nil, err
-	} else if measured {
-		if free < diskResume+2*walLimitBytes {
-			err := &DiskLowError{Free: free, Reserve: diskResume + 2*walLimitBytes}
-			s.ev.limit(op, "low disk space", err)
-			return nil, nil, err
-		}
 	}
 	if statErr != nil {
 		s.ev.limit(op, "wal size", ErrBusy)
@@ -97,22 +106,12 @@ func (s *Store) enterTool(ctx context.Context) (func(), context.Context, error) 
 		s.ev.limit(op, "wal size", ErrBusy)
 		return nil, nil, ErrBusy
 	}
-	release, opCtx, err := s.gate.enterTool(ctx, true)
-	if err != nil {
-		return nil, nil, err
-	}
-	// A writer can finish between the first stat and gate admission. Recheck
-	// after reserving the place so either this check or the writer sees it.
-	size, statErr = s.walSize()
-	if statErr != nil || size > walLimitBytes {
-		release()
-		if statErr == nil {
-			s.startToolCheckpoint()
-		}
-		s.ev.limit(op, "wal size", ErrBusy)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.writerEpoch != epoch || g.writerActive != 0 || g.writerPending != 0 {
 		return nil, nil, ErrBusy
 	}
-	return release, opCtx, nil
+	return g.enterToolLocked(ctx, true)
 }
 
 func (s *Store) walSize() (int64, error) {
@@ -126,19 +125,21 @@ func (s *Store) walSize() (int64, error) {
 	return info.Size(), nil
 }
 
-func (s *Store) startToolCheckpoint() {
-	release, _, err := s.gate.enterTool(context.Background(), false)
+func (s *Store) startToolCheckpoint(epoch uint64) {
+	g := s.gate
+	g.mu.Lock()
+	if g.writerEpoch != epoch || g.writerActive != 0 || g.writerPending != 0 || time.Since(g.lastCheckpoint) < 30*time.Second {
+		g.mu.Unlock()
+		return
+	}
+	release, _, err := g.enterToolLocked(context.Background(), false)
+	if err == nil {
+		g.lastCheckpoint = time.Now()
+	}
+	g.mu.Unlock()
 	if err != nil {
 		return
 	}
-	s.gate.mu.Lock()
-	if time.Since(s.gate.lastCheckpoint) < 30*time.Second {
-		s.gate.mu.Unlock()
-		release()
-		return
-	}
-	s.gate.lastCheckpoint = time.Now()
-	s.gate.mu.Unlock()
 	go func() {
 		defer release()
 		ctx, cancel := context.WithTimeout(context.Background(), operationLimit)
@@ -154,19 +155,4 @@ func (s *Store) startToolCheckpoint() {
 			s.report(newOpID(), err)
 		}
 	}()
-}
-
-func (s *Store) checkToolWAL() {
-	size, err := s.walSize()
-	if err == nil && size <= 2*walLimitBytes {
-		return
-	}
-	s.gate.mu.Lock()
-	if s.gate.toolCancel != nil {
-		s.gate.toolCancel()
-	}
-	s.gate.mu.Unlock()
-	if err != nil {
-		s.ev.limit(newOpID(), "wal size", ErrBusy)
-	}
 }

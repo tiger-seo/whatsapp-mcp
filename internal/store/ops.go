@@ -33,13 +33,13 @@ func (s *Store) report(op string, err error) error {
 // write runs fn in one transaction on the writer, under admission and the disk guard. fn's error rolls the
 // transaction back. A commit that fails after cancellation is indeterminate.
 func (s *Store) write(ctx context.Context, fn func(ctx context.Context, tx *sql.Tx) error) error {
+	defer s.gate.writerIntent()()
 	op := newOpID()
 	release, opCtx, err := s.gate.enter(ctx)
 	if err != nil {
 		return s.report(op, err)
 	}
 	defer release()
-	defer s.checkToolWAL()
 	if err := s.disk.check(); err != nil {
 		return s.report(op, err)
 	}

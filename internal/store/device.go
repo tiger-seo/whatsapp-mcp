@@ -299,8 +299,8 @@ func (sess *deviceSession) runLeased(ctx context.Context, op string, write, bulk
 		tok.nested.Add(1)
 		tok.mu.Unlock()
 		defer tok.nested.Done()
-		if write {
-			defer sess.st.checkToolWAL()
+		if write || !reader {
+			defer sess.st.gate.writerIntent()()
 		}
 		if reader {
 			defer sess.st.gate.nestedReader()()
@@ -343,6 +343,9 @@ func (sess *deviceSession) runLeased(ctx context.Context, op string, write, bulk
 	defer sess.work.Done()
 
 	enter := sess.st.gate.enter
+	if write || !reader {
+		defer sess.st.gate.writerIntent()()
+	}
 	if reader {
 		enter = sess.st.gate.enterRead
 	}
@@ -352,7 +355,6 @@ func (sess *deviceSession) runLeased(ctx context.Context, op string, write, bulk
 	}
 	defer release()
 	if write {
-		defer sess.st.checkToolWAL()
 		if err := sess.st.disk.check(); err != nil {
 			return sess.st.report(op, err)
 		}
@@ -480,12 +482,12 @@ func (b *DeviceBarrier) removeRevokedWithConfirmation(ctx context.Context, confi
 		return ErrNotReady
 	}
 	op := newOpID()
+	defer sess.st.gate.writerIntent()()
 	release, opCtx, err := sess.st.gate.enter(ctx)
 	if err != nil {
 		return sess.st.report(op, err)
 	}
 	defer release()
-	defer sess.st.checkToolWAL()
 	if err := sess.st.disk.check(); err != nil {
 		return sess.st.report(op, err)
 	}
@@ -584,12 +586,12 @@ func (d *deviceContainer) PutDevice(ctx context.Context, dev *wastore.Device) (r
 	sess.repairFence.Lock()
 	defer sess.repairFence.Unlock()
 	op := newOpID()
+	defer sess.st.gate.writerIntent()()
 	release, opCtx, err := sess.st.gate.enter(ctx)
 	if err != nil {
 		return sess.st.report(op, err)
 	}
 	defer release()
-	defer sess.st.checkToolWAL()
 	if err := sess.st.disk.check(); err != nil {
 		return sess.st.report(op, err)
 	}

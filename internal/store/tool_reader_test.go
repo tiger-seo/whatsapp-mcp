@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"go.mau.fi/whatsmeow/types"
@@ -1130,7 +1131,144 @@ func TestToolWALWriteCancelsWithoutReleasing(t *testing.T) {
 	}
 }
 
+func TestToolAdmissionUsesFreshDiskSample(t *testing.T) {
+	free := uint64(2 * gib)
+	var sampleErr error
+	st, _ := openTestWith(t, newDataDir(t), openOptions{hooks: testHooks{
+		free: func(string) (uint64, error) { return free, sampleErr },
+	}})
+	if err := st.disk.check(); err != nil {
+		t.Fatal(err)
+	}
+	free = diskReserve - 1
+	release, _, err := enterTestStoreTool(st)
+	if err == nil {
+		release()
+	}
+	if !errors.Is(err, ErrDiskLow) {
+		t.Errorf("tool admitted on stale free space: %v", err)
+	}
+	if err := st.disk.check(); err != nil {
+		t.Fatalf("tool check refreshed the ordinary disk cache: %v", err)
+	}
+	free, sampleErr = 2*gib, errors.New("synthetic disk measurement failure")
+	release, _, err = enterTestStoreTool(st)
+	if err == nil {
+		release()
+	}
+	if !errors.Is(err, ErrDiskLow) {
+		t.Fatalf("tool admitted after failed free-space measurement: %v", err)
+	}
+}
+
+func TestToolWALWaitRetainsDrainAfterLatch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		g := newGate()
+		lease, ctx, err := g.enter(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lease()
+		// Fence timing is independent of how long an admitted device lease has already run.
+		time.Sleep(admissionWait + time.Millisecond)
+		// Use a longer caller context for expiry to isolate the fence from the old lease's deadline.
+		release, _, err := enterTestTool(g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer release()
+		g.walDraining = true
+		short, cancel := context.WithCancel(ctx)
+		first := make(chan error, 1)
+		go func() { first <- g.beginWriter(short) }()
+		synctest.Wait()
+		deadline := g.walDeadline
+		cancel()
+		if err := <-first; !errors.Is(err, context.Canceled) || deadline.IsZero() {
+			t.Fatalf("first wait: deadline=%v error=%v", deadline, err)
+		}
+		if err := g.beginWriter(context.Background()); !errors.Is(err, ErrBusy) || time.Now() != deadline {
+			t.Fatalf("shared deadline not honored: %v", err)
+		}
+		select {
+		case <-g.toolFailure:
+		default:
+			t.Fatal("writer timeout did not latch control failure")
+		}
+		if err := g.beginWriter(context.Background()); !errors.Is(err, ErrBusy) || time.Now() != deadline {
+			t.Fatalf("second writer did not fail fast: %v", err)
+		}
+		if g.activeCount() != 2 {
+			t.Fatal("timeout released real accounting")
+		}
+		release()
+		if err := g.beginWriter(context.Background()); err != nil {
+			t.Fatalf("fence persisted after release: %v", err)
+		}
+		if _, _, err := enterTestTool(g); !errors.Is(err, ErrBusy) {
+			t.Fatalf("replacement admitted after failure: %v", err)
+		}
+	})
+}
+
+func TestWriterDriverInterfaceParity(t *testing.T) {
+	st, _ := openTest(t, newDataDir(t))
+	ctx := context.Background()
+	conn, err := st.writer.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.Raw(func(raw any) error {
+		w := raw.(*writerConn)
+		check := func(wrapped, inner any, interfaces ...reflect.Type) {
+			for _, it := range interfaces {
+				if reflect.TypeOf(wrapped).Implements(it) != reflect.TypeOf(inner).Implements(it) {
+					t.Errorf("%T changed %v capability", wrapped, it)
+				}
+			}
+		}
+		check(w, w.sqliteWriterConn, reflect.TypeFor[driver.Execer](), reflect.TypeFor[driver.Queryer](),
+			reflect.TypeFor[driver.ConnBeginTx](), reflect.TypeFor[driver.ConnPrepareContext](),
+			reflect.TypeFor[driver.ExecerContext](), reflect.TypeFor[driver.QueryerContext](),
+			reflect.TypeFor[driver.Pinger](), reflect.TypeFor[driver.SessionResetter](),
+			reflect.TypeFor[driver.Validator](), reflect.TypeFor[driver.NamedValueChecker]())
+		prepared, err := w.PrepareContext(ctx, "SELECT 1")
+		if err != nil {
+			return err
+		}
+		stmt := prepared.(*writerStmt)
+		defer stmt.Close()
+		check(stmt, stmt.sqliteWriterStmt, reflect.TypeFor[driver.StmtExecContext](),
+			reflect.TypeFor[driver.StmtQueryContext](), reflect.TypeFor[driver.ColumnConverter](), reflect.TypeFor[driver.NamedValueChecker]())
+		queried, err := stmt.QueryContext(ctx, nil)
+		if err != nil {
+			return err
+		}
+		rows := queried.(*writerRows)
+		defer rows.Close()
+		check(rows, rows.sqliteWriterRows, reflect.TypeFor[driver.RowsNextResultSet](), reflect.TypeFor[driver.RowsColumnScanner](),
+			reflect.TypeFor[driver.RowsColumnTypeScanType](), reflect.TypeFor[driver.RowsColumnTypeDatabaseTypeName](),
+			reflect.TypeFor[driver.RowsColumnTypeLength](), reflect.TypeFor[driver.RowsColumnTypeNullable](),
+			reflect.TypeFor[driver.RowsColumnTypePrecisionScale]())
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestToolWALActualWritesCancelSnapshot(t *testing.T) {
+	for _, device := range []bool{false, true} {
+		name := "ingest"
+		if device {
+			name = "device"
+		}
+		t.Run(name, func(t *testing.T) { toolWALActualWritesCancelSnapshot(t, device) })
+	}
+}
+
+func toolWALActualWritesCancelSnapshot(t *testing.T, device bool) {
+	t.Helper()
 	st, _ := openTestWith(t, newDataDir(t), openOptions{hooks: testHooks{
 		free: func(string) (uint64, error) { return 2 * gib, nil },
 	}})
@@ -1148,7 +1286,8 @@ func TestToolWALActualWritesCancelSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	tx, err := conn.BeginTx(toolCtx, nil)
+	// The fixture owns the transaction until explicitly released, even after tool cancellation.
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1161,10 +1300,22 @@ func TestToolWALActualWritesCancelSnapshot(t *testing.T) {
 		if toolCtx.Err() != nil {
 			t.Fatalf("tool cancelled before crossing threshold: %v", toolCtx.Err())
 		}
-		if err := st.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
-			_, err := tx.ExecContext(ctx, `INSERT INTO tool_actual_wal VALUES (zeroblob(?))`, 8*mib)
-			return err
-		}); err != nil {
+		if device {
+			err = st.wrapped.DoTxn(ctx, nil, func(ctx context.Context) error {
+				for range 2 {
+					if _, err := st.wrapped.Exec(ctx, `INSERT INTO tool_actual_wal VALUES (zeroblob(?))`, 4*mib); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+		} else {
+			err = st.write(ctx, func(ctx context.Context, tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `INSERT INTO tool_actual_wal VALUES (zeroblob(?))`, 8*mib)
+				return err
+			})
+		}
+		if err != nil {
 			t.Fatal(err)
 		}
 		size, err := st.walSize()
@@ -1183,11 +1334,34 @@ func TestToolWALActualWritesCancelSnapshot(t *testing.T) {
 		if _, _, err := enterTestTool(st.gate); !errors.Is(err, ErrBusy) {
 			t.Fatalf("replacement while snapshot held: %v", err)
 		}
+		later, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+		_, err = st.writer.ExecContext(later, `INSERT INTO tool_actual_wal VALUES (zeroblob(4096))`)
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("second write entered SQLite before actual snapshot release: %v", err)
+		}
+		if after, err := st.walSize(); err != nil || after != size {
+			t.Fatalf("post-crossing write changed the pinned WAL: before %d, after %d, err %v", size, after, err)
+		}
+		st.gate.mu.Lock()
+		deadline := st.gate.walDeadline
+		st.gate.mu.Unlock()
+		if deadline.IsZero() {
+			t.Fatal("writer never reached the fence")
+		}
+		blocked := make(chan error, 1)
+		go func() {
+			_, err := st.wrapped.Exec(ctx, `INSERT INTO tool_actual_wal VALUES (zeroblob(4096))`)
+			blocked <- err
+		}()
 		_ = tx.Rollback()
 		if err := conn.Close(); err != nil {
 			t.Fatal(err)
 		}
 		release()
+		if err := <-blocked; err != nil {
+			t.Fatalf("device adapter write after actual return: %v", err)
+		}
 		if next, _, err := enterTestStoreTool(st); !errors.Is(err, ErrBusy) {
 			if err == nil {
 				next()
@@ -1209,6 +1383,36 @@ func TestToolWALActualWritesCancelSnapshot(t *testing.T) {
 		return
 	}
 	t.Fatal("WAL did not cross the cancellation threshold")
+}
+
+func TestToolAdmissionRejectsChangedWriterGeneration(t *testing.T) {
+	var onSample func()
+	st, _ := openTestWith(t, newDataDir(t), openOptions{hooks: testHooks{
+		free: func(string) (uint64, error) {
+			if onSample != nil {
+				onSample()
+			}
+			return 2 * gib, nil
+		},
+	}})
+	onSample = func() {
+		if _, err := st.writer.Exec(`CREATE TABLE tool_wal_admission_race(v INTEGER)`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	release, _, err := enterTestStoreTool(st)
+	if err == nil {
+		release()
+	}
+	if !errors.Is(err, ErrBusy) {
+		t.Fatalf("tool admitted on past writer generation: %v", err)
+	}
+	onSample = nil
+	release, _, err = enterTestStoreTool(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
 }
 
 func TestToolConcurrentIngestAndReadmission(t *testing.T) {

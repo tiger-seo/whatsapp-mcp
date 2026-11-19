@@ -27,6 +27,11 @@ type gate struct {
 	toolFailed     bool
 	toolFailure    chan struct{}
 	lastCheckpoint time.Time
+	writerEpoch    uint64
+	writerActive   int
+	writerPending  int
+	walDraining    bool
+	walDeadline    time.Time
 
 	ctx    context.Context // cancelled by quiesce after the grace period
 	cancel context.CancelFunc
@@ -158,9 +163,8 @@ func (g *gate) enterOrdinary(ctx context.Context, reader bool) (func(), context.
 		case <-timer.C:
 			g.mu.Lock()
 			g.waiting--
-			if g.toolReader && g.toolCancel != nil && !g.toolFailed {
-				g.toolFailed = true
-				close(g.toolFailure)
+			if g.toolReader && g.toolCancel != nil {
+				g.failToolLocked()
 			}
 			g.mu.Unlock()
 			return nil, nil, ErrBusy
@@ -191,6 +195,10 @@ func (g *gate) enterOrdinary(ctx context.Context, reader bool) (func(), context.
 func (g *gate) enterTool(ctx context.Context, reader bool) (func(), context.Context, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	return g.enterToolLocked(ctx, reader)
+}
+
+func (g *gate) enterToolLocked(ctx context.Context, reader bool) (func(), context.Context, error) {
 	if g.closed {
 		return nil, nil, ErrClosed
 	}
@@ -223,9 +231,8 @@ func (g *gate) enterTool(ctx context.Context, reader bool) (func(), context.Cont
 			g.toolWatch = time.AfterFunc(drainWait, func() {
 				g.mu.Lock()
 				defer g.mu.Unlock()
-				if g.tool && g.toolReader && g.toolGeneration == generation && !g.toolFailed {
-					g.toolFailed = true
-					close(g.toolFailure)
+				if g.tool && g.toolReader && g.toolGeneration == generation {
+					g.failToolLocked()
 				}
 			})
 		})
@@ -243,12 +250,20 @@ func (g *gate) enterTool(ctx context.Context, reader bool) (func(), context.Cont
 				g.toolWatch = nil
 			}
 			g.tool, g.toolReader, g.toolCancel = false, false, nil
+			g.walDraining, g.walDeadline = false, time.Time{}
 			g.active--
 			g.notify()
 			g.running.Done()
 			g.mu.Unlock()
 		})
 	}, opCtx, nil
+}
+
+func (g *gate) failToolLocked() {
+	if !g.toolFailed {
+		g.toolFailed = true
+		close(g.toolFailure)
+	}
 }
 
 // quiesce permanently closes admission, so new and waiting callers get ErrClosed. It waits up to the grace

@@ -20,7 +20,7 @@ import (
 	wastore "go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/store/sqlstore/upgrades"
-	_ "modernc.org/sqlite" // registers the "sqlite" driver
+	"modernc.org/sqlite"
 )
 
 // Read and write DSN parameters. The writer holds the write lock from BEGIN, so writers wait in the busy handler
@@ -173,7 +173,11 @@ func open(ctx context.Context, dataDir string, logger *slog.Logger, opts openOpt
 		}
 	}()
 
-	if st.writer, err = openPool(ctx, dbPath, writeParams, writeConns); err != nil {
+	connector, err := sqlite.NewConnector(fileDSN(dbPath, writeParams))
+	if err != nil {
+		return nil, ioError("io")
+	}
+	if st.writer, err = configurePool(ctx, sql.OpenDB(writerConnector{Connector: connector, store: st}), writeConns); err != nil {
 		return nil, err
 	}
 	if err := probeWritable(ctx, st.writer); err != nil {
@@ -255,6 +259,10 @@ func openPool(ctx context.Context, path, params string, conns int) (*sql.DB, err
 	if err != nil {
 		return nil, ioError("io")
 	}
+	return configurePool(ctx, db, conns)
+}
+
+func configurePool(ctx context.Context, db *sql.DB, conns int) (*sql.DB, error) {
 	db.SetMaxOpenConns(conns)
 	db.SetMaxIdleConns(conns)
 	db.SetConnMaxLifetime(0)
