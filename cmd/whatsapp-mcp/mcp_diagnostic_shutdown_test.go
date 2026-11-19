@@ -335,25 +335,44 @@ func TestStdioDiagnosticOverflowRetainsMarker(t *testing.T) {
 }
 
 func TestStdioDiagnosticExpiryStopsRunningCommand(t *testing.T) {
-	old := newOwner
-	defer func() { newOwner = old }()
+	oldOwner, oldLifecycle := newOwner, lifecycleFactory
+	defer func() { newOwner, lifecycleFactory = oldOwner, oldLifecycle }()
 	sink := &diagnosticHoldSink{entered: make(chan struct{}), release: make(chan struct{})}
-	defer close(sink.release)
 	retiring := make(chan struct{})
 	owner := newHeldOwner()
-	defer owner.complete()
+	finalizing := make(chan bool, 1)
+	lifecycleFactory = func(logger *slog.Logger) *lifecycle {
+		lc := newLifecycleWith(logger, nil, func(int) {}, shutdownTimeout)
+		lc.diagnosticFinalizing = func(pending bool) { finalizing <- pending }
+		return lc
+	}
+	opened := make(chan *store.Store, 1)
 	newOwner = func(deps ownerDeps) (*ownerHandle, error) {
-		owner.startHook = func() { deps.log.Warn("loss", "event", "history_incomplete") }
+		owner.startHook = func() {
+			opened <- deps.store
+			deps.log.Warn("loss", "event", "history_incomplete")
+		}
 		return &ownerHandle{owner: &diagnosticChildOwner{heldOwner: owner, stop: func() { close(retiring) }}}, nil
 	}
 	in, input := io.Pipe()
-	defer in.Close()
-	defer input.Close()
 	dir := privateDir(t)
 	var stdout bytes.Buffer
-	done := make(chan int, 1)
+	done := make(chan struct{})
+	var code int
 	go func() {
-		done <- run([]string{"stdio", "--data-dir", dir, "--log-level", "error"}, in, &stdout, sink, nil)
+		defer close(done)
+		code = run([]string{"stdio", "--data-dir", dir, "--log-level", "error"}, in, &stdout, sink, nil)
+	}()
+	defer func() {
+		owner.complete()
+		_ = input.Close()
+		_ = in.Close()
+		close(sink.release)
+		select {
+		case <-done:
+		case <-time.After(shutdownTimeout):
+			t.Error("command did not join after releasing test resources")
+		}
 	}()
 	select {
 	case <-sink.entered:
@@ -365,18 +384,41 @@ func TestStdioDiagnosticExpiryStopsRunningCommand(t *testing.T) {
 	case <-time.After(8 * time.Second):
 		t.Fatal("missing acknowledgment did not stop running owner")
 	}
-	if l, err := lock.Acquire(dir); err == nil {
-		l.Release()
-		t.Fatal("lock released while owner still running")
+	st := <-opened
+	select {
+	case <-st.Quiesced():
+		t.Fatal("store quiesced while owner was still running")
+	default:
+	}
+	var held *lock.HeldError
+	if l, err := lock.Acquire(dir); !errors.As(err, &held) {
+		if l != nil {
+			l.Release()
+		}
+		t.Fatalf("expected lock contention while owner was still running, got %v", err)
 	}
 	owner.complete()
+	cleanupDeadline := time.After(8 * time.Second)
 	select {
-	case code := <-done:
+	case pending := <-finalizing:
+		if pending {
+			t.Fatal("expired write still pending after cleanup")
+		}
+	case <-cleanupDeadline:
+		select {
+		case <-st.Quiesced():
+			t.Fatal("cleanup did not reach diagnostic finalization after store quiesced")
+		default:
+			t.Fatal("store did not quiesce after owner completion")
+		}
+	}
+	select {
+	case <-done:
 		if code != exitError || stdout.Len() != 0 {
 			t.Fatalf("expiry exit=%d stdout=%q", code, stdout.String())
 		}
-	case <-time.After(8 * time.Second):
-		t.Fatal("blocked diagnostic delayed cleanup")
+	case <-cleanupDeadline:
+		t.Fatal("blocked diagnostic prevented exit after cleanup")
 	}
 	requireReleasedLock(t, dir)
 }
