@@ -10,6 +10,8 @@
 
 ## Current State
 
+**2026-11-19 CI:** The push at `3b70355` passed the Ubuntu job. The six focused diagnostic subprocess cases passed on native Linux and macOS, and `internal/store` passed on all three runners. The full Windows and macOS jobs failed. Test-only follow-up changes pass the full local Windows suite, but the macOS saved-session owner delay is still unexplained and the changes need a native rerun. See [CI results](verification.md#phase-2-native-ci-and-triage-2026-11-19). Phase 2 remains open.
+
 **2026-11-19 follow-up:** The local WAL and diagnostic coverage follow-up passes the full Windows suite. The new fence cases cover rollback/stat failure before handoff, expiry through the device writer pool, an existing device lease, reconnect, capacity, and prepared rows. Command diagnostics now also cover ordinary-only loss, mandatory overflow with an unsafe marker, and expiry during operation. [Results](verification.md#phase-2-acceptance-follow-up-2026-11-19) are local; native store and diagnostic CI evidence is still pending. No foundation task was closed on local or WSL2 evidence alone.
 
 **2026-11-19:** Phase 2 is incomplete. The WAL fence is committed as `f430dd0` and the diagnostic-only stdio wiring as `12d2713`. The full Windows store and command suites passed during this slice; focused tests passed after the latest changes. T043/T044 were rerun. See [verification.md](verification.md#phase-2-wal-fence-and-diagnostic-wiring-2026-11-19) for the red/green and smoke results. T004/T005 verification is still open; T045/T046 and T015/T016 still require native Linux/macOS diagnostic evidence. Phase 3 (T019-T026) has not started.

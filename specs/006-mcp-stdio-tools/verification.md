@@ -27,6 +27,22 @@ The `owner-judge` review at `7d4336b` returned `PASS` for the revised WAL fence 
 
 ## Runtime Gates
 
+### Phase 2 Native CI and Triage (2026-11-19)
+
+[Push CI at `3b70355`](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44594097004), `CGO_ENABLED=0`: the static checks and Ubuntu job passed. `go test -timeout 30m ./...` reported `internal/store` passing on all three platforms. The full macOS and Windows jobs failed; this is not a green acceptance run.
+
+| Native runner | Focused `TestMCPDiagnosticShutdownNative` result | Full suite result |
+| --- | --- | --- |
+| Linux/amd64 (Ubuntu) | Go test exit 0; 7 pass (parent plus six cases), 0 fail, 0 skip | Exit 0 |
+| Darwin/arm64 (macOS) | Go test exit 0; 7 pass (parent plus six cases), 0 fail, 0 skip | Exit 1: `TestStdioDiagnosticExpiryStopsRunningCommand`, `TestShellSavedSessionAttemptTimeoutAndCancellation/serve`, and `TestIngestLIDRelookupOfAFlushHasOneDeadline` |
+| Windows | Not run; Unix subprocess subset | Exit 1: `TestGuardSDKResponseConstructionFailure` |
+
+On both Unix runners the focused command was `go test -count=1 -json -timeout 3m -run '^TestMCPDiagnosticShutdownNative$' ./cmd/whatsapp-mcp`. The named cases (`blocked_startup`, `blocked_operation`, `blocked_drain`, `closed_stderr`, `first_signal`, `forced_second_signal`) each recorded child exit 1 with no signal termination; only `forced_second_signal` observed the forced callback.
+
+The follow-up changes are test-only: settle SDK initialization before measuring the outstanding tool credit, isolate the ingest test's simulated slowdown to the flush it checks, and instrument the in-process diagnostic expiry test to distinguish cleanup from finalization without extending its cleanup watchdog. The macOS saved-session failure logged a successful quiet-stop check followed by the test lifecycle's five-second owner timeout. The cause of the remaining owner delay is unverified; no timeout or production shutdown behavior was changed.
+
+Local Windows/amd64, `CGO_ENABLED=0`: `go test ./... -count=1 -timeout 30m` exited 0 (10 packages); `go vet ./...` exited 0. Focused repeated runs exited 0: SDK response-construction failure (200 runs), guarded MCP tests and diagnostic/store-failure shutdown tests (three runs each), ingest flush deadline (20 runs), and saved-session timeout/cancellation (two runs, both `serve` and `stdio`). These results do not verify the test changes on macOS. Phase 2 remains open.
+
 ### Phase 2 Acceptance Follow-up (2026-11-19)
 
 All runs used `CGO_ENABLED=0` and synthetic data. Real SQLite tests cover rollback with a paused failed WAL stat, a queued writer at handoff, device lookups through the writer pool before and after expiry, an independent reader, an aged device lease with two autocommit writes, and a discarded writer connection. The stat hook simulates the crossing in the small scheduling fixtures; the existing ingest and device tests exercise an actual 128 MiB crossing. Capacity is tested with a deterministic gate schedule. Prepared `RETURNING` rows retain writer ownership until close and preserve metadata; cancellation and optional driver interfaces are checked separately.
