@@ -64,6 +64,7 @@ func GuardTransportWithReporter(inner sdk.Transport, reporter GuardReporter) sdk
 type guardedTransport struct {
 	inner    sdk.Transport
 	reporter GuardReporter
+	attach   func(*guardedConnection)
 }
 
 func (t guardedTransport) Connect(ctx context.Context) (sdk.Connection, error) {
@@ -73,6 +74,9 @@ func (t guardedTransport) Connect(ctx context.Context) (sdk.Connection, error) {
 	}
 	g := newGuardedConnection(c)
 	g.reporter = t.reporter
+	if t.attach != nil {
+		t.attach(g)
+	}
 	return g, nil
 }
 
@@ -93,7 +97,11 @@ func guardToolIdentity(r *jsonrpc.Request) DiagnosticTool {
 	if json.Unmarshal(r.Params, &p) != nil {
 		return DiagnosticToolUnknown
 	}
-	switch p.Name {
+	return diagnosticToolIdentity(p.Name)
+}
+
+func diagnosticToolIdentity(name string) DiagnosticTool {
+	switch name {
 	case "list_chats":
 		return DiagnosticListChats
 	case "get_chat":
@@ -167,6 +175,11 @@ func (g *guardedConnection) readInput(ctx context.Context) (jsonrpc.Message, boo
 		g.pending = nil
 		if result.release != nil {
 			result.release()
+		}
+		select {
+		case <-g.done:
+			return nil, false, sdk.ErrConnectionClosed
+		default:
 		}
 		return result.message, false, result.err
 	}
@@ -491,6 +504,10 @@ func (g *guardedConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 		}
 		if !r.ID.IsValid() {
 			g.mu.Lock()
+			if g.closed {
+				g.mu.Unlock()
+				return nil, sdk.ErrConnectionClosed
+			}
 			switch r.Method {
 			case "notifications/initialized":
 				fields, valid := parameterObject(r.Params, true)
@@ -589,14 +606,14 @@ func (g *guardedConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 			}
 		}
 		g.mu.Unlock()
-		unsupported := r.Method == "subscriptions/listen" || r.Method == "resources/subscribe" || r.Method == "resources/unsubscribe"
+		unsupported := strings.HasPrefix(r.Method, "notifications/") || r.Method == "subscriptions/listen" || r.Method == "resources/subscribe" || r.Method == "resources/unsubscribe"
 		if busy || invalid || unsupported {
 			code, text := int64(-32000), "server busy"
 			denial := GuardBusy
-			if !busy && invalid {
+			if invalid {
 				code, text = jsonrpc.CodeInvalidParams, "invalid parameters"
 				denial = GuardInvalidParams
-			} else if !busy {
+			} else if unsupported {
 				code, text = jsonrpc.CodeMethodNotFound, "method not found"
 				denial = GuardUnsupported
 			}
@@ -613,6 +630,15 @@ func (g *guardedConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 				}
 			}
 			g.mu.Unlock()
+			reply := &jsonrpc.Response{ID: r.ID, Error: &jsonrpc.Error{Code: code, Message: text}}
+			if denial == GuardBusy && tool {
+				result, err := json.Marshal(toolErrorResult("busy"))
+				if err != nil {
+					_ = g.Close()
+					return nil, errors.New("response construction failed")
+				}
+				reply.Error, reply.Result = nil, result
+			}
 			writeCtx := ctx
 			cancel := func() {}
 			var timer *time.Timer
@@ -620,7 +646,7 @@ func (g *guardedConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 				writeCtx, cancel = context.WithDeadline(ctx, deadline)
 				timer = time.AfterFunc(time.Until(deadline), func() { _ = g.Close() })
 			}
-			err := g.inner.Write(writeCtx, &jsonrpc.Response{ID: r.ID, Error: &jsonrpc.Error{Code: code, Message: text}})
+			err := g.inner.Write(writeCtx, reply)
 			if timer != nil {
 				timer.Stop()
 			}
@@ -645,6 +671,10 @@ func (g *guardedConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 			g.mu.Unlock()
 		}
 		g.mu.Lock()
+		if g.closed {
+			g.mu.Unlock()
+			return nil, sdk.ErrConnectionClosed
+		}
 		internal := g.active[r.ID].internal
 		g.mu.Unlock()
 		copy := *r
@@ -690,7 +720,7 @@ func (g *guardedConnection) Write(ctx context.Context, msg jsonrpc.Message) erro
 			return errors.New("cancelled request returned success")
 		}
 	}
-	if entry.tool && r.Error != nil && !g.report(GuardSDKToolFailure, entry.identity) {
+	if r.Error != nil && !g.report(GuardSDKToolFailure, entry.identity) {
 		_ = g.Close()
 		return errors.New("diagnostic delivery failed")
 	}

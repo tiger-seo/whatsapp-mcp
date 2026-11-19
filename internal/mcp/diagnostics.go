@@ -107,13 +107,14 @@ type Diagnostics struct {
 	dropped                      uint64
 	failed, sinkFailed, finished bool
 	wake                         chan struct{}
+	failure                      chan struct{}
 	changed                      chan struct{}
 	completed                    chan diagnosticAck
 	level                        slog.Level
 }
 
 func NewDiagnostics(w io.Writer, level slog.Level) *Diagnostics {
-	d := &Diagnostics{level: level, wake: make(chan struct{}, 1), changed: make(chan struct{}, 1), completed: make(chan diagnosticAck, 1)}
+	d := &Diagnostics{level: level, wake: make(chan struct{}, 1), failure: make(chan struct{}), changed: make(chan struct{}, 1), completed: make(chan diagnosticAck, 1)}
 	jobs := make(chan []byte, 1)
 	completed, changed := d.completed, d.changed
 	go func() {
@@ -155,6 +156,9 @@ func (d *Diagnostics) notify() {
 func (d *Diagnostics) failLocked() {
 	if !d.failed {
 		d.failed = true
+		if d.failure != nil {
+			close(d.failure)
+		}
 		cell := &d.cells[DiagnosticDeliveryFailed]
 		cell.count++
 		cell.last = time.Now().UTC()

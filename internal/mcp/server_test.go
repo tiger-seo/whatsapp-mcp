@@ -80,7 +80,7 @@ func TestServerSDKExplicitSchemasAndDispatch(t *testing.T) {
 	server := NewServer(NewSDKErrorLatch(), d)
 	in, out := toolSchemas("list_chats")
 	accepted := make(chan toolArguments, 2)
-	server.sdk.AddTool(&sdk.Tool{Name: "list_chats", InputSchema: in, OutputSchema: out}, func(_ context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+	server.addReadTool(sdk.Tool{Name: "list_chats", InputSchema: in, OutputSchema: out}, func(_ context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		a, invalid := validateArguments("list_chats", req.Params.Arguments)
 		if invalid != nil {
 			return argumentErrorResult(invalid), nil
@@ -116,6 +116,9 @@ func TestServerSDKExplicitSchemasAndDispatch(t *testing.T) {
 		return v
 	}
 	tool := list.Tools[0]
+	if a := tool.Annotations; a == nil || !a.ReadOnlyHint || a.DestructiveHint == nil || *a.DestructiveHint || a.OpenWorldHint == nil || *a.OpenWorldHint {
+		t.Fatalf("read tool annotations: %+v", a)
+	}
 	if !reflect.DeepEqual(decode(tool.InputSchema), decode(in)) || !reflect.DeepEqual(decode(tool.OutputSchema), decode(out)) {
 		t.Fatal("SDK discovery changed the explicit schemas")
 	}
@@ -211,6 +214,9 @@ func TestServerSDKExplicitSchemasAndDispatch(t *testing.T) {
 			}
 		})
 	}
+	awaitDiagnostic(t, func() bool {
+		return strings.Count(w.String(), "outcome=denied tool=list_chats category=invalid_input") == 3
+	})
 	if strings.Contains(w.String(), "synthetic-secret") || strings.Contains(w.String(), "private_key") {
 		t.Fatalf("diagnostic exposed input: %s", w.String())
 	}
@@ -419,8 +425,17 @@ func TestServerSDKMarshalFailureLatches(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("SDK response marshal failure was not latched")
 	}
-	cancel()
-	<-done
+	select {
+	case <-done:
+		if ctx.Err() != nil {
+			t.Fatal("client call only stopped at the test deadline")
+		}
+	case <-ctx.Done():
+		t.Fatal("SDK latch did not stop the connection")
+	}
+	if err := ss.Wait(); err == nil || strings.Contains(err.Error(), "chan int") {
+		t.Fatalf("Wait did not report a sanitized SDK failure: %v", err)
+	}
 }
 
 func TestServerMandatoryAuditFailureStopsSession(t *testing.T) {
@@ -454,6 +469,86 @@ func TestServerMandatoryAuditFailureStopsSession(t *testing.T) {
 	default:
 		t.Fatal("mandatory audit failure did not wake owner")
 	}
+}
+
+func TestServerSDKFailureWaitsForHeldHandler(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	latch := NewSDKErrorLatch()
+	d := NewDiagnostics(io.Discard, slog.LevelError)
+	defer d.Finish()
+	server := NewServer(latch, d)
+	started, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	server.sdk.AddTool(&sdk.Tool{Name: "held", InputSchema: map[string]any{"type": "object"}}, func(ctx context.Context, _ *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+		return nil, ctx.Err()
+	})
+	st, ct := sdk.NewInMemoryTransports()
+	ss, err := server.Connect(ctx, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ss.Close()
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+	client, err := sdk.NewClient(&sdk.Implementation{Name: "test", Version: "1"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callDone := make(chan struct{})
+	go func() {
+		defer close(callDone)
+		_, _ = client.CallTool(ctx, &sdk.CallToolParams{Name: "held"})
+	}()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal("tool did not start")
+	}
+	latch.Logger().Error("synthetic SDK failure")
+	waited := make(chan error, 1)
+	go func() { waited <- ss.Wait() }()
+	select {
+	case <-cancelled:
+	case <-ctx.Done():
+		t.Fatal("SDK failure did not cancel the handler")
+	}
+	ss.guard.mu.Lock()
+	retained := ss.guard.closed && ss.guard.tool && len(ss.guard.active) == 1
+	ss.guard.mu.Unlock()
+	if !retained {
+		t.Fatal("closed guard did not retain the held request's credit")
+	}
+	select {
+	case err := <-waited:
+		t.Fatalf("session joined while handler was still held: %v", err)
+	default:
+	}
+	close(release)
+	released = true
+	select {
+	case err := <-waited:
+		if err != errSDKSession {
+			t.Fatalf("Wait = %v, want fixed SDK failure", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("session did not join after handler return")
+	}
+	ss.guard.mu.Lock()
+	cleared := !ss.guard.tool && len(ss.guard.active) == 0
+	ss.guard.mu.Unlock()
+	if !cleared {
+		t.Fatal("credits still retained after actual SDK drain")
+	}
+	<-callDone
+	_ = client.Close()
 }
 
 func TestServerNoSamplingOrElicitation(t *testing.T) {

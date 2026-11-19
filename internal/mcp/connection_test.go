@@ -10,6 +10,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -194,6 +195,11 @@ func TestGuardAdmissionAndRetirement(t *testing.T) {
 	}
 	if len(c.output) != 1 {
 		t.Fatalf("overload replies = %d", len(c.output))
+	}
+	reply := c.output[0].(*jsonrpc.Response)
+	want, err := json.Marshal(toolErrorResult("busy"))
+	if err != nil || reply.ID.Raw() != int64(2) || reply.Error != nil || string(reply.Result) != string(want) {
+		t.Fatalf("tool overload did not return the common busy result: %+v", reply)
 	}
 	id := first.(*jsonrpc.Request).ID
 	if err := g.Write(context.Background(), &jsonrpc.Response{ID: id, Result: []byte(`{}`)}); err != nil {
@@ -418,6 +424,79 @@ func TestGuardOfficialInMemory(t *testing.T) {
 	}
 }
 
+func TestGuardCancellationBeforeSDKHandlerRetiresCredit(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+		st, ct := sdk.NewInMemoryTransports()
+		server := NewServer(NewSDKErrorLatch(), NewDiagnostics(io.Discard, slog.LevelError))
+		defer server.diagnostics.Finish()
+		blocked, release := make(chan struct{}), make(chan struct{})
+		server.sdk.AddReceivingMiddleware(func(next sdk.MethodHandler) sdk.MethodHandler {
+			return func(ctx context.Context, method string, req sdk.Request) (sdk.Result, error) {
+				if method == "notifications/initialized" {
+					close(blocked)
+					<-release
+				}
+				return next(ctx, method, req)
+			}
+		})
+		called := make(chan struct{}, 2)
+		server.sdk.AddTool(&sdk.Tool{Name: "list_chats", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+			called <- struct{}{}
+			return &sdk.CallToolResult{}, nil
+		})
+		session, err := server.Connect(ctx, st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer session.Close()
+		defer func() {
+			select {
+			case <-release:
+			default:
+				close(release)
+			}
+		}()
+		client, err := ct.Connect(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Close()
+		send := func(payload string) {
+			t.Helper()
+			if err := client.Write(ctx, wire(t, payload)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		receive := func(id int64, failed bool) {
+			t.Helper()
+			m, err := client.Read(ctx)
+			r, ok := m.(*jsonrpc.Response)
+			if err != nil || !ok || r.ID.Raw() != id || (r.Error != nil) != failed {
+				t.Fatalf("response for %d: %v, %v", id, m, err)
+			}
+		}
+		send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`)
+		receive(1, false)
+		send(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+		<-blocked
+		send(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_chats"}}`)
+		send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2}}`)
+		synctest.Wait() // SDK's cancellation preempter has run; the handler queue remains held.
+		close(release)
+		receive(2, true)
+		synctest.Wait() // The actual response write and guard retirement have now completed.
+		if len(called) != 0 {
+			t.Fatal("cancelled queued tool reached the handler")
+		}
+		send(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_chats"}}`)
+		receive(2, false)
+		if len(called) != 1 {
+			t.Fatal("subsequent tool was not admitted")
+		}
+	})
+}
+
 func TestGuardFourOutstanding(t *testing.T) {
 	c := &scriptedConnection{}
 	for i := 1; i <= 6; i++ {
@@ -434,6 +513,34 @@ func TestGuardFourOutstanding(t *testing.T) {
 	}
 	if len(c.output) != 2 {
 		t.Fatalf("overload responses = %d", len(c.output))
+	}
+	for _, msg := range c.output {
+		reply := msg.(*jsonrpc.Response)
+		var rpcErr *jsonrpc.Error
+		if !errors.As(reply.Error, &rpcErr) || rpcErr.Code != -32000 || len(reply.Result) != 0 {
+			t.Fatalf("non-tool overload did not return a protocol error: %+v", reply)
+		}
+	}
+}
+
+func TestGuardRejectsNotificationMethodsWithRequestIDs(t *testing.T) {
+	c := &scriptedConnection{input: []jsonrpc.Message{
+		wire(t, `{"jsonrpc":"2.0","id":1,"method":"notifications/cancelled","params":{"requestId":"example"}}`),
+		wire(t, `{"jsonrpc":"2.0","id":2,"method":"notifications/initialized"}`),
+		wire(t, `{"jsonrpc":"2.0","id":3,"method":"ping"}`),
+	}}
+	g := newGuardedConnection(c)
+	defer g.Close()
+	m, err := g.Read(context.Background())
+	if err != nil || m.(*jsonrpc.Request).Method != "ping" || len(c.output) != 2 {
+		t.Fatalf("notification method dispatched as a request: %v, %v", m, err)
+	}
+	for i, m := range c.output {
+		reply := m.(*jsonrpc.Response)
+		var rpcErr *jsonrpc.Error
+		if reply.ID.Raw() != int64(i+1) || !errors.As(reply.Error, &rpcErr) || rpcErr.Code != jsonrpc.CodeMethodNotFound {
+			t.Fatalf("unexpected refusal: %+v", reply)
+		}
 	}
 }
 
