@@ -4,6 +4,8 @@
 
 See [tasks.md](tasks.md#current-state) for the current implementation status and remaining work. The passing Windows store and focused shutdown runs are recorded under [Runtime Gates](#runtime-gates). Earlier failures and blockers are dated evidence, not current status. The [owner reviews](#owner-reviews) and the binding [isolation amendment](#owner-accepted-amendment-to-the-isolation-policy-2026-11-18) are preserved below.
 
+The T045/T046 sequencing revision is design-only. The `889ff65` design PASS is historical and does not cover this revision. An authorized design commit and current acceptable `owner-judge` verdict on that commit are pending; no runtime work may start on the revised sequence before that gate clears.
+
 ## Planning Evidence
 
 | Date | Check / source | Result |
@@ -21,6 +23,7 @@ See [tasks.md](tasks.md#current-state) for the current implementation status and
 | 2026-11-17 | Internal read-only task coverage check (not owner-judge) | One missing diagnostic-emission obligation identified and added explicitly to T017/T018/T025: bounded tool/component name, time, outcome and secret-free category, including pre-dispatch and terminal faults. No circular setup dependency found; no runtime tests or approval inferred. |
 | 2026-11-17 | Task-generation `git diff --check`, `git diff --cached --check` and `git ls-files --eol -- specs/006-mcp-stdio-tools` | Exit 0; task-related staged patch is whitespace-clean; all ten tracked/staged feature files show `i/lf w/lf`, no CRLF. Runtime gates remain not run. |
 | 2026-11-19 | User-requested T024 store-observer split; task-marker/dependency inspection, `git diff --check`, and `git ls-files --eol -- specs/006-mcp-stdio-tools/tasks.md specs/006-mcp-stdio-tools/contracts/store-and-lifecycle.md specs/006-mcp-stdio-tools/verification.md` | 44 task entries with unchanged existing IDs/completion markers; new T043/T044 unchecked in the foundation, no T024 prerequisite for their work, and T024 retains later MCP revalidation. Both Git checks exit 0; all three documents show `i/lf w/lf`. Documentation validation only; no runtime tests, commit or renewed review performed. |
+| 2026-11-19 | Diagnostic shutdown split; read-only dependency inspection, PowerShell marker comparison using `git grep -h -o -E` against HEAD and the worktree, `git diff --check HEAD`, and `git ls-files --eol -- specs/006-mcp-stdio-tools` | The topological order in `tasks.md` separates reporter seams from checkbox closure; neither T024 nor the full native matrix supplies foundation evidence. Marker comparison and Git checks exit 0 on Windows: all 44 original IDs and markers preserved, only unchecked T045/T046 added, feature files remain LF. Design validation only, not an owner verdict or runtime result. |
 
 ## Runtime Gates
 
@@ -42,7 +45,15 @@ Native Windows/amd64, `CGO_ENABLED=0`, pinned SDK v1.8.0, synthetic inputs only.
 | `go test -p 1 ./internal/wa -run '^TestMCPActual(HistoryIncompleteAtLogLevels\|ReceiveOverloadAtLogLevels\|MessageDebugRedaction)$' -count=1 -v -timeout 6m` | Exit 0: three tests and eight subtests, no skips; 2.533 s. Exercises real producer paths using synthetic data and the simulator, not a real account. |
 | `gofmt -l .`; `go vet ./...`; `git diff --check`; `go build -o D:\tmp\kilo\mcp-foundation-<GOOS>-<GOARCH> ./cmd/whatsapp-mcp` | Formatting, vet and whitespace checks passed. Each build exited 0: windows/amd64, linux/amd64, linux/arm64, darwin/amd64, darwin/arm64. Cross-builds are not native runtime evidence. |
 
-T011/T012/T014 and T017/T018 are complete at the foundation boundary. T015/T016 remain open: Windows reporter tests do not prove normal unsuccessful exit of the actual stdio command after drain, nor native Linux/macOS pipe and SIGPIPE behavior. T024 still owns wiring into `runStdio` and preserving the owner/store/lock order. The repository-wide delivery suite and coverage gates were not run in this slice.
+T011/T012/T014 and T017/T018 are complete at the foundation boundary. T015/T016 remain open. Read-only source inspection confirmed the prior dependency cycle: `cmd/whatsapp-mcp/commands.go` still calls `runShell` with stdin-discard and no reporter/SIGPIPE setup; the existing T044 observer watches the store latch, not diagnostic delivery. `internal/mcp/server.go` stops its guarded session on diagnostic failure, and `TestDiagnosticsStderrSubprocess` exercises the reporter in a helper process, not `runStdio`. Neither proves how the command exits after cleanup. Under the old plan this required T024 wiring, which itself waited for T015/T016 to close. The repository-wide delivery suite and coverage gates were not run in this slice.
+
+| Gate | Evidence still required |
+| --- | --- |
+| Foundation: T045/T046, then T015/T016 closure | Intended red command cases, then passing stdio diagnostic-only cases: startup and refusal, failure already latched or raised during operation/drain, EOF and signal races, normal exit 1 after actual ordered owner/store cleanup and lock release, and no wait for diagnostic I/O or marker change. Rerun focused producer/reporter and lifecycle regressions. Record native Linux and macOS blocked/closed stderr, SIGPIPE and first/forced-second signal results for this slice. Not verified. |
+| Phase 3: T024/T026 | Install actual MCP transport and revalidate both latches with actual handler/SDK join, correct owner/store/lock order, and exit 1 despite EOF. Existing package-level guarded-session evidence and pre-MCP command evidence cannot prove this. Not verified. |
+| Delivery: T034-T039/T041 | Retained bounds, sustained ingest and store CI evidence; full integrated native Windows/Linux/macOS subprocess matrix including stdin/stdout, stderr and signal cases; wider command regression and delivery gates. Not verified. |
+
+Record each native run's command, date, OS/architecture, counts/skips and direct exit statuses, including expected child exit 1. Do not infer native Linux/macOS evidence from Windows, WSL2 or cross-builds. No new runtime tests were run for the sequencing revision.
 
 ### T010 Result-Encoding Bounds (2026-11-19)
 

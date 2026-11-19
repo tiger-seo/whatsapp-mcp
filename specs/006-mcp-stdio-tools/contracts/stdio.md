@@ -81,3 +81,9 @@ Do not recursively log drops/failures, retry indefinitely or wait for diagnostic
 | Cleanup deadline exceeded | Report failure, retain ownership until actual account/store quiescence; no premature lock release. Existing explicit forced-exit/second-signal behavior remains unchanged. |
 
 The existing owner may already begin retirement when the shared lifecycle context is cancelled. MCP integration must not delay network blocking or move the fence/barrier/library-context order. It must ensure tool work and account work are both quiescent before the store is closed and the lock released.
+
+## Verification Stages
+
+T045/T046 verify the diagnostic shutdown contract with the real command/lifecycle but without an MCP session: retain stdin-discard, install the single stderr pump and Unix signal policy before startup diagnostics, and prove the reporting failure wins normal EOF/signal exit after ordered cleanup. The diagnostic subprocess subset must pass on native Linux and native macOS before T015/T016 close, including blocked/closed stderr, SIGPIPE and first/forced-second signal handling. A Windows reporter helper, WSL2 or a cross-build does not establish either native result.
+
+T024 reuses the same reporting path and revalidates failure and exit ordering with actual guarded SDK handler/session drain. T036-T038 still require the full integrated native matrix (including inherited stdin/stdout, stderr, and signals) and the three-pump bound. The foundation subset is not integrated acceptance.

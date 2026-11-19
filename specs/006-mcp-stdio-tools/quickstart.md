@@ -51,6 +51,10 @@ Use worst-case control/non-ASCII fields to prove preflight before marshaling, st
 
 ## 5. Command Lifetime and Native Pipes
 
+**Before Phase 3 (T045/T046):** After the renewed design gate clears, run the diagnostic-only command tests and native Linux/macOS stderr and signal subset defined in [tasks.md](tasks.md#phase-2-foundational-infrastructure). Use stdin-discard and no SDK session, proving exit 1 after ordered owner/store/lock cleanup on reporting failure, including startup, operation, drain and EOF/first-signal races. These results close the diagnostic foundation; Windows tests, WSL2 and cross-builds cannot establish the required native subset. Use only synthetic temporary data and test-only helpers.
+
+**Integrated acceptance (T024/T026, T036-T038):** Revalidate both diagnostic and store-control shutdown against actual MCP drainage, then run the full native process matrix below. Foundation runs do not replace integrated acceptance.
+
 ```bash
 go test ./cmd/whatsapp-mcp -run 'TestMCP|TestShellIngest|TestLifecycle' -count=3 -timeout 10m -v
 go test ./internal/wa -run 'TestOwnerTerminal|TestQuietOrder|TestSimulatorStopDuringQueuedAppStateFetches' -count=1 -timeout 10m -v

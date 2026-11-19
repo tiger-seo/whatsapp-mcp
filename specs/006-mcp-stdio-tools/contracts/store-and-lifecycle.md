@@ -107,6 +107,8 @@ Preserve latest timestamp/ID tie ordering, chosen-name precedence, phone-over-LI
 
 ## Command Integration
 
+The diagnostic startup and command-latch portions of steps 1 and 4 are a Phase 2 prerequisite (T045/T046), using the existing T015/T016 reporter/platform seams without waiting for those tasks to close. In that slice the existing stdin-discard and T044 store observer remain in place. Prove exit 1 after actual owner/store cleanup and lock release, including a fault discovered during drain and an EOF race. Do not change marker ownership, serve behavior or the retirement order. Phase 3 performs MCP integration and revalidates both failure paths with actual handler/session drainage; it is not a prerequisite for the Phase 2 evidence.
+
 1. Before entering `runShell`, install the stdio-specific nonblocking diagnostic sink and Unix SIGPIPE policy, so startup/owner/lifecycle diagnostics cannot block cleanup or terminate the process. Then retain `runShell` lifecycle setup, exclusive lock, private store open, safe-run-marker check and identity reconciliation. A startup refusal creates no MCP session or account client beyond existing behavior. Do not change serve's logger/signal behavior as an accidental consequence.
 2. In `runStdio`, attach the existing owner and its stop step. Owner Start returns after publishing its generation, while saved-session connection continues asynchronously. Construct MCP against the tool-reader facade; no tool calls the owner.
 3. Replace the old stdin-discard goroutine. There is exactly one protocol stdin consumer. Construct transport from injected command streams, not hard-coded globals; use production process-lifetime pumps for inherited streams and cooperative streams for in-process tests.

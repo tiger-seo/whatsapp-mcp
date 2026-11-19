@@ -118,6 +118,10 @@ See [research.md](research.md), R1-R8. SDK/protocol/pump/DTO decisions remain; R
 - [quickstart.md](quickstart.md): synthetic validation commands and required results. It does not start a real account.
 - [verification.md](verification.md): research/artifact evidence and explicit not-run runtime gates; owner-review table initially empty.
 
+## Implementation Sequence
+
+The [task dependencies](tasks.md#dependencies-and-execution-order) stage diagnostic shutdown separately from MCP integration. After the authorized design commit and current acceptable `owner-judge` design verdict, T045/T046 use the existing reporter and signal seams to verify and wire diagnostic shutdown with stdin-discard intact. Passing command and native Linux/macOS diagnostic evidence closes T015/T016 and the foundation. Phase 3 retains chat registration and T024's MCP transport and actual drain revalidation. The full integrated native process matrix remains T036-T038; no runtime requirement changes.
+
 ## Complexity Tracking
 
 No constitutional deviation requested. The fixed-pump transport is justified by SDK pre-middleware queues and non-interruptible inherited streams; mandatory reporting adds bounded state, not synchronous cleanup I/O. Store isolation adds a tool class to the existing gate, one extra ordinary waiter place while a tool holds a slot, and a -wal/free-space guard; all approved by the owner as prerequisite decisions. General policy profiles, pin/budget changes and a second process/database are not authorized.
