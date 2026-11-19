@@ -4,7 +4,7 @@
 
 See [tasks.md](tasks.md#current-state) for the current implementation status and remaining work. The passing Windows store and focused shutdown runs are recorded under [Runtime Gates](#runtime-gates). Earlier failures and blockers are dated evidence, not current status. The [owner reviews](#owner-reviews) and the binding [isolation amendment](#owner-accepted-amendment-to-the-isolation-policy-2026-11-18) are preserved below.
 
-The T045/T046 sequencing revision is design-only. `owner-judge` reviewed `42827be` and returned `CONCERNS`. The owner decision is pending; no runtime work may start before the design gate clears. The `889ff65` design PASS is historical and does not cover this revision.
+The T045/T046 sequencing revision is design-only. `owner-judge` reviewed `42827be` and returned `CONCERNS`. The design amendment addresses both findings without accepting the earlier verdict, and incorporates the follow-up draft pre-review findings. A current design verdict on the committed amendment is still required; no runtime or CI workflow changes may start before the design gate clears. The `889ff65` design PASS is historical and does not cover this revision.
 
 ## Planning Evidence
 
@@ -49,7 +49,7 @@ T011/T012/T014 and T017/T018 are complete at the foundation boundary. T015/T016 
 
 | Gate | Evidence still required |
 | --- | --- |
-| Foundation: T045/T046, then T015/T016 closure | Intended red command cases, then passing stdio diagnostic-only cases: startup and refusal, failure already latched or raised during operation/drain, EOF and signal races, normal exit 1 after actual ordered owner/store cleanup and lock release, and no wait for diagnostic I/O or marker change. Rerun focused producer/reporter and lifecycle regressions. Record native Linux and macOS blocked/closed stderr, SIGPIPE and first/forced-second signal results for this slice. Not verified. |
+| Foundation: T045/T046, then T015/T016 closure | Intended local red command cases, then passing stdio diagnostic-only cases: startup/refusal and ordinary log-level change on one reporter, timely acknowledgment with clean exit, failure already latched or raised during operation/drain, EOF and signal races, normal exit 1 after actual ordered owner/store cleanup and lock release, and no wait for diagnostic I/O in cancellation or cleanup or change to marker ownership. Rerun focused producer/reporter and lifecycle regressions. Record both focused T046 CI run links and tested commit, date, native OS/architecture, required named cases, counts/skips and test/child exit outcomes for blocked/closed stderr, SIGPIPE and first/forced-second signals. Zero matches and required-case skips fail the gate. Not verified. |
 | Phase 3: T024/T026 | Install actual MCP transport and revalidate both latches with actual handler/SDK join, correct owner/store/lock order, and exit 1 despite EOF. Existing package-level guarded-session evidence and pre-MCP command evidence cannot prove this. Not verified. |
 | Delivery: T034-T039/T041 | Retained bounds, sustained ingest and store CI evidence; full integrated native Windows/Linux/macOS subprocess matrix including stdin/stdout, stderr and signal cases; wider command regression and delivery gates. Not verified. |
 
@@ -620,5 +620,9 @@ The design review of `87c3a11` returned CONCERNS. The owner accepted it without 
 | design | 2026-11-19 | 42827be | CONCERNS | |
 
 The review of `42827be` confirmed the revised dependency order is acyclic and the integrated obligations are unchanged. It found that the current native CI test output does not surface the named diagnostic cases, skips or child exit statuses required to close the foundation. It also noted that the design needs to preserve the configured ordinary log level after config loads without creating a second stderr pump. This was a read-only design review; no runtime or native test evidence was produced.
+
+The [design amendment](tasks.md#diagnostic-command-tests-and-native-evidence-t045t046) assigns the focused native CI step to T046 and the shared ordinary threshold to T016/T046. T045 also covers healthy stderr at finalization and retains the failed-delivery exit precedence. These are planned changes, not test results or a new verdict.
+
+A read-only pre-review of the draft atop `5b14118` also flagged loss of actionable refusal text, an ambiguous forced exit 1, and existing command tests dependent on ordinary stderr. The amendment now requires bounded actionable refusal records, test-only observation of the forced callback and timely acknowledgment after cleanup, and migration of existing assertions to observable owner readiness and cleanup without losing offline, empty-stdout or refusal checks. This pre-review was not a gate verdict; no runtime evidence was produced.
 
 Design reviews are recorded above. The required design review follows task generation; the required code review follows implementation and evidence. A planning conformance table is not either review.

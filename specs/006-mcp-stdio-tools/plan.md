@@ -120,7 +120,7 @@ See [research.md](research.md), R1-R8. SDK/protocol/pump/DTO decisions remain; R
 
 ## Implementation Sequence
 
-The [task dependencies](tasks.md#dependencies-and-execution-order) stage diagnostic shutdown separately from MCP integration. After the authorized design commit and current acceptable `owner-judge` design verdict, T045/T046 use the existing reporter and signal seams to verify and wire diagnostic shutdown with stdin-discard intact. Passing command and native Linux/macOS diagnostic evidence closes T015/T016 and the foundation. Phase 3 retains chat registration and T024's MCP transport and actual drain revalidation. The full integrated native process matrix remains T036-T038; no runtime requirement changes.
+The [task dependencies](tasks.md#dependencies-and-execution-order) stage diagnostic shutdown separately from MCP integration. After the authorized design commit and current acceptable `owner-judge` design verdict, T045/T046 verify and wire diagnostic shutdown with stdin-discard intact. The one reporter applies the resolved ordinary log level in place after config loads. Passing local command tests and the focused native Linux/macOS CI step, with named case and child exit evidence, close T015/T016 and the foundation. Phase 3 retains chat registration and T024's MCP transport and actual drain revalidation. The full integrated native process matrix remains T036-T038.
 
 ## Complexity Tracking
 
