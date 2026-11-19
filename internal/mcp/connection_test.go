@@ -396,6 +396,10 @@ func TestGuardHeldWriteKeepsToolCredit(t *testing.T) {
 }
 
 func TestGuardOfficialInMemory(t *testing.T) {
+	synctest.Test(t, testGuardOfficialInMemory)
+}
+
+func testGuardOfficialInMemory(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	serverTransport, clientTransport := sdk.NewInMemoryTransports()
@@ -418,6 +422,8 @@ func TestGuardOfficialInMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
+		// Delivery to the in-memory client can precede the writer retiring its credit.
+		synctest.Wait()
 		if _, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "unknown", Arguments: map[string]any{}}); err == nil {
 			t.Fatal("unknown tool succeeded")
 		}
