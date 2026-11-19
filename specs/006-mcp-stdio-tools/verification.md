@@ -4,7 +4,7 @@
 
 See [tasks.md](tasks.md#current-state) for the current implementation status and remaining work. The passing Windows store and focused shutdown runs are recorded under [Runtime Gates](#runtime-gates). Earlier failures and blockers are dated evidence, not current status. The [owner reviews](#owner-reviews) and the binding [isolation amendment](#owner-accepted-amendment-to-the-isolation-policy-2026-11-18) are preserved below.
 
-The T045/T046 sequencing revision is design-only. `owner-judge` confirmed at `8594218` that the amendment addresses the diagnostic concerns from `42827be` and the draft pre-review, but returned `BLOCK` on the one-batch WAL ceiling. The revised transaction-fence design specifies the writer interception point, fresh tool-only disk check, and wait budget; it has not been reviewed or implemented. No runtime or CI workflow changes may start before a current review clears the gate. The `889ff65` design PASS is historical and does not cover this revision.
+The T045/T046 sequencing revision is design-only. The fresh `owner-judge` review at `7d4336b` returned `PASS`: the writer-connector fence resolves the WAL ceiling blocker from `8594218`, and the diagnostic dependency order and native gates remain intact. This clears the design review gate only. The revised fence, diagnostic command wiring, and their native and integrated evidence are still pending.
 
 ## Planning Evidence
 
@@ -631,6 +631,7 @@ After the drain failure latches, the next writer-pool calls must fail without wa
 | design | 2026-11-19 | 889ff65 | PASS | |
 | design | 2026-11-19 | 42827be | CONCERNS | |
 | design | 2026-11-19 | 8594218 | BLOCK | |
+| design | 2026-11-19 | 7d4336b | PASS | |
 
 The review of `42827be` confirmed the revised dependency order is acyclic and the integrated obligations are unchanged. It found that the current native CI test output does not surface the named diagnostic cases, skips or child exit statuses required to close the foundation. It also noted that the design needs to preserve the configured ordinary log level after config loads without creating a second stderr pump. This was a read-only design review; no runtime or native test evidence was produced.
 
@@ -639,5 +640,7 @@ The [design amendment](tasks.md#diagnostic-command-tests-and-native-evidence-t04
 A read-only pre-review of the draft atop `5b14118` also flagged loss of actionable refusal text, an ambiguous forced exit 1, and existing command tests dependent on ordinary stderr. The amendment now requires bounded actionable refusal records, test-only observation of the forced callback and timely acknowledgment after cleanup, and migration of existing assertions to observable owner readiness and cleanup without losing offline, empty-stdout or refusal checks. This pre-review was not a gate verdict; no runtime evidence was produced.
 
 The independent design review of `8594218` used GPT-6.2 Sol with High reasoning and the repository `owner-judge` rubric. It confirmed that the diagnostic amendments preserve the acyclic task order and the native and integrated evidence gates. Its high-severity finding is in `contracts/store-and-lifecycle.md` section 5 and T035: the WAL guard in `internal/store/ops.go` checks size after commit and `internal/store/tool_reader.go` requests cancellation, but another batch can commit before the tool snapshot actually returns. A held snapshot can therefore pin a WAL larger than the promised 128 MiB plus one batch. Existing tests do not establish the bound for that schedule. Under FR-017 and Principle V, a revised mechanism must account for writes until actual snapshot return without weakening ingest or releasing a lease early. This is a source-derived counterexample, not an observed runtime failure. The review ran no runtime tests and produced no platform evidence.
+
+The independent design review of `7d4336b` used GPT-6.2 Sol with High reasoning and the repository `owner-judge` rubric. It confirmed that the serialized handoff prevents the second writer from entering SQLite while the snapshot drains, including across outer transactions in one device lease. It also confirmed the fail-fast rule after a latch, retained accounting, and unchanged diagnostic/native gates. The only non-blocking note is to record WAL-index sidecar (`-shm`) allocation separately in T035: the 128 MiB marginal retention argument applies to `-wal`, and the 512 MiB arithmetic is not a guaranteed filesystem floor. The review ran no runtime tests, builds or CI and produced no platform evidence.
 
 Design reviews are recorded above. The required design review follows task generation; the required code review follows implementation and evidence. A planning conformance table is not either review.
