@@ -2,13 +2,7 @@
 
 ## Current State
 
-2026-11-18: T001-T003, T006-T009 and T013 are complete; the foundation is in progress. The SDK dependency was added and reviewed, and synthetic test harnesses were added; no MCP runtime feature or account action has been completed. T001's spike and isolation policy are recorded in contracts/store-and-lifecycle.md; the owner accepted the second design review's CONCERNS with the binding amendment below. Earlier sections below are dated evidence; where they say BLOCKED or OPEN they describe the state at their date.
-
-2026-11-19 follow-up: T004/T005 remain unchecked. The Windows store-tool group passes (44 parent tests, 74 subtests, zero skips), but the full store suite does not pass and command observer/unsuccessful-shutdown evidence is still absent (now assigned to T043/T044, split from T024). New source-identity checks, actual first-step cancellation and finite maximum-byte ingest evidence are recorded below. Native Linux/macOS execution remains not verified; no account, dependency pin, approved budget or owner-review verdict changed.
-
-2026-11-19 task split: at the user's request, the store-control-failure observer was extracted from T024 into unchecked foundation tasks T043 (failing command tests) and T044 (observer implementation/regressions). They depend on the existing T003 harness and T004/T005 store latch/actual-drain seams, not completed T004/T005 or later MCP/tool/reporter integration. Their passing evidence is required to complete T004/T005; T024 later preserves/revalidates the observer with actual MCP drainage. No runtime code or completion marker changed in this split. Existing test results above remain historical evidence, not acceptance of these new tasks. The revised task sequencing and contract reference change covered design artifacts, so the prior design verdict is stale and must be renewed on a committed revised design before implementation. The user's request authorizes this documentation split, not a review waiver, commit or account action.
-
-**Resume checkpoint:** 44 tasks total, eight checked and 36 unchecked; T043/T044 are not started, no production tools are registered and stdio's stdin-discard path is unchanged. Next: obtain authorization for the revised-design commit and renew its owner-judge review, then execute T043 before T044 and reassess T004/T005. Full MCP integration remains T024 after its original story/foundation prerequisites. Vet, formatting, the MCP package and five-target builds passed, but the last complete store run exited 1; the later focused correction does not replace a passing full run. No new runtime tests were run for this Current State handoff, and no commits or account actions were performed.
+See [tasks.md](tasks.md#current-state) for the current implementation status and remaining work. The passing Windows store and focused shutdown runs are recorded under [Runtime Gates](#runtime-gates). Earlier failures and blockers are dated evidence, not current status. The [owner reviews](#owner-reviews) and the binding [isolation amendment](#owner-accepted-amendment-to-the-isolation-policy-2026-11-18) are preserved below.
 
 ## Planning Evidence
 
@@ -30,6 +24,14 @@
 
 ## Runtime Gates
 
+### T010 Result-Encoding Bounds (2026-11-19)
+
+Native Windows/amd64, `CGO_ENABLED=0`, SDK v1.8.0. `go test ./internal/mcp -run '^TestResultNearLimitPassesFramePreflight$' -count=1` exited 1 before the fix: a valid 5,900,806-byte SDK frame was rejected because the framer charged already-encoded raw JSON twice. `go test -p 1 ./internal/mcp -count=1 -json -timeout 5m` on the final patch exited 0 in 87.645 s: 125 parent tests, 152 subtests, zero skips. This includes T009, the near-limit write with newline, and raw-frame preflight boundaries for HTML and Unicode line separators. The intermediate package run exited 1 on the former factor-two test boundary (123 parent and 152 subtest passes, zero skips); the updated boundary keeps the 8 MiB cap and envelope reserve. `go vet ./...`, `gofmt -l .`, `git diff --check` and LF checks passed. `go build -o D:\tmp\kilo\t010-<GOOS>-<GOARCH> ./cmd/whatsapp-mcp` exited 0 for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64 (the first loop timed out before the last result, which was rerun separately). Cross-builds are not native runtime coverage.
+
+**Allocation-bound audit:** The DTO preflight charges fields, rows, escaping and fixed keys before marshaling, then checks the actual structured length. The ASCII renderer checks exact size before allocating one string backing buffer. Accepted input caps both representations at 2 MiB each. `TextContent.MarshalJSON` escapes quotes/backslashes at most twice in the ASCII text (HTML and controls were already escaped), so its encoded payload is at most 4 MiB plus fixed keys. `CallToolResult.MarshalJSON` embeds structured content as raw JSON; its inner buffer and the outer `NewResponse`/`marshalToRaw` copies each encode at most 6 MiB plus fixed fields. `EncodeMessage` embeds the raw result again, not as a quoted string; the framer reserves raw bytes, remaining escape expansion, ID and envelope before encoding, then checks actual bytes including the newline before write. This route requires the untyped SDK `Server.AddTool` handler with a pre-encoded DTO result and no added result metadata; the typed wrapper's additional marshal and schema round trip are not covered. The one-tool credit and writer serialize in-flight outputs; later integration must preserve those assumptions.
+
+The near-limit benchmark sample had structured/text lengths of 2,080,768 bytes each, SDK result length 4,162,078 bytes and frame length 4,162,124 bytes including newline. Its measured encoding chain used 30,568,820 bytes/op and 39 allocations/op; rejected preflight used 392 bytes/op and six allocations/op. These are sample allocation totals, not peak live heap. The source audit bounds result-dependent encoded copies; buffer capacity rounding, `encoding/json` pool retention and feature-wide peak heap with other live work are not measured bounds here. T034 covers retained-state delivery evidence; the store-to-DTO story mapping is outside T010.
+
 ### T004/T005 Completion (2026-11-19)
 
 Native Windows/amd64, SQLite v1.62.0, `CGO_ENABLED=0`. The complete `go test -p 1 ./internal/store -parallel 1 -count=1 -json -timeout 30m` run exited 0 in 735.829 s: 322 parent tests, 305 subtests, 11 skips (child-only entries, opt-in test, or unavailable Windows symlink privilege), zero failures. Query plans, scale, mapped identity ceilings, device priority and WAL readmission passed. Both per-contact memory children passed with unchanged limits: `LastInteraction` used 93,592 bytes in 2.0008 ms (even) and 942.6 us (phone). `-parallel 1` serialized parallel test fixtures only; the concurrency schedules within the tests still ran.
@@ -49,7 +51,7 @@ Native Windows/amd64, SQLite v1.62.0, `CGO_ENABLED=0`, synthetic data only. The 
 | `go test -p 1 ./internal/store -count=1 -json -timeout 30m` (three runs) | All exited 1. The earlier T043/T044 checkpoint run finished with 319 parent and 279 child passes, 11 skips, and one `TestQueryPlans` fixture-seeding failure (809.953 s). After fixture batching: 320 parent and 305 child passes, 11 skips, one `TestQueryScale` full-size text-search deadline (859.491 s). On the final patch: 320 parent and 304 child passes, 11 skips and two failure events for `TestPerContactMemory/even` and its parent (578.602 s); `TestQueryPlans`, `TestQueryScale`, the mapped identity cases and WAL readmission all passed. The captured final output did not retain the memory child's detailed assertion. |
 | `go vet ./...`; `git diff --check`; `git ls-files --eol` on changed tracked files | All exit 0; no vet findings, whitespace errors or CRLF in the changed tracked files. |
 
-No production timing or resource limit was relaxed. No full-suite pass or native Linux/macOS acceptance is claimed.
+These earlier failures precede the passing serialized Windows run above. No production timing or resource limit was relaxed.
 
 ### T043/T044 Stdio Store Failure (2026-11-19)
 
@@ -61,15 +63,13 @@ After the observer, `go test -p 1 ./cmd/whatsapp-mcp -run '^(TestMCPStoreFailure
 
 The broader `go test -p 1 ./cmd/whatsapp-mcp -run 'TestMCPStoreFailureShutdown|TestMCPHarness|TestShell|TestStopSteps|Test.*Lifecycle|Test.*Lock' -count=3 -v -timeout 5m` exited 1: one saved-session `serve` case reported `work_running` on quiet stop (later repetitions of that case passed), then the overall five-minute timeout fired during another `serve` case. The new observer cases passed on all three repetitions. This broader run is not a passing package regression.
 
-The full v1.62.0 store run (`go test -p 1 ./internal/store -count=1 -json -timeout 30m`) reported `TestQueryPlans` failing at `bench_test.go:342` with `seeding: context deadline exceeded`. The run was still in progress at the checkpoint; no final exit code or counts are claimed here. The failure occurred before the plan assertions. No test or production limit was changed to get a pass.
-
 ### Post-rebase SQLite Check (2026-11-19)
 
 On rebased tip `ca86799` with the existing uncommitted store edits, native Windows/amd64 and `CGO_ENABLED=0`, `go test -p 1 ./internal/store -run '^TestTool' -count=1 -json -timeout 5m` ran against `modernc.org/sqlite v1.62.0` and exited 0 in 35.623 s: 44 parent tests and 74 subtests passed, with zero skips or failures. The finite ingest fixture completed 120 light writes and twelve 64-message maximum-byte batches without ingest errors. The maximum-byte run observed 16,332 successful reads, 41,374 busy refusals, zero cancelled reads and a sampled post-write WAL peak of 67,984,152 bytes.
 
 On the same platform, `CGO_ENABLED=0 go run D:/tmp/kilo/u1-spike/cancel-wal.go` exited 0 (one synthetic scenario, zero skips). While a cancelled later `Next` was held in a scalar callback, the writer completed 1,000 inserts; the passive checkpoint reported 336 log frames and zero checkpointed frames. After releasing the callback, closing rows and ending the transaction, the truncate checkpoint reported zero WAL bytes. In v1.62.0, `stmt.go` and `sqlite.go` still scope the query's interrupt/progress handler to the initial query call; `rows.go` adds context-aware lock waits on later steps, not a general later-step interruption mechanism.
 
-These reruns support the existing first-step design but do not revalidate the full T001 spike, which used v1.61.0, or establish full-store, command-shutdown or native Linux/macOS acceptance. The reconciled design needs renewed review. T004/T005 remain unchecked.
+These reruns supported the first-step design but did not repeat the full T001 spike, which used v1.61.0. See the completion and shutdown entries above for later Windows evidence and the review table for the renewed design verdict.
 
 ### T004/T005 Store Follow-up (2026-11-18/19)
 
@@ -99,7 +99,7 @@ The additional tests exposed missing source-byte checks for latest-message IDs/s
 
 Read-only inspection of the non-`Store.read` pool users found their reader declarations present (`RunGuard`, recovery identity, `LoadDevice`, and recovery methods inside device leases), including nested reader accounting without a second active lease, and post-write WAL checks on the inspected device/run-marker paths. This is static evidence, not the missing per-path stress matrix. The Go ignore rules were checked and `/vendor/` added. Direct inspection of the ignored `.specify/extensions.yml` found only optional before/after implementation commit hooks; neither was executed. The initial glob did not find this ignored file, so pre-hook discovery was late; no mandatory implementation hook was registered or missed.
 
-**Completion boundary:** T004 still lacks its required command-level unsuccessful shutdown on `tool_store_not_quiescent`, assigned to T024, and broader sustained/resource/native-platform evidence remains open. T005 requires T004 to pass, so neither task is ticked on the strength of the focused Windows pass. The full-suite timing/deadline failures were not hidden by raising limits or skipping tests. No design/control relaxation is proposed; the tasks' Current State records the exact resume point.
+The focused Windows pass at this checkpoint was not sufficient to close T004/T005. The later completion and T043/T044 shutdown evidence are recorded above; sustained ingest and native Linux/macOS acceptance remain open.
 
 ### Resume Check (2026-11-18)
 
