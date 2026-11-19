@@ -35,6 +35,12 @@ func (s *Store) SearchContacts(ctx context.Context, query string, p Page) ([]Con
 
 	// The map is joined on its own key, so each LID entry is one index search. The ?1 and ?2 values are the folded
 	// text and the digits.
+	const contactSource = `
+		FROM whatsmeow_contacts c
+		LEFT JOIN whatsmeow_lid_map m
+		  ON m.lid = CASE WHEN octet_length(c.their_jid) <= 256 AND c.their_jid LIKE '%@lid'
+		                  THEN substr(c.their_jid, 1, length(c.their_jid) - 4) END
+		WHERE c.our_jid = ` + currentDevice + ` AND c.their_jid NOT LIKE '%@g.us'`
 	const entries = `
 		SELECT
 		  CASE WHEN c.their_jid LIKE '%@lid' THEN coalesce(m.pn || '@s.whatsapp.net', c.their_jid) ELSE c.their_jid END AS person,
@@ -47,11 +53,7 @@ func (s *Store) SearchContacts(ctx context.Context, query string, p Page) ([]Con
 		   instr(mcp_fold(coalesce(c.push_name, '')), ?1) > 0 OR instr(mcp_fold(coalesce(c.business_name, '')), ?1) > 0 OR
 		   (?2 <> '' AND instr(CASE WHEN c.their_jid LIKE '%@lid' THEN coalesce(m.pn, '')
 		       WHEN c.their_jid LIKE '%@s.whatsapp.net' THEN substr(c.their_jid, 1, instr(c.their_jid, '@') - 1)
-		       ELSE '' END, ?2) > 0)) AS hit
-		FROM whatsmeow_contacts c
-		LEFT JOIN whatsmeow_lid_map m
-		  ON c.their_jid LIKE '%@lid' AND m.lid = substr(c.their_jid, 1, length(c.their_jid) - 4)
-		WHERE c.our_jid = ` + currentDevice + ` AND c.their_jid NOT LIKE '%@g.us'`
+		       ELSE '' END, ?2) > 0)) AS hit` + contactSource
 
 	const people = `
 		SELECT person, max(phone) AS phone,
@@ -62,16 +64,17 @@ func (s *Store) SearchContacts(ctx context.Context, query string, p Page) ([]Con
 
 	const bounded = `WITH pre AS (
 		SELECT count(*) AS n, coalesce(sum(nb), 0) AS bytes, coalesce(max(fb), 0) AS longest,
-		       coalesce(sum(ab), 0) AS allb FROM (
+		       coalesce(sum(ab), 0) AS allb, coalesce(max(jb), 0) AS longest_jid FROM (
 		  SELECT coalesce(nullif(octet_length(c.full_name), 0), nullif(octet_length(c.first_name), 0),
 		                  nullif(octet_length(c.push_name), 0), nullif(octet_length(c.business_name), 0), 0) AS nb,
 		         coalesce(octet_length(c.full_name), 0) + coalesce(octet_length(c.first_name), 0) +
 		         coalesce(octet_length(c.push_name), 0) + coalesce(octet_length(c.business_name), 0) AS ab,
 		         max(coalesce(octet_length(c.full_name), 0), coalesce(octet_length(c.first_name), 0),
-		             coalesce(octet_length(c.push_name), 0), coalesce(octet_length(c.business_name), 0)) AS fb
-		  FROM whatsmeow_contacts c WHERE c.our_jid = ` + currentDevice + ` AND c.their_jid NOT LIKE '%@g.us' LIMIT 100001))
+		             coalesce(octet_length(c.push_name), 0), coalesce(octet_length(c.business_name), 0)) AS fb,
+		         max(octet_length(c.their_jid), coalesce(octet_length(m.pn) + length('@s.whatsapp.net'), 0)) AS jb` +
+		contactSource + ` LIMIT 100001))
 		SELECT n, bytes, longest, allb,
-		  CASE WHEN n <= 100000 AND bytes <= 4194304 AND longest <= 1024 AND allb <= 16777216 THEN
+		  CASE WHEN n <= 100000 AND bytes <= 4194304 AND longest <= 1024 AND allb <= 16777216 AND longest_jid <= 256 THEN
 		    (SELECT json_group_array(json_array(person, phone, hex(CAST(name AS BLOB))) ORDER BY mcp_fold(name), person)
 		     FROM (SELECT person, phone, name FROM (` + people + `) ORDER BY mcp_fold(name), person LIMIT ?3 OFFSET ?4))
 		  END FROM pre`

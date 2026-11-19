@@ -30,6 +30,39 @@
 
 ## Runtime Gates
 
+### T004/T005 Completion (2026-11-19)
+
+Native Windows/amd64, SQLite v1.62.0, `CGO_ENABLED=0`. The complete `go test -p 1 ./internal/store -parallel 1 -count=1 -json -timeout 30m` run exited 0 in 735.829 s: 322 parent tests, 305 subtests, 11 skips (child-only entries, opt-in test, or unavailable Windows symlink privilege), zero failures. Query plans, scale, mapped identity ceilings, device priority and WAL readmission passed. Both per-contact memory children passed with unchanged limits: `LastInteraction` used 93,592 bytes in 2.0008 ms (even) and 942.6 us (phone). `-parallel 1` serialized parallel test fixtures only; the concurrency schedules within the tests still ran.
+
+`go test -p 1 ./internal/store -run '^TestPerContactMemory$/^even$' -count=1 -v -timeout 8m` also passed (one parent, one subtest, one child execution, zero skips; 144.636 s). `go test -p 1 ./internal/store -run '^TestToolGatePrioritizesWaitingDevice$' -count=10 -v -timeout 2m` passed ten times, zero skips, in 3.315 s. Earlier drafts of the new schedule failed because the fixture used an unguarded seed device; they are not evidence of a production admission failure. The passing schedule uses a guarded device write and parks it after waiter registration, outside the gate mutex. It asserts cancellation of the active tool, refusal with one free slot and a waiting device, no added tool waiters, and readmission after the device completes. T043/T044 separately supply the command failure and drain evidence. This is not a feature-wide or native Linux/macOS acceptance result.
+
+### T004/T005 Mapped Identities and Regression Runs (2026-11-19)
+
+Native Windows/amd64, SQLite v1.62.0, `CGO_ENABLED=0`, synthetic data only. The new mapping test uses both alias directions. The phone-mapping case also asserts zero contact folds. The guard counts the domain suffix in the JID ceiling and does not slice a rejected source contact identity. Fixture batching preserves the plan data and assertions. The pressure test's retry window covers the existing checkpoint cooldown and asserts successful admission and WAL recovery, not a new production deadline.
+
+| Command | Direct result |
+| --- | --- |
+| `go test -p 1 ./internal/store -run '^TestToolMappedIdentitySourceCeiling$' -count=1 -v -timeout 1m` | Exit 1 before the fix: both subtests failed, no skips. Search accepted the oversized mapped phone and folded six values. |
+| `go test -p 1 ./internal/store -run '^(TestToolMappedIdentitySourceCeiling|TestToolContactAggregatePlan|TestToolDirectChatPointPlans|TestToolFiveReadsExpectedResults|TestToolContactCeilingsZeroFolds)$' -count=1 -v -timeout 2m` | Exit 0 after the source guards: five tests and six subtests passed, no skips; 6.244 s. |
+| `go test -p 1 ./internal/store -run '^(TestTool|TestSearchContacts|TestDirectChat|TestContactChats)' -count=1 -json -timeout 5m` | Exit 1 while the initial full rerun was also running: 50 parent and 77 child passes, one helper skip. The at-ceiling contact case hit a deadline and the maximum-batch case timed out waiting for WAL recovery before the retry fix. |
+| `go test -p 1 ./internal/store -run '^TestTool' -count=1 -timeout 5m` | Exit 0 on the final patch, 34.866 s. Nonverbose output did not report counts. |
+| `go test -p 1 ./internal/store -count=1 -json -timeout 30m` (three runs) | All exited 1. The earlier T043/T044 checkpoint run finished with 319 parent and 279 child passes, 11 skips, and one `TestQueryPlans` fixture-seeding failure (809.953 s). After fixture batching: 320 parent and 305 child passes, 11 skips, one `TestQueryScale` full-size text-search deadline (859.491 s). On the final patch: 320 parent and 304 child passes, 11 skips and two failure events for `TestPerContactMemory/even` and its parent (578.602 s); `TestQueryPlans`, `TestQueryScale`, the mapped identity cases and WAL readmission all passed. The captured final output did not retain the memory child's detailed assertion. |
+| `go vet ./...`; `git diff --check`; `git ls-files --eol` on changed tracked files | All exit 0; no vet findings, whitespace errors or CRLF in the changed tracked files. |
+
+No production timing or resource limit was relaxed. No full-suite pass or native Linux/macOS acceptance is claimed.
+
+### T043/T044 Stdio Store Failure (2026-11-19)
+
+Native Windows/amd64, `CGO_ENABLED=0`, SQLite v1.62.0; temporary stores and fake owners only for the new tests. `go test -p 1 ./cmd/whatsapp-mcp -run '^TestMCPStoreFailureShutdown$' -count=1 -v -timeout 90s` exited 1 before the observer: six subtests failed and the serve control passed, with zero skips. An earlier tool invocation timed out before yielding a test result.
+
+After the observer, `go test -p 1 ./cmd/whatsapp-mcp -run '^(TestMCPStoreFailureShutdown|TestMCPHarnessHeldOwnerAndCooperativeStreams|TestShellIngestFailureStopsTheCommand|TestShellLifecycleStopWithoutTerminalSignalIsUnchanged|TestShellIngestFailureAfterPairLink|TestStopStepsInReverseOrder|TestStoreNotQuiescentWaitsBeforeLock|TestStoreCloseErrorAfterDrainReleasesLock)$' -count=3 -v -timeout 2m` exited 0 (24 parent and 27 child executions, zero skips; 30.702 s). This pairs injected command-latch and real lock/owner ordering tests with store-side `TestToolFacadeControlFailureRetainsLease` and `TestToolFacadeRetainsLeaseDuringConnectionCleanup` from the focused v1.62.0 store run below. An injected latch does not prove SQLite cancellation. The command observer joins before return and checks the latch after cleanup, without installing MCP or the diagnostic reporter.
+
+`go test -p 1 ./internal/wa -run '^(TestQuietOrder|TestOwnerTerminal)' -count=1 -v -timeout 4m` exited 0 (two owner terminal tests, zero skips; 0.668 s). `go test -p 1 ./internal/wa -run '^(TestRetirementOrderOfAConnectedRun|TestRetirementOrderCheckerRejectsEveryViolation|TestRetirementOrderCheckerRejectsIngestStepsOutOfPlace)$' -count=1 -v -timeout 2m` exited 0 (three tests, zero skips; 0.842 s). `go vet ./cmd/whatsapp-mcp` passed.
+
+The broader `go test -p 1 ./cmd/whatsapp-mcp -run 'TestMCPStoreFailureShutdown|TestMCPHarness|TestShell|TestStopSteps|Test.*Lifecycle|Test.*Lock' -count=3 -v -timeout 5m` exited 1: one saved-session `serve` case reported `work_running` on quiet stop (later repetitions of that case passed), then the overall five-minute timeout fired during another `serve` case. The new observer cases passed on all three repetitions. This broader run is not a passing package regression.
+
+The full v1.62.0 store run (`go test -p 1 ./internal/store -count=1 -json -timeout 30m`) reported `TestQueryPlans` failing at `bench_test.go:342` with `seeding: context deadline exceeded`. The run was still in progress at the checkpoint; no final exit code or counts are claimed here. The failure occurred before the plan assertions. No test or production limit was changed to get a pass.
+
 ### Post-rebase SQLite Check (2026-11-19)
 
 On rebased tip `ca86799` with the existing uncommitted store edits, native Windows/amd64 and `CGO_ENABLED=0`, `go test -p 1 ./internal/store -run '^TestTool' -count=1 -json -timeout 5m` ran against `modernc.org/sqlite v1.62.0` and exited 0 in 35.623 s: 44 parent tests and 74 subtests passed, with zero skips or failures. The finite ingest fixture completed 120 light writes and twelve 64-message maximum-byte batches without ingest errors. The maximum-byte run observed 16,332 successful reads, 41,374 busy refusals, zero cancelled reads and a sampled post-write WAL peak of 67,984,152 bytes.

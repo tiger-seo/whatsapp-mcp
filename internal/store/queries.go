@@ -206,6 +206,8 @@ func getMessage(ctx context.Context, q querier, chatJID, id string) (MessageView
 
 // latestMessage is the newest message of a chat, or nil.
 func latestMessage(ctx context.Context, q querier, chatJID string) (*MessageView, error) {
+	badIdentity := `(octet_length(m.id) > 256 OR octet_length(m.chat_jid) > 256 OR ` +
+		`octet_length(m.sender_jid) > 256 OR octet_length(m.sender_phone) > 256)`
 	badNames := `(EXISTS (SELECT 1 FROM whatsmeow_contacts WHERE our_jid = ` + currentDevice +
 		` AND (their_jid = m.sender_jid OR their_jid = (` + counterpartJID + `)) AND (` +
 		`coalesce(octet_length(full_name), 0) > 1024 OR coalesce(octet_length(first_name), 0) > 1024 OR ` +
@@ -213,20 +215,27 @@ func latestMessage(ctx context.Context, q querier, chatJID string) (*MessageView
 		`EXISTS (SELECT 1 FROM chats WHERE jid = m.sender_jid AND name_quality >= 2 AND octet_length(name) > 1024))`
 	guarded := strings.Replace(messageSelect, `CASE WHEN m.from_me = 1 THEN '' ELSE coalesce(`,
 		`CASE WHEN m.from_me = 1 OR `+badNames+` THEN '' ELSE coalesce(`, 1)
+	guarded = strings.Replace(guarded, `SELECT m.id, m.chat_jid, c.name, m.sender_jid, m.sender_phone, `,
+		`SELECT CASE WHEN octet_length(m.id) <= 256 THEN m.id ELSE '' END, `+
+			`CASE WHEN octet_length(m.chat_jid) <= 256 THEN m.chat_jid ELSE '' END, `+
+			`CASE WHEN octet_length(c.name) <= 1024 THEN c.name ELSE '' END, `+
+			`CASE WHEN octet_length(m.sender_jid) <= 256 THEN m.sender_jid ELSE '' END, `+
+			`CASE WHEN octet_length(m.sender_phone) <= 256 THEN m.sender_phone ELSE '' END, `, 1)
 	guarded = strings.Replace(guarded, `m.text, m.caption, m.media_type `,
 		`CASE WHEN octet_length(m.text) <= 262144 THEN m.text END, `+
 			`CASE WHEN octet_length(m.caption) <= 262144 THEN m.caption END, `+
 			`m.media_type, octet_length(m.text), octet_length(m.caption), `+
-			`CASE WHEN m.from_me = 1 THEN 0 ELSE `+badNames+` END `, 1)
+			`CASE WHEN m.from_me = 1 THEN 0 ELSE `+badNames+` END OR octet_length(c.name) > 1024, `+
+			badIdentity+` `, 1)
 	var v MessageView
 	var ms int64
 	var fromMe int
 	var text, caption sql.NullString
 	var textBytes, captionBytes int64
-	var oversizedName bool
+	var oversizedName, oversizedIdentity bool
 	err := q.QueryRowContext(ctx, guarded+`WHERE m.chat_jid = ? ORDER BY m.time DESC, m.id DESC LIMIT 1`, chatJID).
 		Scan(&v.ID, &v.ChatJID, &v.ChatName, &v.SenderJID, &v.SenderPhone, &v.SenderName,
-			&ms, &fromMe, &text, &caption, &v.MediaType, &textBytes, &captionBytes, &oversizedName)
+			&ms, &fromMe, &text, &caption, &v.MediaType, &textBytes, &captionBytes, &oversizedName, &oversizedIdentity)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -238,6 +247,9 @@ func latestMessage(ctx context.Context, q querier, chatJID string) (*MessageView
 	}
 	if oversizedName {
 		return nil, limitErr("name bytes")
+	}
+	if oversizedIdentity {
+		return nil, limitErr("identity bytes")
 	}
 	v.Text, v.Caption = text.String, caption.String
 	v.Time, v.FromMe = time.UnixMilli(ms).UTC(), fromMe == 1
@@ -313,7 +325,7 @@ func (s *Store) ListChats(ctx context.Context, query string, sort ChatSort, with
 	if sort == ByName {
 		first, rest = `name_quality = 0`, `name_fold, jid`
 	}
-	text := `SELECT count(*), json_group_array(json_array(hex(CAST(jid AS BLOB)), ` +
+	text := `SELECT count(*), json_group_array(json_array(CASE WHEN octet_length(jid) <= 256 THEN hex(CAST(jid AS BLOB)) END, ` +
 		`CASE WHEN octet_length(name) <= 1024 THEN hex(CAST(name AS BLOB)) END, last_message_time) ` +
 		`ORDER BY k0, ` + rest + `), ` +
 		`CASE WHEN count(*) < ?2 THEN (SELECT count(*) FROM (SELECT jid FROM chats LIMIT 100201)) ELSE 0 END ` +
@@ -340,7 +352,7 @@ func (s *Store) ListChats(ctx context.Context, query string, sort ChatSort, with
 			if len(row) != 3 {
 				return ioError("chat_result")
 			}
-			var jidHex string
+			var jidHex *string
 			var nameHex *string
 			var last *int64
 			if json.Unmarshal(row[0], &jidHex) != nil || json.Unmarshal(row[1], &nameHex) != nil || json.Unmarshal(row[2], &last) != nil {
@@ -349,7 +361,10 @@ func (s *Store) ListChats(ctx context.Context, query string, sort ChatSort, with
 			if nameHex == nil {
 				return limitErr("name bytes")
 			}
-			jid, err := hex.DecodeString(jidHex)
+			if jidHex == nil {
+				return limitErr("identity bytes")
+			}
+			jid, err := hex.DecodeString(*jidHex)
 			if err != nil {
 				return ioError("chat_result")
 			}
@@ -452,7 +467,7 @@ func (s *Store) ContactChats(ctx context.Context, contact string, p Page) ([]Cha
 		if err != nil {
 			return err
 		}
-		const keySQL = `SELECT count(*), json_group_array(hex(CAST(jid AS BLOB)) ` +
+		const keySQL = `SELECT count(*), json_group_array(CASE WHEN octet_length(jid) <= 256 THEN hex(CAST(jid AS BLOB)) END ` +
 			`ORDER BY k0, last_message_time DESC, jid), ` +
 			`CASE WHEN count(*) < ?5 THEN (SELECT count(*) FROM (SELECT jid FROM chats LIMIT 100201)) ELSE 0 END ` +
 			`FROM (SELECT jid, last_message_time, k0 FROM (` +
@@ -472,7 +487,7 @@ func (s *Store) ContactChats(ctx context.Context, contact string, p Page) ([]Cha
 		if count < p.Limit && total > maxOffset+maxListSize {
 			return limitErr("chat walk")
 		}
-		var encoded []string
+		var encoded []*string
 		if err := json.Unmarshal([]byte(data), &encoded); err != nil {
 			return ioError("chat_result")
 		}
@@ -480,7 +495,10 @@ func (s *Store) ContactChats(ctx context.Context, contact string, p Page) ([]Cha
 		// latest message has been held.
 		budget := &resultBudget{}
 		for _, value := range encoded {
-			jid, err := hex.DecodeString(value)
+			if value == nil {
+				return limitErr("identity bytes")
+			}
+			jid, err := hex.DecodeString(*value)
 			if err != nil {
 				return ioError("chat_result")
 			}
@@ -514,17 +532,25 @@ func resolveContact(ctx context.Context, q querier, s string) (contactIDs, error
 		return contactIDs{}, err
 	}
 	var other sql.NullString
+	var oversized bool
 	if phone != "" {
 		err = q.QueryRowContext(ctx,
-			`SELECT lid FROM whatsmeow_lid_map WHERE pn = ? AND EXISTS (SELECT 1 FROM whatsmeow_device)`, phone).Scan(&other)
+			`SELECT CASE WHEN octet_length(lid) <= ?2 THEN lid END, octet_length(lid) > ?2
+			FROM whatsmeow_lid_map WHERE pn = ?1 AND EXISTS (SELECT 1 FROM whatsmeow_device)`,
+			phone, maxJIDBytes-len("@"+serverLID)).Scan(&other, &oversized)
 		lid = other.String
 	} else {
 		err = q.QueryRowContext(ctx,
-			`SELECT pn FROM whatsmeow_lid_map WHERE lid = ? AND EXISTS (SELECT 1 FROM whatsmeow_device)`, lid).Scan(&other)
+			`SELECT CASE WHEN octet_length(pn) <= ?2 THEN pn END, octet_length(pn) > ?2
+			FROM whatsmeow_lid_map WHERE lid = ?1 AND EXISTS (SELECT 1 FROM whatsmeow_device)`,
+			lid, maxJIDBytes-len("@"+serverUser)).Scan(&other, &oversized)
 		phone = other.String
 	}
 	if err != nil && err != sql.ErrNoRows {
 		return contactIDs{}, err
+	}
+	if oversized {
+		return contactIDs{}, limitErr("mapped identity bytes")
 	}
 	var ids contactIDs
 	if phone != "" {

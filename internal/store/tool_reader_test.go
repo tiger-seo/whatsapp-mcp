@@ -22,6 +22,7 @@ import (
 var testContactFoldCalls atomic.Int64
 var registerTestContactFold sync.Once
 var registerTestContactFoldErr error
+var testContactFoldCancel context.CancelFunc
 var registerTestSQLiteStep sync.Once
 var registerTestSQLiteStepErr error
 var testSQLiteStepEntered, testSQLiteStepRelease chan struct{}
@@ -89,10 +90,14 @@ func (q countingFoldQuerier) QueryRowContext(ctx context.Context, query string, 
 	return q.querier.QueryRowContext(ctx, strings.ReplaceAll(query, "mcp_fold(", "test_contact_fold("), args...)
 }
 
-func TestToolContactCeilingsZeroFolds(t *testing.T) {
+func registerContactFold(t *testing.T) {
+	t.Helper()
 	registerTestContactFold.Do(func() {
 		registerTestContactFoldErr = sqlite.RegisterDeterministicScalarFunction("test_contact_fold", 1, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
 			testContactFoldCalls.Add(1)
+			if testContactFoldCancel != nil {
+				testContactFoldCancel()
+			}
 			switch v := args[0].(type) {
 			case string:
 				return fold(v), nil
@@ -106,6 +111,10 @@ func TestToolContactCeilingsZeroFolds(t *testing.T) {
 	if registerTestContactFoldErr != nil {
 		t.Fatal(registerTestContactFoldErr)
 	}
+}
+
+func TestToolContactCeilingsZeroFolds(t *testing.T) {
+	registerContactFold(t)
 	for _, tc := range []struct {
 		name  string
 		n     int
@@ -202,6 +211,110 @@ func TestToolContactCeilingsZeroFolds(t *testing.T) {
 	}
 }
 
+func TestToolFirstStepCancellationDuringContactFolding(t *testing.T) {
+	registerContactFold(t)
+	st, _ := openTestWith(t, newDataDir(t), openOptions{hooks: testHooks{
+		free: func(string) (uint64, error) { return 2 * gib, nil },
+	}})
+	dev := seedDevice(t, st)
+	if _, err := st.writer.ExecContext(context.Background(), `WITH RECURSIVE n(x) AS
+		(VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x < 10000)
+		INSERT INTO whatsmeow_contacts(our_jid, their_jid, full_name)
+		SELECT ?, printf('%012d@s.whatsapp.net', x), 'name' FROM n`, dev.ID.String()); err != nil {
+		t.Fatal(err)
+	}
+	st.hooks.wrapReader = func(q querier) querier { return countingFoldQuerier{q} }
+	testContactFoldCalls.Store(0)
+	if _, err := st.ToolReader().SearchContacts(context.Background(), "name", Page{Limit: 200}); err != nil {
+		t.Fatal(err)
+	}
+	completeFolds := testContactFoldCalls.Load()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	testContactFoldCancel = cancel
+	defer func() { testContactFoldCancel = nil }()
+	testContactFoldCalls.Store(0)
+	if _, err := st.ToolReader().SearchContacts(ctx, "name", Page{Limit: 200}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation from inside first SQLite step: %v", err)
+	}
+	if n := testContactFoldCalls.Load(); n == 0 || n >= completeFolds {
+		t.Fatalf("SQLite did not interrupt the grouping work: %d folds, full read uses %d", n, completeFolds)
+	}
+	if st.gate.activeCount() != 0 || st.reader.Stats().InUse != 0 {
+		t.Fatal("cancelled aggregate retained a lease or reader")
+	}
+	testContactFoldCancel = nil
+	if _, err := st.ToolReader().SearchContacts(context.Background(), "name", Page{Limit: 1}); err != nil {
+		t.Fatalf("readmission after actual connection return: %v", err)
+	}
+}
+
+func TestToolContactIdentitySourceCeiling(t *testing.T) {
+	registerContactFold(t)
+	st, _ := openTest(t, newDataDir(t))
+	dev := seedDevice(t, st)
+	if _, err := st.writer.ExecContext(context.Background(),
+		`INSERT INTO whatsmeow_contacts(our_jid, their_jid, full_name) VALUES (?, ?, 'name')`,
+		dev.ID.String(), strings.Repeat("1", maxJIDBytes)+"@s.whatsapp.net"); err != nil {
+		t.Fatal(err)
+	}
+	st.hooks.wrapReader = func(q querier) querier { return countingFoldQuerier{q} }
+	testContactFoldCalls.Store(0)
+	if _, err := st.SearchContacts(context.Background(), "name", Page{Limit: 1}); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("oversized contact identity: %v", err)
+	}
+	if n := testContactFoldCalls.Load(); n != 0 {
+		t.Fatalf("oversized contact identity reached folding: %d calls", n)
+	}
+}
+
+func TestToolMappedIdentitySourceCeiling(t *testing.T) {
+	registerContactFold(t)
+	st, _ := openTest(t, newDataDir(t))
+	dev := seedDevice(t, st)
+	ctx := context.Background()
+	const lid = "200000000001"
+	const pn = "491511111111"
+	seedContacts(t, dev, contactSeed{jid: lidJID(lid), full: "Mapped"})
+	seedLIDMapping(t, dev, lid, pn)
+	st.hooks.wrapReader = func(q querier) querier { return countingFoldQuerier{q} }
+	r := st.ToolReader()
+	p := Page{Limit: 1}
+	for _, tc := range []struct {
+		name, sql, match, identity string
+		search                     bool
+	}{
+		{"phone", `UPDATE whatsmeow_lid_map SET pn = ? WHERE lid = ?`, lid, lidJID(lid), true},
+		{"lid", `UPDATE whatsmeow_lid_map SET lid = ? WHERE pn = ?`, pn, phoneJID(pn), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.name == "lid" {
+				if _, err := st.writer.ExecContext(ctx, `UPDATE whatsmeow_lid_map SET pn = ? WHERE lid = ?`, pn, lid); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := st.writer.ExecContext(ctx, tc.sql, strings.Repeat("1", maxJIDBytes), tc.match); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.DirectChat(ctx, tc.identity); !errors.Is(err, ErrResourceLimit) {
+				t.Errorf("direct chat: %v, want resource limit", err)
+			}
+			if _, err := r.ContactChats(ctx, tc.identity, p); !errors.Is(err, ErrResourceLimit) {
+				t.Errorf("contact chats: %v, want resource limit", err)
+			}
+			if tc.search {
+				testContactFoldCalls.Store(0)
+				if _, err := r.SearchContacts(ctx, "mapped", p); !errors.Is(err, ErrResourceLimit) {
+					t.Errorf("contact search: %v, want resource limit", err)
+				}
+				if got := testContactFoldCalls.Load(); got != 0 {
+					t.Errorf("contact search folded %d values before refusing", got)
+				}
+			}
+		})
+	}
+}
+
 func TestToolContactSourceFieldCeiling(t *testing.T) {
 	st, _ := openTest(t, newDataDir(t))
 	dev := seedDevice(t, st)
@@ -233,6 +346,8 @@ func TestToolContactAggregateLegacyValues(t *testing.T) {
 	}{
 		{"control", "a\x00\x01b", "a\x00\x01b"},
 		{"integer", int64(1234), "1234"},
+		{"real", 1.5, "1.5"},
+		{"null", nil, ""},
 		{"blob", []byte("legacy"), "legacy"},
 		{"invalid-utf8-blob", []byte{'a', 0xff, 'b'}, string([]byte{'a', 0xff, 'b'})},
 	} {
@@ -347,6 +462,45 @@ func TestToolLatestMessageSourceCeiling(t *testing.T) {
 	}
 	if _, err := st.ListChats(context.Background(), "", ByLastActivity, true, Page{Limit: 1}); !errors.Is(err, ErrResourceLimit) {
 		t.Fatalf("oversized latest message: got %v, want resource limit", err)
+	}
+}
+
+func TestToolLatestIdentitySourceCeilings(t *testing.T) {
+	for _, field := range []string{"id", "sender_jid", "sender_phone"} {
+		t.Run(field, func(t *testing.T) {
+			st, _ := openTestWith(t, newDataDir(t), openOptions{hooks: testHooks{
+				free: func(string) (uint64, error) { return 2 * gib, nil },
+			}})
+			jid := phoneJID("491511111111")
+			mustStore(t, st, msg(jid, "one", jid, at(1)))
+			for _, size := range []int{maxJIDBytes, maxJIDBytes + 1} {
+				if _, err := st.writer.ExecContext(context.Background(), `UPDATE messages SET `+field+` = ?`, strings.Repeat("x", size)); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := st.ToolReader().GetChat(context.Background(), jid, false); err != nil {
+					t.Fatalf("metadata-only lookup with %d-byte %s: %v", size, field, err)
+				}
+				_, err := st.ToolReader().GetChat(context.Background(), jid, true)
+				if size == maxJIDBytes && err != nil {
+					t.Fatalf("identity at ceiling: %v", err)
+				}
+				if size > maxJIDBytes && !errors.Is(err, ErrResourceLimit) {
+					t.Fatalf("identity over ceiling: %v, want resource limit", err)
+				}
+			}
+		})
+	}
+}
+
+func TestToolListChatIdentitySourceCeiling(t *testing.T) {
+	st, _ := openTest(t, newDataDir(t))
+	jid := phoneJID("491511111111")
+	nameChat(t, st, jid, "name", NameSaved)
+	if _, err := st.writer.ExecContext(context.Background(), `UPDATE chats SET jid = ?`, strings.Repeat("x", maxJIDBytes+1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ListChats(context.Background(), "", ByLastActivity, false, Page{Limit: 1}); !errors.Is(err, ErrResourceLimit) {
+		t.Fatalf("oversized chat identity: %v, want resource limit", err)
 	}
 }
 
@@ -571,6 +725,40 @@ func TestToolFacadeRetainsLeaseUntilReadReturns(t *testing.T) {
 	}
 	if st.gate.activeCount() != 0 {
 		t.Fatal("read did not release admission")
+	}
+}
+
+func TestToolFacadeRetainsLeaseDuringConnectionCleanup(t *testing.T) {
+	entered, unblock := make(chan struct{}), make(chan struct{})
+	st, _ := openTestWith(t, newDataDir(t), openOptions{hooks: testHooks{
+		free: func(string) (uint64, error) { return 2 * gib, nil },
+		onRead: func(*sql.Conn) func() {
+			return func() { close(entered); <-unblock }
+		},
+	}})
+	jid := phoneJID("491511111111")
+	nameChat(t, st, jid, "name", NameSaved)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, err := st.ToolReader().GetChat(ctx, jid, false); done <- err }()
+	<-entered
+	cancel()
+	if _, err := st.ToolReader().GetChat(context.Background(), jid, false); !errors.Is(err, ErrBusy) {
+		close(unblock)
+		<-done
+		t.Fatalf("replacement during connection cleanup: %v", err)
+	}
+	if st.gate.activeCount() != 1 {
+		close(unblock)
+		<-done
+		t.Fatal("connection cleanup lost admission accounting")
+	}
+	close(unblock)
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled read: %v", err)
+	}
+	if st.gate.activeCount() != 0 {
+		t.Fatal("connection cleanup did not release admission")
 	}
 }
 
@@ -861,6 +1049,50 @@ func TestToolWALCheckpointWithoutFurtherWrites(t *testing.T) {
 	release()
 }
 
+func TestToolCheckpointWaitingForWriterExcludesToolRead(t *testing.T) {
+	st, _ := openTestWith(t, newDataDir(t), openOptions{hooks: testHooks{
+		free: func(string) (uint64, error) { return 2 * gib, nil },
+	}})
+	writer, err := st.writer.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	oldPath := st.path
+	st.path = filepath.Join(t.TempDir(), "checkpoint-fixture")
+	defer func() { st.path = oldPath }()
+	f, err := os.Create(st.path + "-wal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(walLimitBytes + 1); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if release, _, err := enterTestStoreTool(st); !errors.Is(err, ErrBusy) {
+		if err == nil {
+			release()
+		}
+		t.Fatalf("oversized WAL: %v", err)
+	}
+	st.gate.mu.Lock()
+	checkpointActive := st.gate.tool && !st.gate.toolReader && st.gate.active == 1
+	st.gate.mu.Unlock()
+	if !checkpointActive {
+		t.Fatal("checkpoint did not retain the tool place while waiting for the writer")
+	}
+	if _, _, err := enterTestTool(st.gate); !errors.Is(err, ErrBusy) {
+		t.Fatalf("tool admitted during checkpoint: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "checkpoint release", func() bool { return st.gate.activeCount() == 0 })
+}
+
 func TestToolWALWriteCancelsWithoutReleasing(t *testing.T) {
 	st, _ := openTestWith(t, newDataDir(t), openOptions{hooks: testHooks{
 		free: func(string) (uint64, error) { return 2 * gib, nil },
@@ -980,6 +1212,12 @@ func TestToolWALActualWritesCancelSnapshot(t *testing.T) {
 }
 
 func TestToolConcurrentIngestAndReadmission(t *testing.T) {
+	t.Run("light", func(t *testing.T) { toolConcurrentIngestAndReadmission(t, 120, 1, 128*kib) })
+	t.Run("maximum-batches", func(t *testing.T) { toolConcurrentIngestAndReadmission(t, 12, 64, maxTextBytes) })
+}
+
+func toolConcurrentIngestAndReadmission(t *testing.T, writes, batchSize, textBytes int) {
+	t.Helper()
 	st, _ := openTestWith(t, newDataDir(t), openOptions{hooks: testHooks{
 		free: func(string) (uint64, error) { return 2 * gib, nil },
 	}})
@@ -1003,15 +1241,25 @@ func TestToolConcurrentIngestAndReadmission(t *testing.T) {
 	go func() {
 		<-start
 		var peak, maxBatch int64
-		payload := strings.Repeat("x", 128*1024)
-		for i := 0; i < 120; i++ {
+		payload := strings.Repeat("x", textBytes)
+		for i := 0; i < writes; i++ {
 			before, err := st.walSize()
 			if err != nil {
 				done <- writerResult{peak: peak, maxBatch: maxBatch, err: err}
 				return
 			}
-			m := msg(jid, fmt.Sprintf("flood-%04d", i), jid, at(i+1), withText(payload))
-			if err := st.StoreMessages(ctx, []Message{m}); err != nil {
+			batch := make([]Message, batchSize)
+			var bytes int
+			for j := range batch {
+				batch[j] = msg(jid, fmt.Sprintf("flood-%04d-%04d", i, j), jid, at(i+1), withText(payload))
+				bytes += MessageFieldBytes(batch[j])
+			}
+			if batchSize > 1 {
+				// Fill the approved byte budget exactly, including identity fields.
+				last := &batch[len(batch)-1]
+				last.Text = last.Text[:len(last.Text)-(bytes-maxBatchBytes)]
+			}
+			if err := st.StoreMessages(ctx, batch); err != nil {
 				done <- writerResult{peak: peak, maxBatch: maxBatch, err: err}
 				return
 			}
@@ -1044,7 +1292,30 @@ func TestToolConcurrentIngestAndReadmission(t *testing.T) {
 			if result.peak > 2*walLimitBytes+result.maxBatch {
 				t.Fatalf("WAL peak %d exceeds threshold plus one batch", result.peak)
 			}
-			t.Logf("120 ingest writes; reads success=%d busy=%d canceled=%d; sampled post-write WAL peak=%d bytes, max observed batch growth=%d bytes", success, busy, canceled, result.peak, result.maxBatch)
+			t.Logf("%d ingest writes of %d messages; reads success=%d busy=%d canceled=%d; sampled post-write WAL peak=%d bytes, max observed batch growth=%d bytes", writes, batchSize, success, busy, canceled, result.peak, result.maxBatch)
+			// An earlier checkpoint attempt may still occupy the tool slot or
+			// have started the cooldown. Recovery is retried by tool calls.
+			retryCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+			defer cancel()
+			tick := time.NewTicker(100 * time.Millisecond)
+			defer tick.Stop()
+			for {
+				_, err := st.ToolReader().GetChat(retryCtx, jid, false)
+				if err == nil {
+					break
+				}
+				if !errors.Is(err, ErrBusy) {
+					t.Fatalf("tool read after ingest recovery: %v", err)
+				}
+				select {
+				case <-retryCtx.Done():
+					t.Fatalf("post-ingest WAL did not recover: %v", retryCtx.Err())
+				case <-tick.C:
+				}
+			}
+			if size, err := st.walSize(); err != nil || size > walLimitBytes {
+				t.Fatalf("post-ingest WAL: %d bytes, %v", size, err)
+			}
 			return
 		default:
 		}
@@ -1110,6 +1381,83 @@ func TestToolGateReaderPressureRetainsAccounting(t *testing.T) {
 	}
 	if got := g.activeCount(); got != readConns+1 {
 		t.Fatalf("active = %d, want tool plus four readers", got)
+	}
+}
+
+// Pause a real device call outside the gate mutex, after it registered as a waiter.
+type parkedDeviceContext struct {
+	context.Context
+	parked     chan struct{}
+	resume     <-chan struct{}
+	parkedOnce sync.Once
+}
+
+func (c *parkedDeviceContext) Done() <-chan struct{} {
+	c.parkedOnce.Do(func() { close(c.parked) })
+	<-c.resume
+	return c.Context.Done()
+}
+
+func TestToolGatePrioritizesWaitingDevice(t *testing.T) {
+	st, dev, _ := loadedDevice(t, newDataDir(t))
+	const phone = "491511111111"
+	mustStore(t, st, msg(phoneJID(phone), "one", phoneJID(phone), at(1)))
+	toolRelease, toolCtx, err := st.enterTool(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer toolRelease()
+	ordinary := fill(t, st.gate, maxActive-1)
+	defer func() {
+		for _, release := range ordinary {
+			release()
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resume := make(chan struct{})
+	var once sync.Once
+	unpark := func() { once.Do(func() { close(resume) }) }
+	defer unpark()
+	deviceCtx := &parkedDeviceContext{Context: ctx, parked: make(chan struct{}), resume: resume}
+	done := make(chan error, 1)
+	go func() {
+		done <- dev.Contacts.PutContactName(deviceCtx, types.NewJID(phone, types.DefaultUserServer), "", "Device update")
+	}()
+	select {
+	case <-deviceCtx.parked:
+	case err := <-done:
+		t.Fatalf("device returned before queuing: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("device did not reach admission wait")
+	}
+	if !errors.Is(toolCtx.Err(), context.Canceled) {
+		t.Fatalf("waiting device did not cancel active tool: %v", toolCtx.Err())
+	}
+	toolRelease()
+	if st.gate.activeCount() != maxActive-1 || st.gate.waitingCount() != 1 {
+		t.Fatal("expected one free active slot and one registered device waiter")
+	}
+	reader := st.ToolReader()
+	for range 5 {
+		if _, err := reader.GetChat(ctx, phoneJID(phone), false); !errors.Is(err, ErrBusy) {
+			t.Fatalf("tool with a free slot and waiting device: %v", err)
+		}
+	}
+	if st.gate.waitingCount() != 1 {
+		t.Fatal("the tool requests joined the device waiter")
+	}
+	unpark()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("device did not finish after the tool released")
+	}
+	if _, err := reader.GetChat(ctx, phoneJID(phone), false); err != nil {
+		t.Fatalf("tool readmission after device completion: %v", err)
 	}
 }
 
