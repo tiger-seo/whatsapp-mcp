@@ -48,7 +48,17 @@ The adversarial cases cover raw malformed/truncated frames, duplicate and escape
 
 The matched device comparison sampled reset and pinned WAL lengths before the transaction, before commit and after commit: reset 0 / 6,666,192 / 8,454,272 B, pinned 4,231,272 / 10,897,432 / 12,685,512 B. Both samples differ in frame growth by only the 32-byte reset header, with `-shm` at 32,768 B in each run. This measures logical length, not filesystem allocation or a continuous physical peak of the actual crossing transaction. The writer hook counts one check per outer device transaction (not per inner statement) and one per standalone device read/write. Separate synchronous WAL stats averaged 6.317 and 7.353 us over 1,000 samples each; 100 separate free-space calls averaged 22.403 and 19.542 us respectively. These samples estimate call cost but do not isolate serialized writer-hold time. In the matched maximum-batch ingest workload, the baseline and flooded cases each completed 12 writes and recorded 12 writer checks in the sampling window. Baseline: 102 messages/s, 628 ms mean and 808 ms slowest write. Flood: 86 messages/s, 743 ms mean and 923 ms slowest write. The difference includes local scheduling and read contention; it is not attributed to the stat alone.
 
-**Still open for T035:** Windows CI and native Linux/macOS results for this patch, crossing-transaction matched peak and physical sidecar allocation, checkpoint/reconnect stat timing and counts, and query heap/cache/temp high-water under concurrent ingest. Earlier CI does not test this patch. T036-T042 (full inherited pipes, delivery and owner code review) remain outside this slice.
+**Still open for T035:** Passing integrated native CI on the corrected patch, crossing-transaction matched peak and physical sidecar allocation, checkpoint/reconnect stat timing and counts, and query heap/cache/temp high-water under concurrent ingest. T036-T042 (full inherited pipes, delivery and owner code review) remain outside this slice.
+
+#### Phase 5 CI Follow-up (2026-11-20 UTC)
+
+[Push CI for `28bdf68`](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44640050242) passed the `check` job. The store and command packages passed on Windows, Ubuntu and macOS, but each native test job exited 1 because `TestAbuseSDKRedactionAndRecovery` failed in `internal/mcp`; the optional heavy-store job was skipped. The in-memory peer can receive an SDK reply before the guard retires its tool credit. The fixture sent the next request in that window and treated a structured `busy` refusal as successful execution. The fix waits for server-side credit retirement between exchanges and still requires the unknown tool to produce a sanitized protocol error, not `busy`. No production code or admission limits changed.
+
+| Command (native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`) | Direct result |
+| --- | --- |
+| `GOMAXPROCS=1 go test ./internal/mcp -run '^TestAbuseSDKRedactionAndRecovery$' -count=1 -timeout 1m` (before synchronization) | Exit 1; all four log-level cases reproduced the CI failure. A sharper assertion identified the `get_pairing_qr` reply as `busy` in all four. |
+| `GOMAXPROCS=1 go test ./internal/mcp -run '^(TestAbuseSDKRedactionAndRecovery\|TestFiveToolDiscovery\|TestGuardHeldWriteKeepsToolCredit)$' -count=10 -timeout 3m` | Exit 0; 30 parent and 40 log-level subtest executions (30.148 s). |
+| `go test ./internal/mcp -count=1 -timeout 5m` | Exit 0 for the full MCP package (99.475 s). The corrected patch has not run in native CI. |
 
 ### Phase 4 Contact Tools and Five-Tool Discovery (2026-11-19)
 

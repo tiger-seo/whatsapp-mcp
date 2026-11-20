@@ -57,7 +57,7 @@ func chatJSON(t *testing.T, v any) any {
 
 func chatCall(t *testing.T, c chatTestClient, tool string, args any, bad bool) map[string]any {
 	t.Helper()
-	waitToolCredit(t, c)
+	waitToolCredit(t, c.guard)
 	r, err := c.CallTool(context.Background(), &sdk.CallToolParams{Name: tool, Arguments: args})
 	if err != nil {
 		t.Fatalf("%s: %v", tool, err)
@@ -65,14 +65,14 @@ func chatCall(t *testing.T, c chatTestClient, tool string, args any, bad bool) m
 	return checkToolResult(t, tool, r, bad)
 }
 
-func waitToolCredit(t *testing.T, c chatTestClient) {
+func waitToolCredit(t *testing.T, guard *guardedConnection) {
 	t.Helper()
 	// The in-memory peer can receive the previous reply before Write returns.
 	deadline := time.Now().Add(time.Second)
 	for {
-		c.guard.mu.Lock()
-		busy := c.guard.tool
-		c.guard.mu.Unlock()
+		guard.mu.Lock()
+		busy := guard.tool
+		guard.mu.Unlock()
 		if !busy {
 			break
 		}

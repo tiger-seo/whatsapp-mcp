@@ -64,7 +64,7 @@ func TestFiveToolDiscovery(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "request failed") || strings.Contains(err.Error(), "synthetic-secret") {
 			t.Fatalf("deferred tool %s: %v", name, err)
 		}
-		waitToolCredit(t, c)
+		waitToolCredit(t, c.guard)
 	}
 	if r.calls.Load() != 0 {
 		t.Fatal("discovery/deferred calls reached the store")

@@ -127,6 +127,7 @@ func TestAbuseSDKRedactionAndRecovery(t *testing.T) {
 				if err != nil || strings.Contains(string(b), secret) {
 					t.Fatal("unsafe or unencodable response")
 				}
+				waitToolCredit(t, ss.guard)
 				return r
 			}
 			if r := exchange(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`, 1); r.Error != nil {
@@ -151,8 +152,10 @@ func TestAbuseSDKRedactionAndRecovery(t *testing.T) {
 			}
 			for i, name := range []string{"get_login_status", "get_pairing_qr", "send_message", "recover"} {
 				id := int64(i + 5)
-				if r := exchange(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":%q,"arguments":{"approval":"synthetic-private"}}}`, id, name), id); r.Error == nil {
-					t.Fatal("unavailable account action unexpectedly succeeded")
+				r := exchange(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":%q,"arguments":{"approval":"synthetic-private"}}}`, id, name), id)
+				var rpcErr *jsonrpc.Error
+				if !errors.As(r.Error, &rpcErr) || rpcErr.Message != "request failed" || rpcErr.Data != nil || len(r.Result) != 0 {
+					t.Fatalf("%s: expected a sanitized SDK protocol error; got error=%v, busy=%v", name, r.Error, strings.Contains(string(r.Result), `"code":"busy"`))
 				}
 			}
 			if reader.calls.Load() != 0 {
