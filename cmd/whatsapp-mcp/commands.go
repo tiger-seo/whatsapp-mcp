@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -806,6 +807,11 @@ func loadStartup(cmd *command, args []string, s *streams) (cfg *config.Config, l
 func acquireLock(cfg *config.Config, logger *slog.Logger, s *streams) (*lock.Lock, int, bool) {
 	l, err := lock.Acquire(cfg.DataDir)
 	if err != nil {
+		var perms *private.Error
+		if s.diagnostics != nil && errors.As(err, &perms) {
+			s.diagnostics.ReportPrivateFile(mcp.PrivateLockFile, filepath.Join(cfg.DataDir, lock.FileName), perms.Fix)
+			return nil, exitError, false
+		}
 		var he *lock.HeldError
 		if !errors.As(err, &he) {
 			err = &config.DataDirError{Dir: cfg.DataDir, Err: err}
@@ -823,11 +829,14 @@ func (s *streams) reportStartupError(err error) {
 	}
 	var held *lock.HeldError
 	var dir *config.DataDirError
+	var file *config.FileError
 	var perms *private.Error
 	var setting *config.SettingError
 	switch {
 	case errors.As(err, &held):
 		s.diagnostics.ReportHuman(mcp.HumanLockHeld, held.PID)
+	case errors.As(err, &file) && errors.As(file, &perms):
+		s.diagnostics.ReportPrivateFile(mcp.PrivateConfigFile, file.Path, perms.Fix)
 	case errors.As(err, &dir):
 		if errors.As(dir, &perms) {
 			s.diagnostics.ReportPrivateDirectory(dir.Dir, perms.Fix)
@@ -865,7 +874,7 @@ func openStore(ctx context.Context, cfg *config.Config, logger *slog.Logger, s *
 			case errors.Is(err, store.ErrNotDatabase):
 				s.diagnostics.ReportHuman(mcp.HumanNotDatabase, 0)
 			case errors.As(err, &storage) && storage.Code == "not_private" && storage.PrivatePath != "":
-				s.diagnostics.ReportPrivateFile(storage.PrivatePath, storage.Fix)
+				s.diagnostics.ReportPrivateFile(mcp.PrivateStorageFile, storage.PrivatePath, storage.Fix)
 			default:
 				s.diagnostics.ReportHuman(mcp.HumanStartupFailure, 0)
 			}

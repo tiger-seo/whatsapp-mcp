@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tiger-seo/whatsapp-mcp/internal/config"
 	"github.com/tiger-seo/whatsapp-mcp/internal/lock"
 	"github.com/tiger-seo/whatsapp-mcp/internal/private"
 	"github.com/tiger-seo/whatsapp-mcp/internal/wa"
@@ -418,5 +419,52 @@ func TestStdioRefusesUnsafeParentWithRemedy(t *testing.T) {
 	}
 	if info, err := os.Stat(parent); err != nil || info.Mode().Perm() != 0o770 {
 		t.Errorf("refusal changed parent permissions: %v (%v)", info, err)
+	}
+}
+
+func TestStdioRefusesNonPrivateStartupFilesWithRemedy(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code int
+	}{
+		{config.FileName, exitUsage},
+		{lock.FileName, exitError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := privateDir(t)
+			path := filepath.Join(dir, tc.name)
+			const contents = "synthetic-refused-file-contents"
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			remedy := "chmod 600"
+			if runtime.GOOS == "windows" {
+				remedy = "icacls"
+				if out, err := exec.Command("icacls", path, "/grant", "*S-1-5-32-545:W").CombinedOutput(); err != nil {
+					t.Fatalf("icacls: %v\n%s", err, out)
+				}
+			} else if err := os.Chmod(path, 0o660); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				r := runIn(t, nil, "stdio", "--data-dir", dir, "--log-level", "error")
+				r.expect(t, tc.code)
+				if r.stdout != "" || !strings.Contains(r.stderr, "path="+strconv.QuoteToASCII(path)) ||
+					!strings.Contains(r.stderr, remedy) || strings.Contains(r.stderr, contents) || len(r.stderr) > 1024 {
+					t.Errorf("expected bounded permission remedy for %s: stdout=%q stderr=%q", tc.name, r.stdout, r.stderr)
+				}
+			}
+			if got, err := os.ReadFile(path); err != nil || string(got) != contents {
+				t.Errorf("refusal changed file: %q (%v)", got, err)
+			}
+			if tc.name == config.FileName {
+				if _, err := os.Stat(filepath.Join(dir, lock.FileName)); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("lock appeared on config refusal: %v", err)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(dir, "whatsapp.db")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("database appeared on startup refusal: %v", err)
+			}
+		})
 	}
 }

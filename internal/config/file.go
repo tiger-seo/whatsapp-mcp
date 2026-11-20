@@ -38,7 +38,7 @@ func readFile(dataDir string, settings []Setting) (*file, error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
-		return nil, &FileError{Path: path, Reason: err.Error()}
+		return nil, &FileError{Path: path, Reason: err.Error(), openErr: err}
 	}
 	defer r.Close()
 	// One byte more than allowed tells a file at the limit from a larger one, even if it grows meanwhile.

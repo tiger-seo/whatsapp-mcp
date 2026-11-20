@@ -41,12 +41,15 @@ const secretText = "(secret)"
 // FileError is a problem with config.toml itself: syntax, an unknown or forbidden key, a wrong type, or a
 // file that cannot be read. Line and Column are 0 when not known.
 type FileError struct {
-	Path   string
-	Line   int
-	Column int
-	Key    string
-	Reason string
+	Path    string
+	Line    int
+	Column  int
+	Key     string
+	Reason  string
+	openErr error
 }
+
+func (e *FileError) Unwrap() error { return e.openErr }
 
 func (e *FileError) Error() string {
 	switch {

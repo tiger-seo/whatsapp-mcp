@@ -508,18 +508,22 @@ func TestDiagnosticsPrivateDirectoryControlFallback(t *testing.T) {
 func TestDiagnosticsPrivateFileAndParentFallback(t *testing.T) {
 	for _, tc := range []struct {
 		file      bool
+		kind      PrivateFileKind
 		fix, want string
 	}{
-		{true, "run: chmod 600 ignored", "chmod 600 '<storage-file>'"},
-		{true, "run: icacls ignored", "S-1-5-18:F"},
-		{false, "run: chmod go-w ignored, or use another parent", "chmod go-w '<data-directory-parent>'"},
+		{true, PrivateStorageFile, "run: chmod 600 ignored", "chmod 600 '<storage-file>'"},
+		{true, PrivateStorageFile, "run: icacls ignored", "S-1-5-18:F"},
+		{true, PrivateLockFile, "run: chmod 600 ignored", "chmod 600 '<whatsapp-mcp.lock>'"},
+		{true, PrivateConfigFile, "run: chmod 600 ignored", "chmod 600 '<config.toml>'"},
+		{true, PrivateConfigFile, "run: icacls ignored", `icacls \"<config.toml>\" /inheritance:r`},
+		{false, 0, "run: chmod go-w ignored, or use another parent", "chmod go-w '<data-directory-parent>'"},
 	} {
 		w := &diagnosticWriter{}
 		d := NewDiagnostics(w, slog.LevelError)
 		path := strings.Repeat("synthetic-secret", 100) + "/child"
 		var admitted bool
 		if tc.file {
-			admitted = d.ReportPrivateFile(path, tc.fix)
+			admitted = d.ReportPrivateFile(tc.kind, path, tc.fix)
 		} else {
 			admitted = d.ReportPrivateDirectory(path, tc.fix)
 		}

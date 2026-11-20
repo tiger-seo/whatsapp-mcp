@@ -27,6 +27,21 @@ The `owner-judge` review at `7d4336b` returned `PASS` for the revised WAL fence 
 
 ## Runtime Gates
 
+### Lock and Config Refusal Follow-up (2026-11-20 UTC)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, synthetic files only. Stdio now preserves the checked lock or config file path and its platform-specific permission remedy. Tests verify repeated refusal, unchanged contents, empty stdout, no database creation, and no lock creation on config refusal. Bounded fallbacks name the refused file by role. The fix does not change exit categories or permission checks.
+
+| Command | Direct result |
+| --- | --- |
+| `go test ./cmd/whatsapp-mcp -run '^TestStdioRefusesNonPrivateStartupFilesWithRemedy$' -count=1 -timeout 1m` (before fix) | Exit 1; both file cases lacked the correct path-specific diagnostic. |
+| `go test ./cmd/whatsapp-mcp ./internal/mcp -run '^(TestStdioRefuses(NonPrivateStartupFiles\|NonPrivateDatabase\|UnsafeParent)WithRemedy\|TestOpenDataDirRefused\|TestDiagnosticsPrivate.*)$' -count=3 -timeout 2m -json` | Exit 0; 30 named passes, 3 expected Unix-only skips, no failures. |
+| `go test ./... -count=1 -timeout 30m -json` (first run) | Exit 1; nine packages passed. `TestPerContactMemory/even` failed because `LastInteraction` took 90.37 ms against the existing 50 ms limit. |
+| `go test ./internal/store -run '^TestPerContactMemory$/^even$' -count=1 -timeout 5m -v` | Exit 0; `LastInteraction` took 1.97 ms in isolation. No store code or threshold was changed. |
+| `go test ./... -count=1 -timeout 30m -json` (rerun) | Exit 0; all ten packages passed, 1,951 named passes, 32 skips, no failures. |
+| `gofmt -l .`; `go vet ./...`; `go mod verify`; `git diff --check` | Exit 0 for each; changed tracked files are LF. |
+
+The earlier native CI run predates this patch. Native CI and renewed owner review are still required for this revision.
+
 ### Storage Diagnostic Review Follow-up (2026-11-20 UTC)
 
 Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, all synthetic. Stdio now reports the checked database artifact and its file-specific remedy, names the affected parent when the parent check refuses startup, and queues one mandatory `tool_store_not_quiescent` record without changing drain order. Refusals never repair the artifact or parent in place. Oversized or unsafe path text uses a bounded, operation-specific fallback.
