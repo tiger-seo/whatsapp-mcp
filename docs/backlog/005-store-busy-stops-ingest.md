@@ -1,11 +1,11 @@
 # Backlog: store admission pressure can stop ingest
 
 - **Created:** 2026-11-13
-- **Status:** Open; a planning input for feature 006.
+- **Status:** Addressed for feature 006's chat/contact reads; reassess for future readers and real `busy` incidents.
 - **Affected area:** `internal/store` admission (16 active, 64 waiting, 5 s wait), feature 005 ingest, features
   006–007 MCP read tools.
 - **Owner:** Maintainer `tiger-seo`.
-- **Review trigger:** planning of feature 006, or an `ingest_failed` with error class `busy` in any run.
+- **Review trigger:** a new store reader or admission-policy change, or an `ingest_failed` with error class `busy`.
 - **Source:** `specs/005-message-ingest/research.md` R9.
 
 ## Problem
@@ -16,9 +16,11 @@ store users are ingest's own goroutines, so admission is not under pressure. Fea
 same store; a burst of reads could fill the waiting queue, a message write could then get `ErrBusy`, and the whole
 command would stop.
 
-## Options
+## Feature 006 resolution
 
-1. Reserve admission for writes, so reads cannot starve them.
-2. Bound MCP read concurrency below the store's limit in the tool layer.
-3. Treat `ErrBusy` on a write as retryable once within the handler's time, which changes the spec's clarification and
-   needs the owner.
+One tool can take an immediately available store slot and reader; tools never queue or bypass waiting ordinary
+work. The gate preserves ordinary capacity, cancels for ordinary contention, and retains accounting until the
+read connection returns. A WAL drain fence protects the next writer at the transaction boundary. The synthetic
+[pressure and native evidence](../../specs/006-mcp-stdio-tools/verification.md#t035-resource-measurements-2026-11-20-utc)
+covers this policy, not every storage failure. Ordinary write `ErrBusy` remains terminal, without a retry;
+a failed drain can still fail ingest and close stdio unsuccessfully. This is not approval for new reader workloads.

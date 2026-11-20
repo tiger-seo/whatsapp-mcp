@@ -27,6 +27,87 @@ The `owner-judge` review at `7d4336b` returned `PASS` for the revised WAL fence 
 
 ## Runtime Gates
 
+### T039 Local Delivery Gates (2026-11-20 UTC)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, runtime source at `5428fb6`. Synthetic tests only. The working tree already had local `.gitignore` and `AGENTS.chatgpt.md` changes; neither changes the Go runtime source. No optional heavy, soak, measurement or CGO race runs were enabled.
+
+| Command | Direct result |
+| --- | --- |
+| `gofmt -l .`; `go vet ./...`; `go mod verify`; `go list -m github.com/modelcontextprotocol/go-sdk` | Each exited 0 on the native retry; no formatting or vet findings, all modules verified, SDK v1.8.0. An earlier chained tool call timed out without reporting which commands reached completion. |
+| `go test ./... -count=1 -timeout 30m` | Exit 1; eight of ten packages passed. `internal/store` failed `TestAdmissionLimitsOnTheRealStore` (12 queued calls returned `store is busy`; 68 messages stored, expected 80). `internal/wa` failed `TestIngestLogsKeepContentAtDebugAndNeverLogMediaMaterial/debug` (no `history_incomplete` record observed). Command and MCP packages passed. Per-test counts and skips are not available from the exact non-verbose delivery invocation. Causes were not established. |
+| `GOOS=${t%/*} GOARCH=${t#*/} go build -o /dev/null ./cmd/whatsapp-mcp` | Exit 0 separately for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64, using Git Bash. These builds are not native Linux/macOS runtime evidence. |
+| `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...` | Exit 0; no vulnerabilities found. |
+| `go vet ./internal/wa/testdata/cmd/session-check`; `go test ./internal/wa/testdata/cmd/session-check -count=1`; `go build -o /dev/null ./internal/wa/testdata/cmd/session-check` | Each exited 0 in native Git Bash. A separate `go test ./internal/wa/testdata/cmd/session-check -count=1 -json` exited 0 with 21 test/subtest passes, no failures or skips. The initial WSL shell attempt did not find `go` and ran no helper gate. |
+| `git diff --check`; `git ls-files --eol` | Exit 0; no whitespace findings or `w/crlf` across 356 tracked entries. |
+
+Inspection of `git diff origin/main...HEAD -- go.mod go.sum` found the exact SDK and its transitive additions only. Go 1.27.0/toolchain 1.27.4, libsignal v0.2.2, the `bedcf0185245` whatsmeow replacement and SQLite v1.62.0 are unchanged from the base. `gh run view 44652785852 --repo tiger-seo/whatsapp-mcp --json conclusion,headSha,jobs` exited 0 and confirmed success for the `check` job, full suites on Windows, Linux and macOS, and focused Linux/macOS native pipe and diagnostic steps at `9c4e30a`. The tracked commit delta since then was evidence and task status only. That CI pass does not override this local failure. T039 remains open; no delivery or code-review checkpoint was reached.
+
+**Follow-up, 2026-11-20 UTC (Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, `5428fb6` plus a local test-only change):** Both failed parents passed five isolated runs (`go test ./internal/store ./internal/wa -p 1 -run '^(TestAdmissionLimitsOnTheRealStore|TestIngestLogsKeepContentAtDebugAndNeverLogMediaMaterial)$' -count=5 -v -timeout 3m`, exit 0, 10 parent and 10 subtest passes, no skips). The logging fixture could reach final log capture after the producer incremented the counter but before it wrote the warning. It now waits for the emitted warning under the buffer mutex. The store failure was not reproduced in isolation; no store fixture, runtime code or timing budget changed.
+
+Repeating the focused command at `-count=20` with `-json` instead of `-v` exited 0 (40 parent and 40 subtest passes, no skips). The exact `go test ./... -count=1 -timeout 30m` rerun without concurrent build gates exited 0 on all ten packages (command 248.502 s, MCP 111.895 s, store 358.494 s, WhatsApp 80.697 s; exact command does not report per-test counts or skips). `gofmt -l .`, `go vet ./...`, `git diff --check` and the tracked LF check each passed again. This clears T039. The prior native CI evidence covers the same runtime source, not the local fixture change.
+
+### T041 Requirements Traceability
+
+**Quickstart rerun (2026-11-20 UTC):** native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, synthetic data only. The commands below capture direct Go exits and named test/subtest outcomes via `-json` in place of `-v`. Planning-era filters were updated for execution to match the implemented test names, without modifying the reviewed quickstart. The dependency, formatting and full delivery checks are recorded under T039; native Unix subprocess results are linked below. No optional heavy jobs or real-account checks were performed.
+
+| Command | Pass / fail / skip | Exit |
+| --- | ---: | ---: |
+| `go test ./internal/mcp -count=1 -timeout 5m -json` | 380 / 0 / 0 | 0 |
+| `go test ./internal/store -run '^(TestTool\|TestWriter\|TestMCP(Chat\|Contact)Queries\|TestMCPIngestPressure\|TestListChats\|TestGetChat\|TestSearchContacts\|TestContactChats\|TestDirectChat)' -count=1 -timeout 10m -json` | 174 / 0 / 1 | 0 |
+| `go test ./internal/mcp ./cmd/whatsapp-mcp -run '^(TestMCPFlood\|TestMCPIngestPressure)$' -count=3 -timeout 10m -json` | 6 / 0 / 0 | 0 |
+| `go test ./internal/mcp -run '^(TestFraming\|TestGuard\|TestResult)' -count=3 -timeout 5m -json` | 381 / 0 / 0 | 0 |
+| `go test ./cmd/whatsapp-mcp -run '^(TestMCP\|TestShellIngest\|TestLifecycle\|TestStdioDiagnostic)' -count=3 -timeout 10m -json` | 204 / 0 / 0 | 0 |
+| `go test ./internal/wa -run '^(TestOwnerTerminal\|TestRetirementOrder\|TestSimulatorStopDuringQueuedAppStateFetches\|TestMCPActual\|TestIngestLogsKeepContentAtDebugAndNeverLogMediaMaterial)' -count=1 -timeout 10m -json` | 20 / 0 / 0 | 0 |
+
+The single skip is `TestSearchContactsHeapLimitChild`, an entry point for a subprocess, not a missing mandatory case. Every group ran named tests. T040 documents the local read policy and operating limits, and narrows the two inherited backlog entries only to the scope covered by the evidence. T041 reconciles all 33 feature requirements and criteria below. T042 remains open pending authorization for the implementation commit and a current owner code verdict.
+
+The mappings below refer to the [story acceptance](#phase-4-contact-tools-and-five-tool-discovery-2026-11-19),
+[bounds and pressure](#phase-5-abuse-bounds-and-pressure-2026-11-19-utc), [resource measurements](#t035-resource-measurements-2026-11-20-utc),
+[native Windows matrix](#t036-native-windows-pipes-2026-11-20-utc), [native Unix matrix](#t037t038-unix-pipe-follow-up-2026-11-20-utc)
+and [delivery gates](#t039-local-delivery-gates-2026-11-20-utc). Focused and full Windows evidence is native amd64;
+the native Linux/amd64 and macOS/arm64 evidence is from CI on the committed runtime source. Native platform
+claims are limited to those combinations, and the ceiling-sized opt-in grouping measurement was Windows only.
+
+| Requirement | Concrete acceptance evidence |
+| --- | --- |
+| FR-001 | `TestMCPStdioOfflineRead` starts embedded MCP while disconnected; `TestMCPStdioRefusesBeforeReading` and `TestProcessSingleInstance` exercise startup refusal and exclusivity. No HTTP/proxy entry point was added. |
+| FR-002 | `TestFiveToolDiscovery` and `TestMCPStdioOfflineRead` verify exactly five tools; `TestServerConstruction` and `TestServerNoSamplingOrElicitation` check capability limits. |
+| FR-003 | `TestChatToolsDiscovery`, `TestChatToolsInvalidArguments`, `TestContactToolsValidation` and `TestServerSDKExplicitSchemasAndDispatch` check discovery versus handler defaults, explicit false, invalid types and unexpected fields. |
+| FR-004 | `TestChatToolsPaging`, `TestMCPChatQueriesLiteralSearch` and `TestMCPChatQueriesOrder` check literal folded queries, sorting, empty pages and stable ties. |
+| FR-005 | `TestChatToolsExactLookup`, `TestMCPChatQueriesGetMetadataSkipsLatest` and `TestToolGetChatMetadataOnly` check exact identity, not-found and no latest read or budget charge for false. |
+| FR-006 | `TestContactToolsSearch` and `TestMCPContactQueriesSearch` check all four name fields, literal phone digits, alias grouping, excluded domains and stable paging. |
+| FR-007 | `TestContactToolsChats` and `TestMCPContactQueriesDirectAndMembership` check equivalent normalized inputs, phone preference, exact mapped/unmapped LID fallback and no partial phone selection. |
+| FR-008 | `TestContactToolsChats` and `TestMCPContactQueriesDirectAndMembership` check distinct direct rows, stored sender membership and the actual latest message regardless of sender. |
+| FR-009 | `TestChatToolsInvalidArguments`, `TestContactToolsValidation`, `TestResultEmptyPageArray` and `TestResultRefusesBeforeEncoding` check page/offset limits, empty arrays and no partial success. |
+| FR-010 | `TestMCPChatQueriesLatestCompositeIdentity`, `TestResultSafeTextAndOptionalFields`, `TestResultTimestampUTC` and `TestResultOutputSchemas` check identity, caption/text separation, optional fields, RFC 3339 and the explicit output shape. |
+| FR-011 | `TestResultSafeTextAndOptionalFields`, `TestResultOutputSchemas` and the chat/contact SDK calls compare parsed text with structured content; no compact format is accepted. |
+| FR-012 | `TestChatToolsExactLookup`, `TestContactToolsStorageErrors`, `TestGuardSanitizesProtocolErrors` and `TestAbuseSDKRedactionAndRecovery` check clear bounded errors without lost correlation or leaked values. |
+| FR-013 | `TestFiveToolDiscovery` and `TestMCPStdioOfflineRead` reject `get_login_status` without account activity; existing offline status suites passed in the full run. |
+| FR-014 | The same discovery and command tests reject `get_pairing_qr` without disclosure or an owner request; existing pairing regressions ran in the full suite. |
+| FR-015 | `TestMCPStdioOfflineRead`, `TestMCPContactQueriesSearch` and `TestToolFiveReadsExpectedResults` exercise offline data and locally resolved identity/name precedence. |
+| FR-016 | `TestMCPStdioOfflineRead` and `TestAbuseSDKRedactionAndRecovery` exercise owner-launched reads and untrusted instruction text without account actions. The tool facade exposes no such actions. |
+| FR-017 | `TestMCPFlood`, both store and command `TestMCPIngestPressure` families, `TestToolGatePreservesOrdinaryCapacity`, `TestToolAdmissionUsesFreshDiskSample`, `TestGuardHeldWriteKeepsToolCredit` and `TestResultSizeLimits` cover independent admission, WAL/disk, slow output and budgets. T035 documents the controls and limits of measurements. |
+| FR-018 | `TestMCPStdioIntegratedDrain`, `TestMCPStdioDeviceFault`, `TestMCPStoreFailureShutdown`, `TestShellIngestFailureStopsTheCommand`, `TestRetirementOrderOfAConnectedRun` and the native pipe matrices cover actual drain, fault/EOF precedence, lock release and marker ownership. |
+| FR-019 | `TestChatTools*`, `TestContactTools*` and `TestFiveToolDiscovery` exercise all tools through official guarded in-memory SDK transports. `TestMCPStdio*` and native pipe tests cover the command boundary. |
+| SEC-001 | `TestMCPStdioOfflineRead` and `TestAbuseSDKRedactionAndRecovery` cover the all-data local read boundary and no additional authority from input or stored content; residual client-disclosure risk remains. |
+| SEC-002 | `TestFiveToolDiscovery`, `TestMCPStdioOfflineRead` and `TestAbuseSDKRedactionAndRecovery` check deferred-tool refusal, no QR disclosure and no new account work. |
+| SEC-003 | `TestResultSafeTextAndOptionalFields`, `TestResultOutputSchemas`, `TestAbuseResultRejection` and `TestMCPActualMessageDebugRedaction` check provenance, safe rendering, DTO boundaries and log payload handling. |
+| SEC-004 | `TestFramingInput`, `TestFramingTokenLimit`, `TestGuardFourOutstanding`, `TestGuardNotificationLimit`, `TestFramingSlowConsumerDeadline`, `TestResultActualTwoMiBBoundary`, `TestFramingSerializedFrameBoundary` and `TestToolContactCeilingsZeroFolds` check actual byte, shape, queue and SQLite work controls. |
+| SEC-005 | `TestMCPStdioRefusesBeforeReading`, `TestStdioDiagnosticRefusal`, `TestMCPStoreFailureShutdown` and `TestAbuseSDKRedactionAndRecovery` cover private startup, lock/storage order, no mutation and retained unsafe markers. Native CI also ran the existing unsafe-run platform checks. |
+| SEC-006 | `TestDiagnosticsAuditMetadata`, `TestServerSDKFailureIsAudited`, `TestMCPActualHistoryIncompleteAtLogLevels`, `TestMCPActualReceiveOverloadAtLogLevels`, `TestStdioDiagnosticAcknowledgmentAfterCleanup` and the native stderr/EOF matrices cover mandatory reporting, safe categories, failure exit and no durable-audit guarantee. |
+| SEC-007 | T039 records the approved pin diff, `go mod verify`, `govulncheck` and all five CGO-free builds; no production dependency change during delivery. |
+| SC-001 | The five-tool SDK discovery/read acceptance and native stdio offline initialization cover the scripted synthetic journeys. |
+| SC-002 | `TestChatToolsPaging` traverses the unchanged 235-chat fixture at default, 1 and 200; `TestChatToolsInvalidArguments` covers invalid boundaries. |
+| SC-003 | `TestContactToolsSearch`, `TestContactToolsChats`, `TestMCPContactQueriesSearch` and `TestMCPContactQueriesDirectAndMembership` cover all name fields, formatting, aliases and exact direct selection. |
+| SC-004 | `TestMCPContactQueriesDirectAndMembership`, `TestMCPChatQueriesLatestCompositeIdentity`, `TestResultTimestampUTC` and `TestResultEmptyPageArray` check deduplication, ties, timestamps and array shape. |
+| SC-005 | `TestFiveToolDiscovery` and `TestMCPStdioOfflineRead` discover neither login tool and reject both without account work. |
+| SC-006 | `TestMCPFlood`, the T035 pressure tests, `TestGuardSDKBlockedOutputDeadlineRetainsCredit`, `TestToolFacadeRetainsLeaseDuringConnectionCleanup` and `TestMCPStdioIntegratedDrain` check bounded work, continued ingest and actual drain. Detached OS pumps are process-lifetime byte-only I/O, not running tool work. |
+| SC-007 | `TestAbuseFramedRejections`, `TestAbuseSDKRedactionAndRecovery`, `TestMCPStdioOfflineRead` and `TestMCPActualMessageDebugRedaction` check redaction, protocol-only stdout and unchanged synthetic state after abuse. |
+
+Open outside this evidence: real-account behavior in feature 006, native Linux/arm64 and macOS/amd64 runtime,
+`serve` device-only fault shutdown, configurable read access, MCP login/QR and durable audit retention. No
+exception, finding closure beyond this scope or release approval is inferred.
+
 ### Phase 5 Abuse, Bounds and Pressure (2026-11-19 UTC)
 
 Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, SQLite v1.62.0. The tests use temporary synthetic stores and cooperative test streams, except for the existing transport-only inherited-pipe helpers. No real account was used.

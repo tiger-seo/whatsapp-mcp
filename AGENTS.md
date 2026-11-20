@@ -9,12 +9,14 @@ compiler. The WhatsApp client is whatsmeow, pinned in `go.mod`. One Go module; c
 a new setting is one descriptor in `setting.go` plus one `Config` field), `internal/store` (the one SQLite file
 `whatsapp.db`: whatsmeow device schema, message schema, the unsafe-run marker, repair markers, offline recovery),
 `internal/wa` (the connection owner, the pinned session adapter, the network fence and the quiet-stop check),
+`internal/mcp` (five read-only tools, guarded SDK transport, bounded stdio and diagnostics),
 `internal/wasim` (a simulated WhatsApp server and phone, tests only), `internal/lock`, `internal/private`,
 `internal/buildinfo`, `internal/walog` (the whatsmeow log bridge).
 
 **Commands:** `version`; `status` (offline snapshot, never connects); `pair` (QR window, offline recovery); `stdio` and
-`serve` (connect a saved session; no MCP tools yet). `OPERATIONS.md` is the operator guide and keeps implemented and
-verified apart.
+`serve` (open a saved session under the existing owner policy). `stdio` serves `list_chats`, `get_chat`,
+`search_contacts`, `get_direct_chat_by_contact` and `get_contact_chats`; `serve` has no MCP endpoint yet.
+`OPERATIONS.md` is the operator guide and keeps implemented and verified apart.
 
 ## Specification Sources (Speckit)
 
@@ -70,10 +72,13 @@ Add the row it ends with to the "Owner reviews" table in `specs/NNN-*/verificati
 
 Features 001–005 are merged (004, shutdown drain: pull request #11, 2026-11-10; 005, message ingest: pull request #19,
 2026-11-14, squash commit `4e143db`). Feature 005 (code at `b6d8727` before the squash): live and history messages, LID merges and chat names are
-stored, and a direct chat below the saved name is re-read from the contact table at 60 s, 5 min and 30 min; there are
-still no MCP tools. The design review passed at `a040210` and the code review at `cbce833`.
+stored, and a direct chat below the saved name is re-read from the contact table at 60 s, 5 min and 30 min.
+Its design review passed at `a040210` and its code review at `cbce833`.
 Three real-account runs (2026-11-14, cleaned up) are in `verification.md`; the late contact re-read itself was not
-observed on a real account. The next feature is the MCP tools. The resume point of a feature in progress is the `## Current state` section of its `tasks.md`.
+observed on a real account. Feature 006 implements five local read-only MCP tools in `stdio`, using a store-owned
+read facade and the existing owner/lock lifecycle. Owner launch allows all stored chat and contact reads; it does
+not grant account actions. Its native pipe evidence covers Windows/amd64, Linux/amd64 and macOS/arm64 with no real
+account. Delivery and owner review are tracked in [feature 006 tasks](specs/006-mcp-stdio-tools/tasks.md#current-state).
 Since 2026-11-13 `go.mod` replaces whatsmeow with the owner's fork `github.com/tiger-seo/whatsmeow` at `bedcf01`
 (branch `receive-bounds`), which enforces the receive bounds, sends nothing to the user's phone on another account's
 behalf, and carries the lost-515 fix proposed upstream as tulir/whatsmeow#1337; E003-RX-01 is retired.
@@ -161,4 +166,4 @@ the repository in git's `safe.directory` inside WSL. The VM can take up to half 
 run is killed. Record results as WSL2, not native Linux.
 
 ### ⚠️ stdout Is the MCP Protocol in `stdio` Mode
-**Rule:** logs and human messages go to stderr; a test asserts stdout stays empty after a stop.
+**Rule:** logs and human messages go to stderr; command tests require protocol-only stdout and no stray shutdown text.
