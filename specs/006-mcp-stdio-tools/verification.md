@@ -48,7 +48,7 @@ The adversarial cases cover raw malformed/truncated frames, duplicate and escape
 
 The matched device comparison sampled reset and pinned WAL lengths before the transaction, before commit and after commit: reset 0 / 6,666,192 / 8,454,272 B, pinned 4,231,272 / 10,897,432 / 12,685,512 B. Both samples differ in frame growth by only the 32-byte reset header, with `-shm` at 32,768 B in each run. This measures logical length, not filesystem allocation or a continuous physical peak of the actual crossing transaction. The writer hook counts one check per outer device transaction (not per inner statement) and one per standalone device read/write. Separate synchronous WAL stats averaged 6.317 and 7.353 us over 1,000 samples each; 100 separate free-space calls averaged 22.403 and 19.542 us respectively. These samples estimate call cost but do not isolate serialized writer-hold time. In the matched maximum-batch ingest workload, the baseline and flooded cases each completed 12 writes and recorded 12 writer checks in the sampling window. Baseline: 102 messages/s, 628 ms mean and 808 ms slowest write. Flood: 86 messages/s, 743 ms mean and 923 ms slowest write. The difference includes local scheduling and read contention; it is not attributed to the stat alone.
 
-**Still open for T035:** Passing integrated native CI on the corrected patch, crossing-transaction matched peak and physical sidecar allocation, checkpoint/reconnect stat timing and counts, and query heap/cache/temp high-water under concurrent ingest. T036-T042 (full inherited pipes, delivery and owner code review) remain outside this slice.
+**T035 status:** See the resource measurement follow-up below for the matched crossing, sidecar allocation, writer timing and concurrent query samples. Native CI passed on `0a138fb`, before this instrumentation was added. T036-T042 (full inherited pipes, delivery and owner code review) remain outside this slice.
 
 #### Phase 5 CI Follow-up (2026-11-20 UTC)
 
@@ -58,7 +58,34 @@ The matched device comparison sampled reset and pinned WAL lengths before the tr
 | --- | --- |
 | `GOMAXPROCS=1 go test ./internal/mcp -run '^TestAbuseSDKRedactionAndRecovery$' -count=1 -timeout 1m` (before synchronization) | Exit 1; all four log-level cases reproduced the CI failure. A sharper assertion identified the `get_pairing_qr` reply as `busy` in all four. |
 | `GOMAXPROCS=1 go test ./internal/mcp -run '^(TestAbuseSDKRedactionAndRecovery\|TestFiveToolDiscovery\|TestGuardHeldWriteKeepsToolCredit)$' -count=10 -timeout 3m` | Exit 0; 30 parent and 40 log-level subtest executions (30.148 s). |
-| `go test ./internal/mcp -count=1 -timeout 5m` | Exit 0 for the full MCP package (99.475 s). The corrected patch has not run in native CI. |
+| `go test ./internal/mcp -count=1 -timeout 5m` | Exit 0 for the full MCP package (99.475 s). |
+
+[Push CI for `0a138fb`](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44643575891) passed on Go 1.27.4 with `CGO_ENABLED=0`. The `check` job passed and the optional heavy-store job was skipped. The native suite uses non-verbose output, so individual test counts, skips and pressure measurements are not available from this step.
+
+| Native runner | `go test -timeout 30m ./...` | MCP / store package times |
+| --- | --- | --- |
+| Windows/amd64 | Exit 0 | 135.934 s / 261.087 s |
+| Linux/amd64 | Exit 0 | 78.777 s / 168.322 s |
+| macOS/arm64 | Exit 0 | 76.373 s / 211.205 s |
+
+#### T035 Resource Measurements (2026-11-20 UTC)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, pinned SQLite v1.62.0. All stores and writes were synthetic. With `WA_QUERY_PRESSURE=1`, `go test ./internal/store -run '^(TestMCPContactQueryPressure|TestMCPIngestPressure(MatchedCrossing|WriterCheckPaths|WALFence)|TestToolConcurrentIngestAndReadmission|TestToolAdmissionUsesFreshDiskSample)$' -count=1 -timeout 10m -v` exited 0: six parent tests, five subtests, zero skips (32.194 s). The first combined invocation failed at compile time on an unused import, removed before the recorded pass. `go vet ./...` exited 0.
+
+| Matched seventh outer transaction | WAL at start | WAL before commit | WAL after commit | Actual `-shm` allocation |
+| --- | ---: | ---: | ---: | ---: |
+| Pinned snapshot | 127,435,752 B | 159,637,672 B | 161,409,272 B | 327,680 B |
+| Reset WAL, same writes | 0 B | 32,201,952 B | 33,973,552 B | 98,304 B |
+
+The reset replay checkpoints immediately before the identical ingest batch, after applying the same six preceding transactions. Its frame spans match the pinned replay before and after commit, after accounting for the 32-byte reset header. These are samples of the physical file length at transaction boundaries, not a continuous disk high-water counter. In the matched runs the growing WAL was not truncated during the write. The independent mixed-fence case refused 976 competing tool calls and verified that the next writer could not enter SQLite until the snapshot and connection actually returned. `-shm` was measured separately with the filesystem's allocation-size API; its allocation is not part of the WAL frame argument.
+
+**Writer hold cost.** The test hook timestamps the actual serialized stat and subsequent gate publication, not an independent `os.Stat` loop. Checks: one per standalone device read/write, one per two-statement outer device transaction, zero writer checks for tool admission, and one each for recovery checkpoint, connection close and reconnect. On this run the standalone device write's publication interval registered 906.5 us and the outer device transaction's stat registered 524 us; the isolated read, checkpoint, close and reconnect intervals did not register above clock resolution. This is not evidence of zero cost. The 120-write light flood observed 120 checks, 4.5714 ms cumulative stat and 954.6 us maximum measured hold. The matched 768-message baseline and flood each observed 12 checks. Baseline: 108 messages/s, 595 ms mean write, 692 ms slowest, 1.1524 ms cumulative stat and 1.0241 ms maximum hold. Flood: 69 messages/s, 929 ms mean write, 2.146 s slowest, 998.8 us cumulative stat and 998.8 us maximum hold. Publication elapsed was below clock resolution for those ingest samples. Overall throughput differences include scheduling and read contention; do not attribute them to the stat.
+
+**Query resources.** The opt-in grouping fixture contains 100,000 distinct contacts, exactly 4,194,304 chosen-name bytes and 16,777,216 name-field bytes. It returned 200 rows in 2.360 s while 533 writes with 4 KiB message bodies committed without error. SQLite process heap began at 2,283,984 B and reached 29,414,200 B (27,130,216 B increase with ingest included). Sampled Go heap rose from 902,200 B to 4,205,256 B. The exact reader connection reported 5,144 B cache before and 31,256 B at return, `temp_store=MEMORY` and an unchanged zero temp-spill counter. SQLite includes in-memory temp work in the global heap high-water; its public cache gauge is a point sample, not a transient per-cache high-water. This is a ceiling-sized grouping sample, not exhaustive over alias distributions or a separate per-query cap. The maximal-batch/fence scenarios are separate. The contract's source bounds and admission proof still apply independently of these measured runs.
+
+**Final local checks:** `go test ./... -count=1 -timeout 30m` passed all 10 packages on Windows/amd64 (MCP 105.484 s, store 325.500 s); the opt-in query had already passed the focused run above. `go vet ./internal/store` cross-checks for Linux/amd64 and macOS/arm64 both exited 0. Formatting and `git diff --check` were clean.
+
+**Not yet verified:** native CI for the new measurement tests and instrumented writer. The opt-in grouping measurement ran only on Windows/amd64. Neither successful cross-compilation nor earlier native CI is runtime evidence for these additions.
 
 ### Phase 4 Contact Tools and Five-Tool Discovery (2026-11-19)
 

@@ -1698,15 +1698,43 @@ func TestMCPIngestPressureWALMeasurements(t *testing.T) {
 	}
 }
 
+type walTiming struct {
+	mu                     sync.Mutex
+	count                  int
+	stat, publish, maxHold time.Duration
+}
+
+func (w *walTiming) observe(stat, publish time.Duration) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.count++
+	w.stat += stat
+	w.publish += publish
+	w.maxHold = max(w.maxHold, stat+publish)
+}
+
+func (w *walTiming) report(t *testing.T, path string, want int) {
+	t.Helper()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if want >= 0 && w.count != want {
+		t.Fatalf("%s: %d checks, want %d", path, w.count, want)
+	}
+	t.Logf("%s: checks=%d stat_total=%s publish_total=%s max_hold=%s", path, w.count, w.stat, w.publish, w.maxHold)
+	w.count, w.stat, w.publish, w.maxHold = 0, 0, 0, 0
+}
+
 func toolConcurrentIngestAndReadmission(t *testing.T, writes, batchSize, textBytes int, flood bool) {
 	t.Helper()
 	var checks atomic.Int64
+	var timing walTiming
 	st, _ := openTestWith(t, newDataDir(t), openOptions{hooks: testHooks{
 		free: func(string) (uint64, error) { return 2 * gib, nil },
 		writerWAL: func(size int64, err error) (int64, error) {
 			checks.Add(1)
 			return size, err
 		},
+		writerWALTiming: timing.observe,
 	}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1772,9 +1800,11 @@ func toolConcurrentIngestAndReadmission(t *testing.T, writes, batchSize, textByt
 		done <- writerResult{peak: peak, maxBatch: maxBatch, elapsed: time.Since(start), total: total, slowest: slowest}
 	}()
 	checks.Store(0)
+	timing.report(t, "setup (excluded)", -1)
 	close(start)
 	logResult := func(r writerResult) {
 		t.Logf("flood=%v: %d messages in %s (%.0f messages/s); mean write=%s slowest=%s writer checks=%d", flood, writes*batchSize, r.elapsed, float64(writes*batchSize)/r.elapsed.Seconds(), r.total/time.Duration(writes), r.slowest, checks.Load())
+		timing.report(t, "writer handoffs during ingest", -1)
 	}
 	if !flood {
 		r := <-done

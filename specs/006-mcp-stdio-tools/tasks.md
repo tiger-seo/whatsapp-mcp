@@ -10,7 +10,7 @@
 
 ## Current State
 
-**2026-11-19 Phase 5:** T033 and T034 are complete. T035's protocol flood, held-output command, mixed ingest/device WAL fence, matched-frame samples and fresh-disk refusal pass locally on Windows/amd64. T035 remains open for native CI and the outstanding measurements listed in [Phase 5 evidence](verification.md#phase-5-abuse-bounds-and-pressure-2026-11-19-utc). T036-T042 have not started.
+**2026-11-20 Phase 5:** T033 and T034 are complete. [Push CI for `0a138fb`](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44643575891) passed on Windows/amd64, Linux/amd64 and macOS/arm64. T035's [measurement follow-up](verification.md#t035-resource-measurements-2026-11-20-utc) passed locally on Windows/amd64; the new WAL measurement tests and instrumented writer have not run in native CI. T036-T042 have not started.
 
 **2026-11-19 Phase 4 CI:** [Push CI for `16cb38f`](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44619362208) passed the Windows, Linux, and macOS test jobs and the `check` job. The optional heavy-store job was skipped. Phase 5 is ready to start at T033; sustained-ingest testing, native inherited-pipe acceptance, and owner code review remain open.
 

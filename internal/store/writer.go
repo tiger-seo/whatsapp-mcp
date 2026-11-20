@@ -67,7 +67,15 @@ func (g *gate) beginWriter(ctx context.Context) error {
 }
 
 func (s *Store) endWriter() {
+	var start, sampled time.Time
+	observe := s.hooks.writerWALTiming
+	if observe != nil {
+		start = time.Now()
+	}
 	size, err := s.walSize()
+	if observe != nil {
+		sampled = time.Now()
+	}
 	if s.hooks.writerWAL != nil {
 		size, err = s.hooks.writerWAL(size, err)
 	}
@@ -79,6 +87,9 @@ func (s *Store) endWriter() {
 	}
 	g.writerActive--
 	g.mu.Unlock()
+	if observe != nil {
+		observe(sampled.Sub(start), time.Since(sampled))
+	}
 }
 
 type writerConnector struct {

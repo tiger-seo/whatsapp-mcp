@@ -70,6 +70,7 @@ type testHooks struct {
 	afterCreate        func() // after a new database file was created, before the writer opens
 	beforeCommit       func(ctx context.Context)
 	writerWAL          func(size int64, err error) (int64, error) // after SQL, before the writer handoff
+	writerWALTiming    func(sample, publish time.Duration)        // test-only observation of writer handoff
 	afterSenderMerge   func() error                               // MergeLID, after the sender rewrite
 	afterChatInsert    func() error                               // StoreMessages, after the chat insert
 	free               func(dir string) (uint64, error)           // free-space measurement
