@@ -37,7 +37,14 @@ Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, all synthetic. Stdio now repor
 | `go test ./cmd/whatsapp-mcp ./internal/mcp -run '^(TestStdioRefuses(NonPrivateDatabase\|UnsafeParent)WithRemedy\|TestOpenDataDirRefused\|TestMCPStoreFailureShutdown\|TestMCPStdioIntegratedDrain\|TestStdioDiagnosticQuietStopFailure\|TestDiagnosticsPrivate.*)$' -count=3 -timeout 3m -json` | Exit 0; both packages passed, 105 named passes, three expected Unix-parent skips, no failures. |
 | `go vet ./...`; `go mod verify`; `git diff --check` | Exit 0 for each. |
 
-The native push matrix is required for current Windows/Linux/macOS delivery evidence. T042 still requires a renewed owner verdict.
+The [native push matrix](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44737454326) completed successfully on 2026-11-20 UTC at `5f10f8e1823ed0e7c943fe87f9fd4b955c700cab`. `gh run watch 44737454326 --repo tiger-seo/whatsapp-mcp --exit-status --compact --interval 30` completed successfully, and `gh run view 44737454326 --repo tiger-seo/whatsapp-mcp --json headSha,conclusion,jobs` confirmed that SHA. The full `go test -timeout 30m ./...` step passed on native Windows/amd64, Linux/amd64 and macOS/arm64. The check job passed, including reachable vulnerability scanning and all five cross-builds. The opt-in heavy job was skipped on push.
+
+| Native CI runner | Diagnostic shutdown (`-count=1`, `-timeout 3m`) | Integrated MCP pipes (`-count=2`, `-timeout 8m`) |
+| --- | --- | --- |
+| [Linux/amd64](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44737454326/job/136292319758) | Exit 0; 7 pass, 0 fail, 0 skip | Exit 0; 60 pass, 0 fail, 0 skip |
+| [macOS/arm64](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44737454326/job/136292320039) | Exit 0; 7 pass, 0 fail, 0 skip | Exit 0; 60 pass, 0 fail, 0 skip |
+
+This supplies current native evidence for the reporter changes. T042 still requires a renewed owner verdict.
 
 ### Quiet-Stop Diagnostic Review Follow-up (2026-11-20 UTC)
 
