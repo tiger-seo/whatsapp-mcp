@@ -48,7 +48,7 @@ The adversarial cases cover raw malformed/truncated frames, duplicate and escape
 
 The matched device comparison sampled reset and pinned WAL lengths before the transaction, before commit and after commit: reset 0 / 6,666,192 / 8,454,272 B, pinned 4,231,272 / 10,897,432 / 12,685,512 B. Both samples differ in frame growth by only the 32-byte reset header, with `-shm` at 32,768 B in each run. This measures logical length, not filesystem allocation or a continuous physical peak of the actual crossing transaction. The writer hook counts one check per outer device transaction (not per inner statement) and one per standalone device read/write. Separate synchronous WAL stats averaged 6.317 and 7.353 us over 1,000 samples each; 100 separate free-space calls averaged 22.403 and 19.542 us respectively. These samples estimate call cost but do not isolate serialized writer-hold time. In the matched maximum-batch ingest workload, the baseline and flooded cases each completed 12 writes and recorded 12 writer checks in the sampling window. Baseline: 102 messages/s, 628 ms mean and 808 ms slowest write. Flood: 86 messages/s, 743 ms mean and 923 ms slowest write. The difference includes local scheduling and read contention; it is not attributed to the stat alone.
 
-**T035 status:** See the resource measurement follow-up below for the matched crossing, sidecar allocation, writer timing and concurrent query samples. Native CI passed on `0a138fb`, before this instrumentation was added. T036-T042 (full inherited pipes, delivery and owner code review) remain outside this slice.
+**T035 status:** The matched crossing, sidecar allocation, writer timing, concurrent query samples and native CI for the measurement commit are recorded below.
 
 #### Phase 5 CI Follow-up (2026-11-20 UTC)
 
@@ -85,7 +85,47 @@ The reset replay checkpoints immediately before the identical ingest batch, afte
 
 **Final local checks:** `go test ./... -count=1 -timeout 30m` passed all 10 packages on Windows/amd64 (MCP 105.484 s, store 325.500 s); the opt-in query had already passed the focused run above. `go vet ./internal/store` cross-checks for Linux/amd64 and macOS/arm64 both exited 0. Formatting and `git diff --check` were clean.
 
-**Not yet verified:** native CI for the new measurement tests and instrumented writer. The opt-in grouping measurement ran only on Windows/amd64. Neither successful cross-compilation nor earlier native CI is runtime evidence for these additions.
+**Native CI:** [Push CI for `a3d18bd`](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44648290931) passed on 2026-11-20 UTC with Go 1.27.4 and `CGO_ENABLED=0`. The `check` job passed and the optional heavy-store job was skipped. The standard suite included the new WAL measurement tests and instrumented writer, but did not produce individual test counts or pressure samples in its non-verbose output. The opt-in grouping measurement was run separately on Windows/amd64 only.
+
+| Native runner | `go test -timeout 30m ./...` | MCP / store package times |
+| --- | --- | --- |
+| Windows/amd64 | Exit 0 | 98.690 s / 187.537 s |
+| Linux/amd64 | Exit 0 | 77.027 s / 128.526 s |
+| macOS/arm64 | Exit 0 | 78.851 s / 153.961 s |
+
+#### T036 Native Windows Pipes (2026-11-20 UTC)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, uncommitted patch on `a3d18bd`. No real account, device, or network was used. `go test ./cmd/whatsapp-mcp -run '^TestMCPPipeNative$' -count=1 -timeout 5m -v` exited 0: one parent, 13 cases, no skips (88.548 s package time). Children ran the integrated stdio command with inherited OS pipes, a fake owner and real synthetic SQLite stores and locks. A separate temporary control directory carries observations, not bytes on MCP stdout. All command exits were normal, not forced or killed. Counts below are entries/completions for reads and full successful writes; a failed write is not an acknowledgment.
+
+| Case | Child exit | stdin | stdout | stderr |
+| --- | ---: | ---: | ---: | ---: |
+| First signal (Ctrl+Break with stdin idle) | 0 | 1/0 | 0/0 | 12/12 |
+| Partial stdin then EOF | 1 | 17/17 | 0/0 | 14/14 |
+| Partial stdin still open at assembly timeout | 1 | 17/16 | 0/0 | 14/14 |
+| Slow stdout, complete large reply | 0 | 336/336 | 2/2 | 12/12 |
+| Blocked stdout | 1 | 336/335 | 2/1 | 14/14 |
+| Blocked stdin, stdout and stderr together | 1 | 336/335 | 2/1 | 1/0 |
+| Closed stdout | 1 | 151/150 | 1/0 | 14/14 |
+| Client cancellation notification | 0 | 414/414 | 2/2 | 13/13 |
+| Blocked stderr at startup refusal | 1 | 0/0 | 0/0 | 1/0 |
+| Blocked stderr during operation | 1 | 1/0 | 0/0 | 1/0 |
+| Blocked stderr across EOF and owner drain | 1 | 273/273 | 2/2 | 1/0 |
+| Mandatory overflow across EOF and owner drain | 1 | 273/273 | 2/2 | 1/0 |
+| Closed stderr | 1 | 0/0 | 0/0 | 1/0 |
+
+The harness requires owner stop, actual store quiescence, and lock reacquisition before accepting the process result, except startup refusal, which opens no store. In the signal case it also checks the lock stays held until owner release. The EOF cases first get a correlated pre-dispatch denial over stdout; owner-stop then submits loss events while stderr is held. With missing acknowledgment, finalization had pending work after cleanup; overflow had already latched failure. In the three-pipe case each original pump had one outstanding OS operation at shutdown, with no second concurrent call; neither cleanup nor process exit required the pipe peer to resume. The first matrix run passed 11 cases and failed only on a fixture expectation that closed stderr would allow the stdin pump to start; the corrected case allows early refusal and still requires owner/store/lock cleanup and exit 1.
+
+`go test ./internal/mcp -run '^TestDiagnostics' -count=1 -timeout 3m -v` exited 0 (6.212 s). Its two native stderr helper cases exited 0 on successful assertions, not as stand-ins for command exit status. The blocked helper observed 16 ordinary records, 16 mandatory records, 48 ordinary drops, 25 fixed cells, 17 pending submissions including the overflow, and zero mandatory deliveries. It checked the 4 KiB / 1 KiB record ceilings, retained history-incomplete, receive-overload, denied and terminal categories, and did not see a replacement write. The package timeout test observed failure at the 5 s acknowledgment deadline, and partial-write tests required a complete write. The reporter loop owns one earliest-deadline timer by construction; neither helper counts runtime timer objects. `go vet ./...` exited 0. Linux and macOS execution of this integrated harness is not claimed here (T037/T038).
+
+The full native Windows suite, `go test ./... -count=1 -timeout 30m`, passed all 10 packages (command: 245.006 s; MCP: 106.907 s; store: 341.537 s). `gofmt -l .` and `git diff --check` produced no output.
+
+#### T037/T038 Unix Pipe Follow-up (2026-11-20 UTC)
+
+WSL2 Linux/amd64 smoke only: `CGO_ENABLED=0 go test -buildvcs=false ./cmd/whatsapp-mcp -run '^TestMCPPipe(Native|Unix)$' -count=1 -timeout 5m -v` exited 0 (129.147 s), with 2 parents, 17 subprocess cases and no skips. The 13 shared cases matched the Windows command exit codes. The Unix-only exits were 1 for closed stderr before startup, 0 for closed stderr with ordinary logs only, 1 for a storage fault during EOF-driven owner drain, and 1 through the explicit forced callback after a second signal during pending diagnostic finalization. The forced case required store quiescence and lock reacquisition before sending the second signal. Windows `go vet ./...` and the macOS/arm64 cross-vet of `./cmd/whatsapp-mcp` exited 0; neither is native Unix runtime evidence.
+
+The shared Windows/amd64 matrix also passed after the Unix changes (`CGO_ENABLED=0 go test ./cmd/whatsapp-mcp -run '^TestMCPPipeNative$' -count=1 -timeout 5m`, exit 0, 94.047 s). The WSL2 cooperative owner/stream and integrated drain regressions passed twice (`CGO_ENABLED=0 go test -buildvcs=false ./cmd/whatsapp-mcp -run '^Test(MCPHarnessHeldOwnerAndCooperativeStreams|MCPStdioIntegratedDrain)$' -count=2 -timeout 2m`, exit 0, 12.598 s).
+
+The native Linux/macOS CI evidence step repeats the 17 named subprocess cases and the cooperative owner/stream and integrated drain regressions twice. T037/T038 remain open until native results are recorded.
 
 ### Phase 4 Contact Tools and Five-Tool Discovery (2026-11-19)
 

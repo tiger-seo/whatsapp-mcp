@@ -756,8 +756,21 @@ func TestDiagnosticsStderrSubprocess(t *testing.T) {
 			t.Fatal("stderr pipe did not fill")
 		}
 		calls := w.calls.Load()
-		if !d.Report(DiagnosticHistoryIncomplete) || !d.Report(DiagnosticReceiveOverload) {
+		for range 64 {
+			log.Info("ingest stopped")
+		}
+		if !d.Report(DiagnosticHistoryIncomplete) || !d.Report(DiagnosticReceiveOverload) ||
+			!d.ReportAudit(DiagnosticDenied, DiagnosticGetChat, DiagnosticInvalidInput) ||
+			!d.ReportTerminal(TerminalDevice) {
 			t.Fatal("pending mandatory events rejected")
+		}
+		for range 12 {
+			if !d.Report(DiagnosticReceiveOverload) {
+				t.Fatal("mandatory queue lost capacity to ordinary logs")
+			}
+		}
+		if d.Report(DiagnosticHistoryIncomplete) || !d.Failed() {
+			t.Fatal("17th queued mandatory event did not latch overflow")
 		}
 		time.Sleep(100 * time.Millisecond)
 		if w.calls.Load() != calls {
@@ -767,12 +780,21 @@ func TestDiagnosticsStderrSubprocess(t *testing.T) {
 			t.Fatal("pending mandatory events not failed on finish")
 		}
 		d.mu.Lock()
-		pending := d.cells[DiagnosticHistoryIncomplete].pending == 1 && d.cells[DiagnosticReceiveOverload].pending == 1
+		pending := d.cells[DiagnosticHistoryIncomplete].pending == 2 && d.cells[DiagnosticReceiveOverload].pending == 13 &&
+			d.cells[DiagnosticDenied].pending == 1 && d.cells[DiagnosticTerminal].pending == 1 && d.cells[DiagnosticDeliveryFailed].count == 1
+		ordinary, mandatory, cells, dropped := len(d.ordinary), len(d.mandatory), len(d.cells), d.dropped
+		bounded := true
+		for _, rec := range d.ordinary {
+			bounded = bounded && len(rec.data) <= 4096
+		}
+		for _, rec := range d.mandatory {
+			bounded = bounded && len(rec.data) <= 1024
+		}
 		d.mu.Unlock()
-		if !pending || w.calls.Load() != calls {
+		if !pending || w.calls.Load() != calls || !bounded || ordinary != 16 || mandatory != 16 || dropped != 48 || cells > 128 {
 			t.Fatal("pending loss events discarded or replacement pump started")
 		}
-		fmt.Fprint(os.Stdout, "cleanup-returned")
+		fmt.Fprintf(os.Stdout, "cleanup-returned ordinary=%d mandatory=%d drops=%d cells=%d pending=17 delivered=0", ordinary, mandatory, dropped, cells)
 		return
 	}
 	for _, mode := range []string{"blocked", "closed"} {
@@ -800,6 +822,7 @@ func TestDiagnosticsStderrSubprocess(t *testing.T) {
 			if mode == "blocked" && !strings.Contains(out.String(), "cleanup-returned") {
 				t.Fatalf("missing cleanup completion: %q", out.String())
 			}
+			t.Logf("child_exit=%d %s", cmd.ProcessState.ExitCode(), strings.TrimSpace(out.String()))
 		})
 	}
 }
