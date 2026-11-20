@@ -125,7 +125,14 @@ WSL2 Linux/amd64 smoke only: `CGO_ENABLED=0 go test -buildvcs=false ./cmd/whatsa
 
 The shared Windows/amd64 matrix also passed after the Unix changes (`CGO_ENABLED=0 go test ./cmd/whatsapp-mcp -run '^TestMCPPipeNative$' -count=1 -timeout 5m`, exit 0, 94.047 s). The WSL2 cooperative owner/stream and integrated drain regressions passed twice (`CGO_ENABLED=0 go test -buildvcs=false ./cmd/whatsapp-mcp -run '^Test(MCPHarnessHeldOwnerAndCooperativeStreams|MCPStdioIntegratedDrain)$' -count=2 -timeout 2m`, exit 0, 12.598 s).
 
-The native Linux/macOS CI evidence step repeats the 17 named subprocess cases and the cooperative owner/stream and integrated drain regressions twice. T037/T038 remain open until native results are recorded.
+**Native CI.** [Run #44652785852](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44652785852) for `9c4e30a` passed `check` and all three platform test jobs. The heavy-store job was skipped. Separate evidence steps ran `CGO_ENABLED=0 go test -count=2 -json -timeout 8m -run '^Test(MCPPipe(Native|Unix)|MCPHarnessHeldOwnerAndCooperativeStreams|MCPStdioIntegratedDrain)$' ./cmd/whatsapp-mcp` and checked for two passing results and expected exit-status records per named subprocess case.
+
+| Native job | UTC start | Direct exit | Pass / fail / skip events | Package time |
+| --- | --- | ---: | ---: | ---: |
+| [Linux/amd64](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44652785852/job/136011545518) | 2026-11-20 01:23:52 | 0 | 60 / 0 / 0 | 115.472 s |
+| [macOS/arm64](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44652785852/job/136011545330) | 2026-11-20 01:24:00 | 0 | 60 / 0 / 0 | 117.591 s |
+
+Each runner executed 34 subprocess cases (17 named cases twice), plus the cooperative and integrated drain regressions. On both platforms the shared 13 cases matched the expected exit codes in the Windows table. Unix-only cases exited 1 for closed stderr before startup, 0 for ordinary-only closed stderr, 1 for the device fault during EOF-driven drain, and 1 through the forced callback after actual cleanup and a second signal. A SIGPIPE termination would not satisfy the expected exit or the child cleanup observations. Only Linux/amd64 and macOS/arm64 were exercised natively; other Unix architectures have no runtime evidence from this run. No real account was used.
 
 ### Phase 4 Contact Tools and Five-Tool Discovery (2026-11-19)
 
