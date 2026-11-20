@@ -10,6 +10,8 @@
 
 ## Current State
 
+**2026-11-20 owner code review:** `owner-judge` returned `BLOCK` at `c31b523`. See the [recorded verdict](verification.md#owner-reviews). Restore the bounded quiet-stop failure diagnostics in production stdio, test the real reporter path, and obtain another code review before closing T042.
+
 **2026-11-20 delivery checkpoint:** T039-T041 are complete. The operator docs describe the five read-only tools, and the [quickstart rerun and traceability matrix](verification.md#t041-requirements-traceability) cover the 33 requirements and criteria. T042 is the only open task: the local implementation commit requires authorization, then `owner-judge` must review that exact commit.
 
 **2026-11-20 T039 delivery gate:** Complete. After a test-only logging synchronization fix, the exact native Windows/amd64 delivery suite passed all ten packages. See [local delivery evidence](verification.md#t039-local-delivery-gates-2026-11-20-utc), including the first run's two failures and the unchanged production budgets.

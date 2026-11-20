@@ -921,6 +921,9 @@ After the drain failure latches, the next writer-pool calls must fail without wa
 | design | 2026-11-19 | 42827be | CONCERNS | |
 | design | 2026-11-19 | 8594218 | BLOCK | |
 | design | 2026-11-19 | 7d4336b | PASS | |
+| code | 2026-11-20 | c31b523 | BLOCK | |
+
+Code review of `c31b523` was read-only against `origin/main` (merge base `08c54a9`). **Blocker:** production stdio drops the quiet-stop failure reason and counts in its mandatory reporting path (`cmd/whatsapp-mcp/quiet_output.go`, `internal/mcp/diagnostics.go`). Existing category tests bypass that reporter. Restore bounded diagnostic metadata from trusted categories and cover the production reporting path. **Nonblocking:** the oversized-result path reports `internal` rather than `resource_limit` in the mandatory audit (`internal/mcp/server.go`). The reviewer ran no tests or builds and could not read the pinned WhatsApp fork's module-cache source. No review findings have been accepted or parked.
 
 The review of `42827be` confirmed the revised dependency order is acyclic and the integrated obligations are unchanged. It found that the current native CI test output does not surface the named diagnostic cases, skips or child exit statuses required to close the foundation. It also noted that the design needs to preserve the configured ordinary log level after config loads without creating a second stderr pump. This was a read-only design review; no runtime or native test evidence was produced.
 
