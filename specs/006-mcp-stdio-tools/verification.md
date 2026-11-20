@@ -27,6 +27,23 @@ The `owner-judge` review at `7d4336b` returned `PASS` for the revised WAL fence 
 
 ## Runtime Gates
 
+### Stdout Failure and Config Diagnostics Follow-up (2026-11-20 UTC)
+
+The framed writer now publishes a fixed terminal failure before waking the reader. Ordinary cancellation still closes normally. Stdio now identifies ordinary `config.toml` errors and reports numeric parser coordinates when available, without printing parser text or rejected values. Existing permission-refusal remedies and startup exit codes are unchanged.
+
+| Command or gate | Result |
+| --- | --- |
+| `go test ./internal/mcp ./cmd/whatsapp-mcp -run '^(TestFramingWriteTimeoutVisibleToGuardReader\|TestStdioReportsInvalidConfigFile)$' -count=1 -timeout 1m` (before fix) | Exit 1: the reader saw a generic close, and all three config cases lacked the expected file diagnostic. |
+| `go test ./internal/mcp ./cmd/whatsapp-mcp -run '^(TestFramingWriteTimeoutVisibleToGuardReader\|TestFramingWriteCancellationAndFailure\|TestStdioReportsInvalidConfigFile\|TestStdioRefusesNonPrivateStartupFilesWithRemedy\|TestMCPStdioTransportFailure\|TestMCPStdioOfflineRead)$' -count=10 -timeout 4m` | Exit 0 on Windows/amd64; both packages passed all ten repetitions. |
+| `go test -buildvcs=false ./cmd/whatsapp-mcp -run '^TestMCPPipeNative$/^(blocked_stdout\|closed_stdout)$' -count=10 -timeout 6m` | Exit 0 under Ubuntu WSL2; both cases passed ten times. This is not native Linux CI evidence. |
+| `go test ./... -count=1 -timeout 30m` (Windows first run) | Exit 1: nine packages passed; `TestMCPPipeNative/partial_stdin_timeout` did not observe `owner-stop` within the child watchdog. |
+| `go test ./cmd/whatsapp-mcp -run '^TestMCPPipeNative$/^partial_stdin_timeout$' -count=3 -timeout 3m` | Exit 1: the same failure occurred in one of three runs. Its cause remains unverified. |
+| `go test ./... -count=1 -timeout 30m` (Windows rerun) | Exit 0: all ten packages passed without concurrent builds. Plain Go output does not count skips. |
+| `go build -o /dev/null ./cmd/whatsapp-mcp` (`CGO_ENABLED=0`) | Exit 0 separately for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64. |
+| `gofmt -l .`; `go vet ./...`; `go mod verify`; `git diff --check` | Passed; vet/module checks passed after the initial combined call timed out under concurrent load. |
+
+T042 remains open. Current native CI and a renewed owner verdict are pending. The write failure regression confirms the reviewed ordering defect without establishing the cause of either earlier intermittent native pipe failure.
+
 ### LID Hint CI Follow-up (2026-11-20 UTC)
 
 The Linux failure in run `44743399834` came from a test that slept for 60 ms before committing the mapping, leaving a scheduler-dependent margin before the hint's last attempt. The fixture now waits for the first missing lookup, commits the actual SQLite mapping, then releases that lookup. No mapping observer is registered, so a separate notification cannot satisfy the merge assertion. Production retry counts and delays are unchanged.

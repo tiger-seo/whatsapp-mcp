@@ -835,8 +835,12 @@ func (s *streams) reportStartupError(err error) {
 	switch {
 	case errors.As(err, &held):
 		s.diagnostics.ReportHuman(mcp.HumanLockHeld, held.PID)
-	case errors.As(err, &file) && errors.As(file, &perms):
-		s.diagnostics.ReportPrivateFile(mcp.PrivateConfigFile, file.Path, perms.Fix)
+	case errors.As(err, &file):
+		if errors.As(file, &perms) {
+			s.diagnostics.ReportPrivateFile(mcp.PrivateConfigFile, file.Path, perms.Fix)
+		} else {
+			s.diagnostics.ReportConfigFile(file.Line, file.Column, false)
+		}
 	case errors.As(err, &dir):
 		if errors.As(dir, &perms) {
 			s.diagnostics.ReportPrivateDirectory(dir.Dir, perms.Fix)
@@ -844,7 +848,11 @@ func (s *streams) reportStartupError(err error) {
 			s.diagnostics.ReportHuman(mcp.HumanDataDirFailure, 0)
 		}
 	case errors.As(err, &setting) && setting.Setting == "log_level":
-		s.diagnostics.ReportHuman(mcp.HumanLogLevelFailure, 0)
+		if setting.Origin.Source == config.File {
+			s.diagnostics.ReportConfigFile(0, 0, true)
+		} else {
+			s.diagnostics.ReportHuman(mcp.HumanLogLevelFailure, 0)
+		}
 	default:
 		s.diagnostics.ReportHuman(mcp.HumanUsageFailure, 0)
 	}

@@ -10,6 +10,8 @@
 
 ## Current State
 
+**2026-11-20 fourth review follow-up:** The framed writer preserves terminal write failure for the reader, and stdio identifies ordinary `config.toml` errors. The [focused regressions and Windows full rerun](verification.md#stdout-failure-and-config-diagnostics-follow-up-2026-11-20-utc) passed. T042 remains open pending current native CI and renewed owner review.
+
 **2026-11-20 fourth code review:** The [review of `e06ac9a`](verification.md#owner-reviews) confirmed the lock and config permission fixes but returned `BLOCK` on stdout failure classification during shutdown and misleading diagnostics for ordinary `config.toml` errors. T042 remains open; no finding was parked.
 
 **2026-11-20 lock/config follow-up:** Stdio now reports the path-specific remedy for both non-private startup files. The [Windows regression and full rerun](verification.md#lock-and-config-refusal-follow-up-2026-11-20-utc) passed. T042 remains open pending native CI and renewed owner review of this change.

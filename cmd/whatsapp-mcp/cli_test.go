@@ -468,3 +468,29 @@ func TestStdioRefusesNonPrivateStartupFilesWithRemedy(t *testing.T) {
 		})
 	}
 }
+
+func TestStdioReportsInvalidConfigFile(t *testing.T) {
+	const rejected = "synthetic-rejected-value"
+	for _, tc := range []struct{ name, contents, detail string }{
+		{"syntax", `log_level = "` + rejected, "line=1"},
+		{"type", `log_level = ["` + rejected + `"]`, "line=1"},
+		{"value", `log_level = "` + rejected + `"`, "debug, info, warn or error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := privateDir(t)
+			if err := os.WriteFile(filepath.Join(dir, config.FileName), []byte(tc.contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+			r := runIn(t, nil, "stdio", "--data-dir", dir)
+			r.expect(t, exitUsage)
+			if r.stdout != "" || !strings.Contains(r.stderr, "reason=invalid_configuration") ||
+				!strings.Contains(r.stderr, "config.toml") || !strings.Contains(r.stderr, tc.detail) ||
+				strings.Contains(r.stderr, rejected) || len(r.stderr) > 1024 {
+				t.Fatalf("invalid file diagnostic: stdout=%q stderr=%q", r.stdout, r.stderr)
+			}
+			if _, err := os.Stat(filepath.Join(dir, lock.FileName)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("lock appeared on config refusal: %v", err)
+			}
+		})
+	}
+}

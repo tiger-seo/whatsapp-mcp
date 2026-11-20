@@ -293,6 +293,22 @@ func (d *Diagnostics) ReportQuietStopRecovery(reason string) bool {
 	return d.report(DiagnosticHumanFailure, " reason=unsafe_run hint="+strconv.Quote(hint))
 }
 
+// ReportConfigFile uses only a fixed file role and parser coordinates, never the rejected contents.
+func (d *Diagnostics) ReportConfigFile(line, column int, logLevel bool) bool {
+	meta := " reason=invalid_configuration"
+	if line > 0 {
+		meta += " line=" + strconv.Itoa(line)
+		if column > 0 {
+			meta += " column=" + strconv.Itoa(column)
+		}
+	}
+	hint := "check config.toml in the data directory for valid TOML, supported settings and value types"
+	if logLevel {
+		hint = "in config.toml, log_level must be debug, info, warn or error"
+	}
+	return d.report(DiagnosticHumanFailure, meta+" hint="+strconv.Quote(hint))
+}
+
 func (d *Diagnostics) ReportNewerSchema(device bool, observed, supported int) bool {
 	schema := "message schema version"
 	if device {
