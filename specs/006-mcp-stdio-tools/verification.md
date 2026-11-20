@@ -937,6 +937,9 @@ After the drain failure latches, the next writer-pool calls must fail without wa
 | design | 2026-11-19 | 8594218 | BLOCK | |
 | design | 2026-11-19 | 7d4336b | PASS | |
 | code | 2026-11-20 | c31b523 | BLOCK | |
+| code | 2026-11-20 | b129c95429c32e646f1aecae047c097bc91009a1 | BLOCK | |
+
+The code-mode review of `b129c95` followed the `owner-judge` rubric with GPT-6.2 Sol at High reasoning. It confirmed that the `c31b523` quiet-stop finding is resolved. Remaining blockers: native Linux/amd64 and macOS/arm64 verification for the changed reporter; an actionable, path-appropriate remedy when stdio refuses a non-private storage file or a data directory beneath an unsafe parent (`cmd/whatsapp-mcp/commands.go:853`, `internal/mcp/diagnostics.go:305`); and a mandatory `tool_store_not_quiescent` category when the store drain latch triggers unsuccessful shutdown (`cmd/whatsapp-mcp/commands.go:621`). The oversized-result audit mismatch remains nonblocking. The reviewer used committed source and recorded evidence and ran no runtime tests. Nothing was parked.
 
 Code review of `c31b523` was read-only against `origin/main` (merge base `08c54a9`). **Blocker:** production stdio drops the quiet-stop failure reason and counts in its mandatory reporting path (`cmd/whatsapp-mcp/quiet_output.go`, `internal/mcp/diagnostics.go`). Existing category tests bypass that reporter. Restore bounded diagnostic metadata from trusted categories and cover the production reporting path. **Nonblocking:** the oversized-result path reports `internal` rather than `resource_limit` in the mandatory audit (`internal/mcp/server.go`). The reviewer ran no tests or builds and could not read the pinned WhatsApp fork's module-cache source. No review findings have been accepted or parked.
 
