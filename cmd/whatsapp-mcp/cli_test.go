@@ -475,6 +475,7 @@ func TestStdioReportsInvalidConfigFile(t *testing.T) {
 		{"syntax", `log_level = "` + rejected, "line=1"},
 		{"type", `log_level = ["` + rejected + `"]`, "line=1"},
 		{"value", `log_level = "` + rejected + `"`, "debug, info, warn or error"},
+		{"size", "# " + rejected + "\n" + strings.Repeat("\n", config.MaxFileSize), "1 MiB or less"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := privateDir(t)

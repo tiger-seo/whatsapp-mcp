@@ -10,6 +10,10 @@
 
 ## Current State
 
+**2026-11-20 fifth review follow-up:** Stdio retains published stdout failures through normal guard shutdown, rejects late output acknowledgments, and reports the 1 MiB config limit. The [full Windows suite and local checks](verification.md#output-deadline-and-config-size-follow-up-2026-11-20-utc) passed. T042 remains open pending native CI and renewed owner review.
+
+**2026-11-20 fifth code review:** CI passed for `d539ae9`, but [owner review](verification.md#owner-reviews) returned `BLOCK` on a normal stop masking a published stdout failure, acceptance of a late output acknowledgment, and misleading guidance for oversized `config.toml`. Current native evidence is recorded locally. T042 remains open; no finding was parked.
+
 **2026-11-20 fourth review follow-up:** The framed writer preserves terminal write failure for the reader, and stdio identifies ordinary `config.toml` errors. The [focused regressions and Windows full rerun](verification.md#stdout-failure-and-config-diagnostics-follow-up-2026-11-20-utc) passed. T042 remains open pending current native CI and renewed owner review.
 
 **2026-11-20 fourth code review:** The [review of `e06ac9a`](verification.md#owner-reviews) confirmed the lock and config permission fixes but returned `BLOCK` on stdout failure classification during shutdown and misleading diagnostics for ordinary `config.toml` errors. T042 remains open; no finding was parked.

@@ -27,6 +27,22 @@ The `owner-judge` review at `7d4336b` returned `PASS` for the revised WAL fence 
 
 ## Runtime Gates
 
+### Output Deadline and Config Size Follow-up (2026-11-20 UTC)
+
+Stdio checks the framed output failure after the SDK join even when normal guard closure won. The existing output pump timestamps full write acknowledgments; an acknowledgment at or after the effective deadline cannot turn a timeout into success. Ordinary closure with no published failure remains successful. Oversized `config.toml` now gets the typed 1 MiB remedy without echoing file contents.
+
+| Command or gate (`CGO_ENABLED=0`) | Direct result |
+| --- | --- |
+| `go test ./internal/mcp ./cmd/whatsapp-mcp -run '^(TestFramingWrite(CompletionAndGuardStop\|TimeoutVisibleToGuardReader\|CancellationAndFailure)\|TestStdioReportsInvalidConfigFile\|TestMCPStdio(TransportFailure\|OfflineRead))$' -count=10 -timeout 3m` | Windows/amd64: exit 0; both packages passed all ten repetitions. Plain output does not count skips. |
+| `go test ./... -count=1 -timeout 30m -json` | Windows/amd64: exit 0; 10 packages passed, 1,961 named passes, 32 skips, no failures. |
+| `go test -buildvcs=false ./cmd/whatsapp-mcp -run '^TestMCPPipeNative$/^(blocked_stdout\|closed_stdout\|slow_stdout\|first_signal)$' -count=3 -timeout 4m` | WSL2: exit 1; one `blocked_stdout` case timed out at startup waiting for `stdin-entered`, before the fixture exercised stdout. |
+| `go test -buildvcs=false ./cmd/whatsapp-mcp -run '^TestMCPPipeNative$/^blocked_stdout$' -count=3 -timeout 3m` | WSL2 isolated rerun: exit 0, all three repetitions passed. WSL2 is not native Linux CI evidence. |
+| `gofmt -l .`; `go vet ./...`; `go mod verify`; `git diff --check`; `git ls-files --eol` | Exit 0 for each; no formatting, vet, whitespace, or tracked CRLF findings. |
+| `go build -o /dev/null ./cmd/whatsapp-mcp` | Exit 0 for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64. |
+| `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...` | Exit 0; no vulnerabilities found. |
+
+Current native CI and renewed owner review remain pending for these changes. No historical intermittent failure was attributed to either output finding.
+
 ### Stdout Failure and Config Diagnostics Follow-up (2026-11-20 UTC)
 
 The framed writer now publishes a fixed terminal failure before waking the reader. Ordinary cancellation still closes normally. Stdio now identifies ordinary `config.toml` errors and reports numeric parser coordinates when available, without printing parser text or rejected values. Existing permission-refusal remedies and startup exit codes are unchanged.
@@ -42,7 +58,14 @@ The framed writer now publishes a fixed terminal failure before waking the reade
 | `go build -o /dev/null ./cmd/whatsapp-mcp` (`CGO_ENABLED=0`) | Exit 0 separately for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64. |
 | `gofmt -l .`; `go vet ./...`; `go mod verify`; `git diff --check` | Passed; vet/module checks passed after the initial combined call timed out under concurrent load. |
 
-T042 remains open. Current native CI and a renewed owner verdict are pending. The write failure regression confirms the reviewed ordering defect without establishing the cause of either earlier intermittent native pipe failure.
+The write failure regression confirms the reviewed ordering defect without establishing the cause of either earlier intermittent native pipe failure. The [push CI run](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44785754591) completed successfully on 2026-11-20 UTC at `d539ae917549704136130bba9f01c6e94a8f111f`. `gh run view 44785754591 --repo tiger-seo/whatsapp-mcp --json attempt,headSha,status,conclusion,jobs` exited 0 and confirmed attempt 2 and the reviewed SHA.
+
+| Attempt | Native evidence |
+| --- | --- |
+| [1](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44785754591/attempts/1) | Check, Windows/amd64 and Linux/amd64 passed. Linux diagnostic and integrated pipe steps each exited 0 (7 and 60 named passes, respectively; no failures or skips). macOS was cancelled before a runner acquired the job. |
+| [2](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44785754591/attempts/2) | Overall success. macOS/arm64 ran afresh and passed; the focused diagnostic and integrated pipe steps each exited 0 (7 and 60 named passes, respectively; no failures or skips). Other results carried forward. |
+
+The full `go test -timeout 30m ./...` step passed on all three platforms; its plain output gives package results, not named test or skip counts. The Unix-only focused steps did not run on Windows, and the optional heavy job was skipped. T042 remains open under the renewed owner verdict below.
 
 ### LID Hint CI Follow-up (2026-11-20 UTC)
 
@@ -1001,6 +1024,9 @@ After the drain failure latches, the next writer-pool calls must fail without wa
 | code | 2026-11-20 | b129c95429c32e646f1aecae047c097bc91009a1 | BLOCK | |
 | code | 2026-11-20 | c8c504d12e42ef88cddbcaf591527112cdf72bf6 | BLOCK | |
 | code | 2026-11-20 | e06ac9a3bd29bcce129218942cc626d2b815b264 | BLOCK | |
+| code | 2026-11-20 | d539ae917549704136130bba9f01c6e94a8f111f | BLOCK | |
+
+The `d539ae9` review used the `owner-judge` rubric with GPT-6.2 Sol at High reasoning. It confirmed that the reader-first write failure and the malformed TOML, wrong-type and invalid `log_level` diagnostics from the prior review were addressed. Remaining blockers: a competing normal stop can still suppress an already-published stdout failure (`internal/mcp/connection.go:165`); a late write acknowledgment can win over the five-second deadline (`internal/mcp/transport.go:432`); and oversized `config.toml` is given syntax/type guidance instead of the size-limit remedy (`cmd/whatsapp-mcp/commands.go:838`). The review also flagged missing committed native evidence, now recorded locally above. The oversized tool-result audit category remains nonblocking. No new tests were run in review, no historical intermittent failure was attributed to these findings, and no finding was parked.
 
 The code-mode review of `e06ac9a` followed the `owner-judge` rubric with GPT-6.2 Sol at High reasoning. It confirmed the lock and config permission remedies and the green CI rerun. **Blocking:** a terminal stdout write failure can be lost when reader closure is classified as a normal stop (`internal/mcp/transport.go:374`, `internal/mcp/connection.go:497`); the source confirms the ordering defect but does not establish that it caused the intermittent Linux failure. **Blocking:** non-permission `config.toml` errors are reported as invalid command-line arguments instead of actionable configuration failures (`cmd/whatsapp-mcp/commands.go:838`). The reviewer inspected committed source and both CI attempts without running new tests. No findings were parked.
 

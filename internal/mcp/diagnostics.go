@@ -309,6 +309,10 @@ func (d *Diagnostics) ReportConfigFile(line, column int, logLevel bool) bool {
 	return d.report(DiagnosticHumanFailure, meta+" hint="+strconv.Quote(hint))
 }
 
+func (d *Diagnostics) ReportConfigFileTooLarge() bool {
+	return d.report(DiagnosticHumanFailure, ` reason=invalid_configuration hint="reduce config.toml in the data directory to 1 MiB or less"`)
+}
+
 func (d *Diagnostics) ReportNewerSchema(device bool, observed, supported int) bool {
 	schema := "message schema version"
 	if device {

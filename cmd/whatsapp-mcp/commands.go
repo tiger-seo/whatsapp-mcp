@@ -836,9 +836,12 @@ func (s *streams) reportStartupError(err error) {
 	case errors.As(err, &held):
 		s.diagnostics.ReportHuman(mcp.HumanLockHeld, held.PID)
 	case errors.As(err, &file):
-		if errors.As(file, &perms) {
+		switch {
+		case errors.As(file, &perms):
 			s.diagnostics.ReportPrivateFile(mcp.PrivateConfigFile, file.Path, perms.Fix)
-		} else {
+		case errors.Is(err, config.ErrFileTooLarge):
+			s.diagnostics.ReportConfigFileTooLarge()
+		default:
 			s.diagnostics.ReportConfigFile(file.Line, file.Column, false)
 		}
 	case errors.As(err, &dir):
