@@ -10,6 +10,8 @@
 
 ## Current State
 
+**2026-11-20 storage diagnostic follow-up:** Stdio now preserves private file and parent refusal remedies and reports a latched tool-store drain fault once through mandatory stderr. Focused Windows regressions passed; current native CI and the renewed owner verdict are tracked separately. T042 remains open.
+
 **2026-11-20 renewed owner code review:** The [review of `b129c95`](verification.md#owner-reviews) confirmed the quiet-stop fix but returned `BLOCK`: native Linux/macOS evidence for the changed reporter is pending, stdio must preserve the correct private-storage refusal remedies, and the tool-store drain fault must emit a mandatory diagnostic. T042 remains open.
 
 **2026-11-20 quiet-stop follow-up:** The stdio reporter now preserves the bounded quiet-stop reason and counts, and the human recovery line names the reason. The [production-path regression and full Windows suite](verification.md#quiet-stop-diagnostic-review-follow-up-2026-11-20-utc) passed. T042 remains open pending renewed owner review.

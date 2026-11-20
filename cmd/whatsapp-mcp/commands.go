@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode"
@@ -619,8 +620,10 @@ func runShell(kind string, cmd *command, args []string, s *streams, body func(co
 	lc.addStoreStop(st.Close, st.Quiesced())
 	if kind == "stdio" {
 		failed := toolStoreFailureSignal(st)
+		report := sync.OnceFunc(func() { s.diagnostics.ReportTerminal(mcp.TerminalToolStore) })
 		select {
 		case <-failed:
+			report()
 			lc.shutdown()
 			return exitError
 		default:
@@ -632,6 +635,7 @@ func runShell(kind string, cmd *command, args []string, s *streams, body func(co
 			case <-failed:
 				// Do not make cancellation wait for a diagnostic write.
 				lc.cancel()
+				report()
 			case <-lc.ctx.Done():
 			}
 		}()
@@ -641,6 +645,7 @@ func runShell(kind string, cmd *command, args []string, s *streams, body func(co
 			// failure during cleanup takes precedence over the normal exit.
 			select {
 			case <-failed:
+				report()
 				result = exitError
 			default:
 			}
@@ -853,11 +858,14 @@ func openStore(ctx context.Context, cfg *config.Config, logger *slog.Logger, s *
 	if err != nil {
 		if s.diagnostics != nil {
 			var schema *store.SchemaError
+			var storage *store.StorageError
 			switch {
 			case errors.Is(err, store.ErrSchemaTooNew) && errors.As(err, &schema):
 				s.diagnostics.ReportNewerSchema(schema.Schema == "device", schema.Observed, schema.Supported)
 			case errors.Is(err, store.ErrNotDatabase):
 				s.diagnostics.ReportHuman(mcp.HumanNotDatabase, 0)
+			case errors.As(err, &storage) && storage.Code == "not_private" && storage.PrivatePath != "":
+				s.diagnostics.ReportPrivateFile(storage.PrivatePath, storage.Fix)
 			default:
 				s.diagnostics.ReportHuman(mcp.HumanStartupFailure, 0)
 			}

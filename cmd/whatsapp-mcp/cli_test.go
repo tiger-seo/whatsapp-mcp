@@ -366,3 +366,57 @@ func TestFlagErrorEscaped(t *testing.T) {
 		t.Errorf("stderr kept an escape character: %q", r.stderr)
 	}
 }
+
+func TestStdioRefusesNonPrivateDatabaseWithRemedy(t *testing.T) {
+	dir := privateDir(t)
+	path := filepath.Join(dir, "whatsapp.db")
+	const contents = "synthetic file must remain unchanged"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	remedy := "chmod 600"
+	if runtime.GOOS == "windows" {
+		remedy = "icacls"
+		if out, err := exec.Command("icacls", path, "/grant", "*S-1-5-32-545:R").CombinedOutput(); err != nil {
+			t.Fatalf("icacls: %v\n%s", err, out)
+		}
+	} else if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 { // A second refusal proves the first did not repair the permissions.
+		r := runIn(t, nil, "stdio", "--data-dir", dir, "--log-level", "error")
+		r.expect(t, exitError)
+		if r.stdout != "" || !strings.Contains(r.stderr, "path="+strconv.QuoteToASCII(path)) || !strings.Contains(r.stderr, remedy) {
+			t.Errorf("missing database path or file remedy: stdout=%q stderr=%q", r.stdout, r.stderr)
+		}
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != contents {
+		t.Errorf("refusal changed database: %q (%v)", got, err)
+	}
+	requireReleasedLock(t, dir)
+}
+
+func TestStdioRefusesUnsafeParentWithRemedy(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix parent-mode check")
+	}
+	parent := privateDir(t)
+	dir := filepath.Join(parent, "data")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	r := runIn(t, nil, "stdio", "--data-dir", dir)
+	r.expect(t, exitError)
+	if r.stdout != "" || !strings.Contains(r.stderr, "path="+strconv.QuoteToASCII(parent)) || !strings.Contains(r.stderr, "chmod go-w") || strings.Contains(r.stderr, "chmod 700") {
+		t.Errorf("missing the affected parent and its remedy: stdout=%q stderr=%q", r.stdout, r.stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, lock.FileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("lock appeared on parent refusal: %v", err)
+	}
+	if info, err := os.Stat(parent); err != nil || info.Mode().Perm() != 0o770 {
+		t.Errorf("refusal changed parent permissions: %v (%v)", info, err)
+	}
+}

@@ -93,7 +93,7 @@ func privateError(path string, err error) error {
 		if strings.Contains(pe.Problem, "link") || strings.Contains(pe.Problem, "regular") {
 			code = "unsafe_artifact"
 		}
-		return &StorageError{Artifact: safePath(path), Code: code, Reason: pe.Problem, Fix: pe.Fix, sentinel: ErrUnsafeStorage}
+		return &StorageError{Artifact: safePath(path), PrivatePath: path, Code: code, Reason: pe.Problem, Fix: pe.Fix, sentinel: ErrUnsafeStorage}
 	}
 	return ioError("io")
 }

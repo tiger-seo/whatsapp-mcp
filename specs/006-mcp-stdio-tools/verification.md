@@ -27,6 +27,18 @@ The `owner-judge` review at `7d4336b` returned `PASS` for the revised WAL fence 
 
 ## Runtime Gates
 
+### Storage Diagnostic Review Follow-up (2026-11-20 UTC)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, all synthetic. Stdio now reports the checked database artifact and its file-specific remedy, names the affected parent when the parent check refuses startup, and queues one mandatory `tool_store_not_quiescent` record without changing drain order. Refusals never repair the artifact or parent in place. Oversized or unsafe path text uses a bounded, operation-specific fallback.
+
+| Command | Direct result |
+| --- | --- |
+| `go test ./cmd/whatsapp-mcp -run '^(TestStdioRefuses(NonPrivateDatabase\|UnsafeParent)WithRemedy\|TestMCPStoreFailureShutdown)$' -count=1 -timeout 1m` (before fix) | Exit 1; database refusal and all four latched schedules lacked their diagnostic, Unix parent test skipped on Windows. |
+| `go test ./cmd/whatsapp-mcp ./internal/mcp -run '^(TestStdioRefuses(NonPrivateDatabase\|UnsafeParent)WithRemedy\|TestOpenDataDirRefused\|TestMCPStoreFailureShutdown\|TestMCPStdioIntegratedDrain\|TestStdioDiagnosticQuietStopFailure\|TestDiagnosticsPrivate.*)$' -count=3 -timeout 3m -json` | Exit 0; both packages passed, 105 named passes, three expected Unix-parent skips, no failures. |
+| `go vet ./...`; `go mod verify`; `git diff --check` | Exit 0 for each. |
+
+The native push matrix is required for current Windows/Linux/macOS delivery evidence. T042 still requires a renewed owner verdict.
+
 ### Quiet-Stop Diagnostic Review Follow-up (2026-11-20 UTC)
 
 Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`; synthetic data and a fake owner only. The command test runs `stdio` with the production reporter at log level `error`. It checks exit 1, protocol-only stdout, all eight quiet-stop categories, numeric counts, rejection of duplicate fields, redaction of an unknown reason to `unknown`, and bounded records. It also checks history and receive-loss reasons and the dropped-message count. The existing queue, acknowledgment and exit policies are unchanged.

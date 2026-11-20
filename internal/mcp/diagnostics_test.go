@@ -505,6 +505,33 @@ func TestDiagnosticsPrivateDirectoryControlFallback(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsPrivateFileAndParentFallback(t *testing.T) {
+	for _, tc := range []struct {
+		file      bool
+		fix, want string
+	}{
+		{true, "run: chmod 600 ignored", "chmod 600 '<storage-file>'"},
+		{true, "run: icacls ignored", "S-1-5-18:F"},
+		{false, "run: chmod go-w ignored, or use another parent", "chmod go-w '<data-directory-parent>'"},
+	} {
+		w := &diagnosticWriter{}
+		d := NewDiagnostics(w, slog.LevelError)
+		path := strings.Repeat("synthetic-secret", 100) + "/child"
+		var admitted bool
+		if tc.file {
+			admitted = d.ReportPrivateFile(path, tc.fix)
+		} else {
+			admitted = d.ReportPrivateDirectory(path, tc.fix)
+		}
+		if !admitted || !d.Finalize(nil) {
+			t.Fatal("fallback not delivered")
+		}
+		if got := w.String(); !strings.Contains(got, tc.want) || strings.Contains(got, "synthetic-secret") || len(got) > 1024 {
+			t.Errorf("unsafe or incomplete fallback: %q", got)
+		}
+	}
+}
+
 func TestDiagnosticsOrdinarySeverityIdentity(t *testing.T) {
 	w := &diagnosticWriter{}
 	d := NewDiagnostics(w, slog.LevelDebug)

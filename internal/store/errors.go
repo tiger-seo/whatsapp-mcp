@@ -112,10 +112,12 @@ func (e *MigrationError) Error() string {
 // snake_case reason; Fix says what the operator can do.
 type StorageError struct {
 	Artifact string
-	Code     string
-	Reason   string
-	Fix      string
-	sentinel error
+	// PrivatePath is the unformatted local path for a privacy refusal. Diagnostic sinks must validate it before rendering.
+	PrivatePath string
+	Code        string
+	Reason      string
+	Fix         string
+	sentinel    error
 }
 
 func (e *StorageError) Error() string {

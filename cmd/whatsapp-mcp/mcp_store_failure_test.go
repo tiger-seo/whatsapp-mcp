@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -127,6 +128,14 @@ func TestMCPStoreFailureShutdown(t *testing.T) {
 			}
 			if code != want || r.stdout.String() != "" {
 				t.Errorf("exit = %d, want %d; stdout = %q", code, want, r.stdout.String())
+			}
+			wantReports := 0
+			switch name {
+			case "prelatched", "running", "eof_race", "owner_drain":
+				wantReports = 1
+			}
+			if log := r.stderr.String(); strings.Count(log, "event=terminal_fault outcome=failed component=store tool=not_applicable category=tool_store_not_quiescent") != wantReports {
+				t.Errorf("wanted %d store-control fault diagnostics: %q", wantReports, log)
 			}
 			if name == "prelatched" && owner.started.Load() {
 				t.Error("owner started after already-latched store failure")
