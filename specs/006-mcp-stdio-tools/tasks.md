@@ -10,6 +10,8 @@
 
 ## Current State
 
+**2026-11-20 third code review:** The [review of `c8c504d`](verification.md#owner-reviews) returned `BLOCK` on missing path-specific remedies for non-private lock and config files. The database and unsafe-parent remedies, tool-store fault diagnostic, and current native CI evidence were confirmed. T042 remains open; no finding was parked.
+
 **2026-11-20 storage diagnostic follow-up:** Stdio now preserves private file and parent refusal remedies and reports a latched tool-store drain fault once through mandatory stderr. Focused Windows regressions passed; current native CI and the renewed owner verdict are tracked separately. T042 remains open.
 
 **2026-11-20 renewed owner code review:** The [review of `b129c95`](verification.md#owner-reviews) confirmed the quiet-stop fix but returned `BLOCK`: native Linux/macOS evidence for the changed reporter is pending, stdio must preserve the correct private-storage refusal remedies, and the tool-store drain fault must emit a mandatory diagnostic. T042 remains open.
