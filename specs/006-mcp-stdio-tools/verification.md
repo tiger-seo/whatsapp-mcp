@@ -983,6 +983,9 @@ After the drain failure latches, the next writer-pool calls must fail without wa
 | code | 2026-11-20 | c31b523 | BLOCK | |
 | code | 2026-11-20 | b129c95429c32e646f1aecae047c097bc91009a1 | BLOCK | |
 | code | 2026-11-20 | c8c504d12e42ef88cddbcaf591527112cdf72bf6 | BLOCK | |
+| code | 2026-11-20 | e06ac9a3bd29bcce129218942cc626d2b815b264 | BLOCK | |
+
+The code-mode review of `e06ac9a` followed the `owner-judge` rubric with GPT-6.2 Sol at High reasoning. It confirmed the lock and config permission remedies and the green CI rerun. **Blocking:** a terminal stdout write failure can be lost when reader closure is classified as a normal stop (`internal/mcp/transport.go:374`, `internal/mcp/connection.go:497`); the source confirms the ordering defect but does not establish that it caused the intermittent Linux failure. **Blocking:** non-permission `config.toml` errors are reported as invalid command-line arguments instead of actionable configuration failures (`cmd/whatsapp-mcp/commands.go:838`). The reviewer inspected committed source and both CI attempts without running new tests. No findings were parked.
 
 The code-mode review of `c8c504d` followed the `owner-judge` rubric with GPT-6.2 Sol at High reasoning. It confirmed the database and unsafe-parent remedies, mandatory tool-store drain reporting, and current native CI evidence. **Remaining blocker:** stdio still drops the path-specific permission remedy for a non-private lock file (`cmd/whatsapp-mcp/commands.go:806`) and non-private `config.toml` (`internal/config/file.go:34`). These refusals still fail closed. The oversized-result audit category remains nonblocking. The reviewer inspected source and CI evidence without running local tests. Nothing was parked.
 

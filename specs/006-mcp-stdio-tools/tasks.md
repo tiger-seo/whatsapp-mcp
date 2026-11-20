@@ -10,6 +10,8 @@
 
 ## Current State
 
+**2026-11-20 fourth code review:** The [review of `e06ac9a`](verification.md#owner-reviews) confirmed the lock and config permission fixes but returned `BLOCK` on stdout failure classification during shutdown and misleading diagnostics for ordinary `config.toml` errors. T042 remains open; no finding was parked.
+
 **2026-11-20 lock/config follow-up:** Stdio now reports the path-specific remedy for both non-private startup files. The [Windows regression and full rerun](verification.md#lock-and-config-refusal-follow-up-2026-11-20-utc) passed. T042 remains open pending native CI and renewed owner review of this change.
 
 **2026-11-20 third code review:** The [review of `c8c504d`](verification.md#owner-reviews) returned `BLOCK` on missing path-specific remedies for non-private lock and config files. The database and unsafe-parent remedies, tool-store fault diagnostic, and current native CI evidence were confirmed. T042 remains open; no finding was parked.
