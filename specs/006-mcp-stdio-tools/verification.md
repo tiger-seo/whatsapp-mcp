@@ -27,6 +27,21 @@ The `owner-judge` review at `7d4336b` returned `PASS` for the revised WAL fence 
 
 ## Runtime Gates
 
+### Quiet-Stop Diagnostic Review Follow-up (2026-11-20 UTC)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`; synthetic data and a fake owner only. The command test runs `stdio` with the production reporter at log level `error`. It checks exit 1, protocol-only stdout, all eight quiet-stop categories, numeric counts, rejection of duplicate fields, redaction of an unknown reason to `unknown`, and bounded records. It also checks history and receive-loss reasons and the dropped-message count. The existing queue, acknowledgment and exit policies are unchanged.
+
+| Command | Direct result |
+| --- | --- |
+| `go test ./cmd/whatsapp-mcp -run '^TestStdioDiagnosticQuietStopFailure$' -count=1 -timeout 1m -json` (before fix) | Exit 1; parent and all nine subtests failed on missing metadata, no skips. |
+| `go test ./cmd/whatsapp-mcp -run '^TestStdioDiagnosticQuietStopFailure$' -count=3 -timeout 1m -json` | Exit 0; 30 parent/subtest passes, no skips. The duplicate-field assertion was added before the full run below. |
+| `go test ./... -count=1 -timeout 30m -json` | Exit 0; ten packages, 1,946 test/subtest passes, 31 skips, no failures. |
+| `gofmt -l .`; `go vet ./...`; `go mod verify`; `git diff --check` | Exit 0 for each; no formatting, vet or whitespace findings. Changed tracked files are LF. |
+| `go build -o /dev/null ./cmd/whatsapp-mcp` | Exit 0 separately for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64 via Git Bash. |
+| `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...` | Exit 0; no vulnerabilities found. |
+
+Earlier native Linux/macOS CI predates this runtime change; cross-build results do not replace a native rerun. The separate nonblocking oversized-result audit classification was not changed by this patch.
+
 ### T039 Local Delivery Gates (2026-11-20 UTC)
 
 Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, runtime source at `5428fb6`. Synthetic tests only. The working tree already had local `.gitignore` and `AGENTS.chatgpt.md` changes; neither changes the Go runtime source. No optional heavy, soak, measurement or CGO race runs were enabled.

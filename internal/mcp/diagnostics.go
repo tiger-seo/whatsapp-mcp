@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -285,6 +286,11 @@ func (d *Diagnostics) ReportHuman(kind HumanFailure, lockPID int) bool {
 	return d.report(DiagnosticHumanFailure, metadata)
 }
 
+func (d *Diagnostics) ReportQuietStopRecovery(reason string) bool {
+	hint := "offline recovery required (" + mandatoryReason(DiagnosticQuietStopFailed, reason) + "); use pair to begin recovery"
+	return d.report(DiagnosticHumanFailure, " reason=unsafe_run hint="+strconv.Quote(hint))
+}
+
 func (d *Diagnostics) ReportNewerSchema(device bool, observed, supported int) bool {
 	schema := "message schema version"
 	if device {
@@ -517,6 +523,68 @@ func diagnosticEventAttr(a slog.Attr, fallback DiagnosticEvent) DiagnosticEvent 
 	return fallback
 }
 
+func mandatoryReason(event DiagnosticEvent, reason string) string {
+	var allowed []string
+	switch event {
+	case DiagnosticQuietStopFailed:
+		allowed = []string{"work_running", "network_refused", "storage_refused", "call_refused", "event_dropped",
+			"stop_bound_exceeded", "observation_incomplete", "observation_error"}
+	case DiagnosticHistoryIncomplete:
+		allowed = []string{"download", "too_large", "parse", "queue_full", "stopped"}
+	case DiagnosticReceiveOverload:
+		allowed = []string{"item_limit", "frame_size_limit", "decode_limit"}
+	}
+	if i := slices.Index(allowed, reason); i >= 0 {
+		return allowed[i]
+	}
+	return "unknown"
+}
+
+// Mandatory records retain only event-specific fields. Each field can appear
+// once, and only fixed categories and nonnegative numeric counts are rendered.
+func mandatoryMetadata(event DiagnosticEvent, r slog.Record) string {
+	var keys []string
+	switch event {
+	case DiagnosticQuietStopFailed:
+		keys = []string{"reason", "epoch", "library_goroutines", "network_refused", "storage_refused",
+			"calls_refused", "events_dropped", "dropped_messages", "duration_ms"}
+	case DiagnosticHistoryIncomplete:
+		keys = []string{"reason"}
+	case DiagnosticReceiveOverload:
+		keys = []string{"reason", "epoch"}
+	case DiagnosticMessagesDropped:
+		keys = []string{"epoch", "dropped_messages"}
+	default:
+		return ""
+	}
+	var seen uint16
+	var metadata strings.Builder
+	r.Attrs(func(a slog.Attr) bool {
+		i := slices.Index(keys, a.Key)
+		if i < 0 || seen&(1<<i) != 0 {
+			return true
+		}
+		var value string
+		switch {
+		case a.Key == "reason" && a.Value.Kind() == slog.KindString:
+			value = mandatoryReason(event, a.Value.String())
+		case a.Key != "reason" && a.Value.Kind() == slog.KindUint64:
+			value = strconv.FormatUint(a.Value.Uint64(), 10)
+		case a.Key != "reason" && a.Value.Kind() == slog.KindInt64 && a.Value.Int64() >= 0:
+			value = strconv.FormatInt(a.Value.Int64(), 10)
+		default:
+			return true
+		}
+		seen |= 1 << i
+		metadata.WriteByte(' ')
+		metadata.WriteString(keys[i])
+		metadata.WriteByte('=')
+		metadata.WriteString(value)
+		return true
+	})
+	return metadata.String()
+}
+
 func diagnosticAttrs(dst []string, group string, attrs []slog.Attr, depth int) []string {
 	if depth > 4 {
 		return dst
@@ -575,7 +643,7 @@ func (h diagnosticHandler) Handle(_ context.Context, r slog.Record) error {
 			event = diagnosticEventAttr(a, event)
 			return true
 		})
-		h.d.Report(event)
+		h.d.report(event, mandatoryMetadata(event, r))
 	} else if r.Level >= h.d.level.Level() {
 		attrs := append([]string(nil), h.attrs...)
 		r.Attrs(func(a slog.Attr) bool {

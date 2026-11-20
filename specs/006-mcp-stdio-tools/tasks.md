@@ -10,6 +10,8 @@
 
 ## Current State
 
+**2026-11-20 quiet-stop follow-up:** The stdio reporter now preserves the bounded quiet-stop reason and counts, and the human recovery line names the reason. The [production-path regression and full Windows suite](verification.md#quiet-stop-diagnostic-review-follow-up-2026-11-20-utc) passed. T042 remains open pending renewed owner review.
+
 **2026-11-20 owner code review:** `owner-judge` returned `BLOCK` at `c31b523`. See the [recorded verdict](verification.md#owner-reviews). Restore the bounded quiet-stop failure diagnostics in production stdio, test the real reporter path, and obtain another code review before closing T042.
 
 **2026-11-20 delivery checkpoint:** T039-T041 are complete. The operator docs describe the five read-only tools, and the [quickstart rerun and traceability matrix](verification.md#t041-requirements-traceability) cover the 33 requirements and criteria. T042 is the only open task: the local implementation commit requires authorization, then `owner-judge` must review that exact commit.

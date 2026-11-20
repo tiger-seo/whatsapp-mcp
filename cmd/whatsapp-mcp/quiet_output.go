@@ -17,6 +17,8 @@ func reportShellStop(kind string, owner wa.Owner, stopErr error, s *streams) {
 	h := owner.Health()
 	if s.diagnostics != nil {
 		switch {
+		case stopErr != nil && errors.Is(stopErr, store.ErrUnsafeRun) && h.QuietReason != "":
+			s.diagnostics.ReportQuietStopRecovery(h.QuietReason)
 		case stopErr != nil && errors.Is(stopErr, store.ErrUnsafeRun):
 			s.diagnostics.ReportHuman(mcp.HumanRunMarkerFailure, 0)
 		case stopErr == nil && h.QuietPassed:
