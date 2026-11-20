@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -704,6 +705,30 @@ func TestFramingWriteCancellationAndFailure(t *testing.T) {
 		}
 		if _, err = tr.Connect(context.Background()); !errors.Is(err, sdk.ErrConnectionClosed) {
 			t.Fatalf("reconnect: %v", err)
+		}
+	})
+}
+
+func TestFramingWriteTimeoutVisibleToGuardReader(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		in, input := io.Pipe()
+		defer in.Close()
+		defer input.Close()
+		out := &blockedWriter{make(chan struct{}), make(chan struct{})}
+		defer close(out.release)
+		c, err := newFramedTransport(in, out).Connect(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		g := newGuardedConnection(c)
+		defer g.Close()
+		// Keep the writer from notifying the guard: the reader alone must
+		// see the failure even before the guarded write can return.
+		if err := c.Write(t.Context(), &jsonrpc.Response{Result: []byte(`"ok"`)}); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("blocked write: %v", err)
+		}
+		if _, err := g.Read(t.Context()); !errors.Is(err, errOutputFrame) || !g.closeFailed {
+			t.Fatalf("reader lost terminal write failure: err=%v failed=%v", err, g.closeFailed)
 		}
 	})
 }

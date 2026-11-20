@@ -19,6 +19,7 @@ const maxInputFrame = 64 << 10
 const maxOutputFrame = 8 << 20
 
 var errFrame = errors.New("invalid protocol frame")
+var errOutputFrame = errors.New("response write failed")
 
 type framedTransport struct {
 	r    io.Reader
@@ -371,7 +372,16 @@ func validWireID(raw []byte) bool {
 func (c *framedConnection) Write(ctx context.Context, msg jsonrpc.Message) error {
 	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
-	fail := func(err error) error { c.Close(); return err }
+	fail := func(err error) error {
+		if errors.Is(err, context.Canceled) {
+			c.Close()
+		} else {
+			// Publish a fixed failure before waking the reader. It can end
+			// the session before the guarded writer sees this return value.
+			c.stop(errOutputFrame)
+		}
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return fail(err)
 	}
