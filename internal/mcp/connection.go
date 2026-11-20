@@ -175,6 +175,16 @@ func (g *guardedConnection) close(failed bool) error {
 	return err
 }
 
+func (g *guardedConnection) transportFailed() bool {
+	g.mu.Lock()
+	failed := g.closeFailed
+	g.mu.Unlock()
+	// A normal guard stop can win before the guard observes a failure
+	// already published by the framed writer.
+	framed, ok := g.inner.(*framedConnection)
+	return failed || (ok && framed.outputFailed())
+}
+
 func (g *guardedConnection) readInput(ctx context.Context) (jsonrpc.Message, bool, error) {
 	if g.pending != nil {
 		result := *g.pending

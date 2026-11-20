@@ -133,7 +133,6 @@ func (s *ServerSession) Wait() error {
 	s.guard.mu.Lock()
 	clear(s.guard.active)
 	s.guard.tool = false
-	transportFailed := s.guard.closeFailed
 	s.guard.mu.Unlock()
 	if s.diagnostics.Failed() {
 		return errDiagnosticDelivery
@@ -143,7 +142,7 @@ func (s *ServerSession) Wait() error {
 		return errSDKSession
 	default:
 	}
-	if transportFailed {
+	if s.guard.transportFailed() {
 		return errTransportSession
 	}
 	return nil

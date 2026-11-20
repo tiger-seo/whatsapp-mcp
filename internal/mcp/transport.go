@@ -65,7 +65,11 @@ type frameActivity struct {
 }
 type writeFrame struct {
 	data []byte
-	ack  chan error
+	ack  chan writeFrameAck
+}
+type writeFrameAck struct {
+	err error
+	at  time.Time
 }
 type framedConnection struct {
 	done    chan struct{}
@@ -216,7 +220,7 @@ func writeFrames(w io.Writer, in <-chan writeFrame, done <-chan struct{}) {
 					break
 				}
 			}
-			f.ack <- err
+			f.ack <- writeFrameAck{err: err, at: time.Now()}
 		}
 	}
 }
@@ -370,7 +374,11 @@ func validWireID(raw []byte) bool {
 }
 
 func (c *framedConnection) Write(ctx context.Context, msg jsonrpc.Message) error {
-	timer := time.NewTimer(5 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
+	if limit, ok := ctx.Deadline(); ok && limit.Before(deadline) {
+		deadline = limit
+	}
+	timer := time.NewTimer(time.Until(deadline))
 	defer timer.Stop()
 	fail := func(err error) error {
 		if errors.Is(err, context.Canceled) {
@@ -419,7 +427,10 @@ func (c *framedConnection) Write(ctx context.Context, msg jsonrpc.Message) error
 		return fail(errFrame)
 	}
 	b = append(b, '\n')
-	f := writeFrame{data: b, ack: make(chan error, 1)}
+	if !time.Now().Before(deadline) {
+		return fail(context.DeadlineExceeded)
+	}
+	f := writeFrame{data: b, ack: make(chan writeFrameAck, 1)}
 	select {
 	case <-c.done:
 		return sdk.ErrConnectionClosed
@@ -429,18 +440,32 @@ func (c *framedConnection) Write(ctx context.Context, msg jsonrpc.Message) error
 		return fail(context.DeadlineExceeded)
 	case c.write <- f:
 	}
+	complete := func(ack writeFrameAck) error {
+		if !ack.at.Before(deadline) {
+			return fail(context.DeadlineExceeded)
+		}
+		if ack.err != nil {
+			return fail(ack.err)
+		}
+		return nil
+	}
 	select {
 	case <-c.done:
 		return sdk.ErrConnectionClosed
 	case <-ctx.Done():
-		return fail(ctx.Err())
-	case <-timer.C:
-		return fail(context.DeadlineExceeded)
-	case err := <-f.ack:
-		if err != nil {
+		if err := ctx.Err(); !errors.Is(err, context.DeadlineExceeded) {
 			return fail(err)
 		}
-		return nil
+	case <-timer.C:
+	case ack := <-f.ack:
+		return complete(ack)
+	}
+	// A timely completion may already be queued when the deadline wakes us.
+	select {
+	case ack := <-f.ack:
+		return complete(ack)
+	default:
+		return fail(context.DeadlineExceeded)
 	}
 }
 
@@ -509,6 +534,15 @@ func (c *framedConnection) stop(err error) {
 		c.stopErr = err
 		close(c.done)
 	})
+}
+
+func (c *framedConnection) outputFailed() bool {
+	select {
+	case <-c.done:
+		return c.stopErr == errOutputFrame
+	default:
+		return false
+	}
 }
 
 func (c *framedConnection) Close() error    { c.stop(sdk.ErrConnectionClosed); return nil }

@@ -733,6 +733,40 @@ func TestFramingWriteTimeoutVisibleToGuardReader(t *testing.T) {
 	})
 }
 
+func TestFramingWriteCompletionAndGuardStop(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		delay  time.Duration
+		failed bool
+	}{
+		{"timely", time.Second, false},
+		{"at deadline", 5 * time.Second, true},
+		{"late", 6 * time.Second, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				c := &framedConnection{done: make(chan struct{}), write: make(chan writeFrame), lock: make(chan struct{}, 1)}
+				c.lock <- struct{}{}
+				g := newGuardedConnection(c)
+				go func() {
+					f := <-c.write
+					f.ack <- writeFrameAck{at: time.Now().Add(tc.delay)}
+				}()
+				err := c.Write(t.Context(), &jsonrpc.Response{Result: []byte(`"ok"`)})
+				if (!tc.failed && err != nil) || (tc.failed && !errors.Is(err, context.DeadlineExceeded)) {
+					t.Fatalf("write returned %v, want deadline failure=%v", err, tc.failed)
+				}
+				// Force normal guard closure before either of its I/O paths can
+				// observe the framed write's outcome.
+				_ = g.Close()
+				if g.closeFailed || g.transportFailed() != tc.failed {
+					t.Fatalf("normal stop lost framed outcome: want failure=%v", tc.failed)
+				}
+			})
+		})
+	}
+}
+
 func (w *blockedWriter) Write(b []byte) (int, error) {
 	close(w.entered)
 	<-w.release
