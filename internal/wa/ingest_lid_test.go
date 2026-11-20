@@ -165,16 +165,57 @@ func TestIngestLIDNoteMappingMergesWithoutRestart(t *testing.T) {
 	}
 }
 
+type hintCommitStore struct {
+	ingestStore
+	armed, missing, committed chan struct{}
+	first                     sync.Once
+}
+
+func (s *hintCommitStore) PhoneForLID(ctx context.Context, lid string) (string, bool, error) {
+	phone, ok, err := s.ingestStore.PhoneForLID(ctx, lid)
+	select {
+	case <-s.armed:
+		if err == nil && !ok {
+			s.first.Do(func() {
+				close(s.missing)
+				<-s.committed
+			})
+		}
+	default:
+	}
+	return phone, ok, err
+}
+
 func TestIngestLIDHintRetriedUntilTheMappingIsVisible(t *testing.T) {
-	r := newLIDRig(t)
-	r.in.HandleMessage(lidMessage("V1", lidJID(), lidJID()))
-	// The library reports the mapping inside a transaction that has not committed yet.
+	s := &hintCommitStore{armed: make(chan struct{}), missing: make(chan struct{}), committed: make(chan struct{})}
+	r := newIngestRig(t, func(cfg *IngestConfig) { s.ingestStore = cfg.Store; cfg.store = s })
+	r.in.hintRetry = 20 * time.Millisecond
+	dev, barrier := savedDevice(t, r.st)
+	t.Cleanup(func() { _ = barrier.Retire(context.Background()) })
+	release := sync.OnceFunc(func() { close(s.committed) })
+	defer release()
+	if !r.in.HandleMessage(lidMessage("V1", lidJID(), lidJID())) {
+		t.Fatal("message not accepted")
+	}
+	// Hold the first missing result until the commit. No mapping observer is
+	// registered, so only a retry of this hint can trigger the merge.
+	close(s.armed)
 	r.in.NoteMapping(lidJID().String(), "", peerJID().String())
-	time.Sleep(3 * r.in.hintRetry)
-	r.mapLID(t, lidJID(), peerJID())
+	select {
+	case <-s.missing:
+	case <-time.After(10 * time.Second):
+		t.Fatal("hint never observed the missing mapping")
+	}
+	if err := dev.LIDs.PutLIDMapping(context.Background(), lidJID(), peerJID()); err != nil {
+		t.Fatal(err)
+	}
+	release()
 	waitCounter(t, "merged", func() uint64 { return r.in.Counters().Merged }, 1)
 	if c := r.in.Counters(); c.HintsDropped != 0 {
 		t.Fatalf("hint dropped although the mapping appeared within the attempts: %+v", c)
+	}
+	if got := getMessage(t, r.st, peerJID().String(), "V1"); got.SenderJID != peerJID().String() {
+		t.Fatalf("after the merge the message sender is %q", got.SenderJID)
 	}
 }
 

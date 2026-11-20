@@ -27,6 +27,12 @@ The `owner-judge` review at `7d4336b` returned `PASS` for the revised WAL fence 
 
 ## Runtime Gates
 
+### LID Hint CI Follow-up (2026-11-20 UTC)
+
+The Linux failure in run `44743399834` came from a test that slept for 60 ms before committing the mapping, leaving a scheduler-dependent margin before the hint's last attempt. The fixture now waits for the first missing lookup, commits the actual SQLite mapping, then releases that lookup. No mapping observer is registered, so a separate notification cannot satisfy the merge assertion. Production retry counts and delays are unchanged.
+
+With Go 1.27.4 and `CGO_ENABLED=0`, `go test ./internal/wa -run '^TestIngestLID(HintRetriedUntilTheMappingIsVisible|HintDroppedAfterFiveAttempts|StopDuringRetriesEndsTheWorker)$' -count=50 -timeout 4m` exited 0 on native Windows/amd64 and Ubuntu WSL2 (with `-buildvcs=false` on WSL2): 150 selected cases per platform. `go test ./internal/wa -count=1 -timeout 5m` also exited 0 on both (using the same WSL2 flag); the plain package output does not count skips. WSL2 is not native CI evidence. The test fix has not yet been run by GitHub Actions.
+
 ### Lock and Config Refusal Follow-up (2026-11-20 UTC)
 
 Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, synthetic files only. Stdio now preserves the checked lock or config file path and its platform-specific permission remedy. Tests verify repeated refusal, unchanged contents, empty stdout, no database creation, and no lock creation on config refusal. Bounded fallbacks name the refused file by role. The fix does not change exit categories or permission checks.
@@ -40,7 +46,7 @@ Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, synthetic files only. Stdio no
 | `go test ./... -count=1 -timeout 30m -json` (rerun) | Exit 0; all ten packages passed, 1,951 named passes, 32 skips, no failures. |
 | `gofmt -l .`; `go vet ./...`; `go mod verify`; `git diff --check` | Exit 0 for each; changed tracked files are LF. |
 
-The earlier native CI run predates this patch. Native CI and renewed owner review are still required for this revision.
+The [push CI run](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44743399834) completed on 2026-11-20 UTC at `a1dd72f96afbd1ff1351b5fb7e526e8815e34cf2` with conclusion `failure`. The check, Windows, and macOS jobs passed. The Linux full `go test -timeout 30m ./...` step exited 1: `TestIngestLIDHintRetriedUntilTheMappingIsVisible` reported `HintsDropped:1` in `internal/wa`. It was the only failed workflow step. The opt-in heavy job was skipped. Native CI is not green for this revision, and owner review remains open.
 
 ### Storage Diagnostic Review Follow-up (2026-11-20 UTC)
 
