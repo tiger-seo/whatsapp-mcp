@@ -253,7 +253,12 @@ func logScenario(t *testing.T, level slog.Level) (logged, stdout string) {
 		// A rejected message and a history notification that cannot be downloaded.
 		handle(t, r, liveEvent("S5", &waE2E.Message{Conversation: proto.String(secretText + strings.Repeat("x", 256<<10))}))
 		handle(t, r, historyNotice(1))
-		waitFor(t, func() bool { return r.in.Counters().HistoryIncomplete == 1 })
+		// The worker increments the counter before logging. Wait for the record before stopping.
+		waitFor(t, func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return strings.Contains(buf.String(), "event=history_incomplete")
+		})
 		// A failed write ends in a warning.
 		f.setErr(fmt.Errorf("synthetic: %w", store.ErrDiskLow))
 		r.in.HandleMessage(liveEvent("S6", &waE2E.Message{Conversation: proto.String(secretText)}))

@@ -34,9 +34,7 @@ func TestStdioCreatesTheDatabase(t *testing.T) {
 	if _, err := os.Stat(dbPath(dir)); err != nil {
 		t.Fatalf("no database: %v", err)
 	}
-	if !strings.Contains(r.stderr, "event=store.ready") {
-		t.Errorf("stderr lacks store.ready:\n%s", r.stderr)
-	}
+	requireReleasedLock(t, dir)
 	second := runIn(t, nil, "stdio", "--data-dir", dir)
 	second.expect(t, exitOK)
 	if strings.Contains(second.stderr, "event=store.migrate") {
@@ -129,9 +127,7 @@ func TestStdioRefusesATooNewSchemaAndReleasesTheLock(t *testing.T) {
 			}
 		}
 		// The run must end with the lock released, so the next run can take it again.
-		if !strings.Contains(r.stderr, "msg=stopped") {
-			t.Errorf("run %d: did not stop cleanly:\n%s", i, r.stderr)
-		}
+		requireReleasedLock(t, dir)
 	}
 }
 

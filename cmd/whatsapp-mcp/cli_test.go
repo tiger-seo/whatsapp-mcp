@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/tiger-seo/whatsapp-mcp/internal/config"
 	"github.com/tiger-seo/whatsapp-mcp/internal/lock"
 	"github.com/tiger-seo/whatsapp-mcp/internal/private"
 	"github.com/tiger-seo/whatsapp-mcp/internal/wa"
@@ -26,7 +28,8 @@ type result struct {
 // runIn calls run in process with empty stdin and the given environment.
 func runIn(t *testing.T, environ []string, args ...string) result {
 	t.Helper()
-	var stdout, stderr bytes.Buffer
+	var stdout bytes.Buffer
+	var stderr syncBuffer
 	code := run(args, strings.NewReader(""), &stdout, &stderr, environ)
 	return result{code, stdout.String(), stderr.String()}
 }
@@ -103,9 +106,13 @@ func TestUsageErrors(t *testing.T) {
 		{nil, "whatsapp-mcp: missing command", true},
 		{[]string{"frobnicate"}, `whatsapp-mcp: unknown command "frobnicate"`, true},
 		{[]string{"--log-level", "debug", "stdio"}, `whatsapp-mcp: flags go after the command, e.g. "whatsapp-mcp stdio --log-level debug"`, false},
-		{[]string{"stdio", "--foo"}, "whatsapp-mcp: stdio: flag provided but not defined: -foo", false},
 		{[]string{"status", "x"}, `whatsapp-mcp: status: unexpected argument "x"`, false},
 		{[]string{"version", "--log-level", "debug"}, "whatsapp-mcp: version: flag provided but not defined: -log-level", false},
+	}
+	r := runIn(t, nil, "stdio", "--foo")
+	r.expect(t, exitUsage)
+	if r.stdout != "" || !strings.Contains(r.stderr, "reason=invalid_arguments") || !strings.Contains(r.stderr, "whatsapp-mcp stdio --help") {
+		t.Fatalf("stdio usage refusal: %+v", r)
 	}
 	for _, tt := range tests {
 		r := runIn(t, nil, tt.args...)
@@ -263,7 +270,11 @@ func TestLockHeld(t *testing.T) {
 		if elapsed := time.Since(start); elapsed > time.Second {
 			t.Errorf("%s took %v with the lock held", name, elapsed)
 		}
-		if !strings.Contains(r.stderr, want) {
+		if name == "stdio" {
+			if !strings.Contains(r.stderr, fmt.Sprintf("reason=lock_held pid=%d", os.Getpid())) || !strings.Contains(r.stderr, "use a different data directory") {
+				t.Errorf("stdio did not give actionable lock refusal: %q", r.stderr)
+			}
+		} else if !strings.Contains(r.stderr, want) {
 			t.Errorf("%s: stderr = %q, want %q", name, r.stderr, want)
 		}
 	}
@@ -295,14 +306,13 @@ func TestLockHeld(t *testing.T) {
 }
 
 func TestStdioStdinClosed(t *testing.T) {
-	r := runIn(t, nil, "stdio", "--data-dir", privateDir(t))
+	dir := privateDir(t)
+	r := runIn(t, nil, "stdio", "--data-dir", dir)
 	r.expect(t, exitOK)
-	for _, want := range []string{"stdio: connection owner running", `msg="shutting down" reason="stdin closed"`, "msg=stopped"} {
-		if !strings.Contains(r.stderr, want) {
-			t.Errorf("stderr does not contain %q:\n%s", want, r.stderr)
-		}
+	if r.stdout != "" {
+		t.Errorf("stdout = %q, want empty", r.stdout)
 	}
-	checkLogLines(t, r)
+	requireReleasedLock(t, dir)
 }
 
 // exposeDir gives other users access to an existing directory: mode 0755 on Unix, read access for
@@ -330,7 +340,15 @@ func TestOpenDataDirRefused(t *testing.T) {
 		if r.stdout != "" {
 			t.Errorf("%s: stdout = %q, want empty", name, r.stdout)
 		}
-		if want := "whatsapp-mcp: data directory " + dir + ": other users can access it"; !strings.HasPrefix(r.stderr, want) {
+		if name == "stdio" {
+			remedy := "chmod 700"
+			if runtime.GOOS == "windows" {
+				remedy = "icacls"
+			}
+			if !strings.Contains(r.stderr, "path="+strconv.QuoteToASCII(dir)) || !strings.Contains(r.stderr, remedy) {
+				t.Errorf("missing path or permission remedy: %q", r.stderr)
+			}
+		} else if want := "whatsapp-mcp: data directory " + dir + ": other users can access it"; !strings.HasPrefix(r.stderr, want) {
 			t.Errorf("%s: stderr = %q, want prefix %q", name, r.stderr, want)
 		}
 		if strings.Contains(r.stderr, "level=DEBUG") {
@@ -347,5 +365,133 @@ func TestFlagErrorEscaped(t *testing.T) {
 	r.expect(t, exitUsage)
 	if strings.Contains(r.stderr, "\x1b") {
 		t.Errorf("stderr kept an escape character: %q", r.stderr)
+	}
+}
+
+func TestStdioRefusesNonPrivateDatabaseWithRemedy(t *testing.T) {
+	dir := privateDir(t)
+	path := filepath.Join(dir, "whatsapp.db")
+	const contents = "synthetic file must remain unchanged"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	remedy := "chmod 600"
+	if runtime.GOOS == "windows" {
+		remedy = "icacls"
+		if out, err := exec.Command("icacls", path, "/grant", "*S-1-5-32-545:R").CombinedOutput(); err != nil {
+			t.Fatalf("icacls: %v\n%s", err, out)
+		}
+	} else if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 { // A second refusal proves the first did not repair the permissions.
+		r := runIn(t, nil, "stdio", "--data-dir", dir, "--log-level", "error")
+		r.expect(t, exitError)
+		if r.stdout != "" || !strings.Contains(r.stderr, "path="+strconv.QuoteToASCII(path)) || !strings.Contains(r.stderr, remedy) {
+			t.Errorf("missing database path or file remedy: stdout=%q stderr=%q", r.stdout, r.stderr)
+		}
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != contents {
+		t.Errorf("refusal changed database: %q (%v)", got, err)
+	}
+	requireReleasedLock(t, dir)
+}
+
+func TestStdioRefusesUnsafeParentWithRemedy(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix parent-mode check")
+	}
+	parent := privateDir(t)
+	dir := filepath.Join(parent, "data")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	r := runIn(t, nil, "stdio", "--data-dir", dir)
+	r.expect(t, exitError)
+	if r.stdout != "" || !strings.Contains(r.stderr, "path="+strconv.QuoteToASCII(parent)) || !strings.Contains(r.stderr, "chmod go-w") || strings.Contains(r.stderr, "chmod 700") {
+		t.Errorf("missing the affected parent and its remedy: stdout=%q stderr=%q", r.stdout, r.stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, lock.FileName)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("lock appeared on parent refusal: %v", err)
+	}
+	if info, err := os.Stat(parent); err != nil || info.Mode().Perm() != 0o770 {
+		t.Errorf("refusal changed parent permissions: %v (%v)", info, err)
+	}
+}
+
+func TestStdioRefusesNonPrivateStartupFilesWithRemedy(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code int
+	}{
+		{config.FileName, exitUsage},
+		{lock.FileName, exitError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := privateDir(t)
+			path := filepath.Join(dir, tc.name)
+			const contents = "synthetic-refused-file-contents"
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			remedy := "chmod 600"
+			if runtime.GOOS == "windows" {
+				remedy = "icacls"
+				if out, err := exec.Command("icacls", path, "/grant", "*S-1-5-32-545:W").CombinedOutput(); err != nil {
+					t.Fatalf("icacls: %v\n%s", err, out)
+				}
+			} else if err := os.Chmod(path, 0o660); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				r := runIn(t, nil, "stdio", "--data-dir", dir, "--log-level", "error")
+				r.expect(t, tc.code)
+				if r.stdout != "" || !strings.Contains(r.stderr, "path="+strconv.QuoteToASCII(path)) ||
+					!strings.Contains(r.stderr, remedy) || strings.Contains(r.stderr, contents) || len(r.stderr) > 1024 {
+					t.Errorf("expected bounded permission remedy for %s: stdout=%q stderr=%q", tc.name, r.stdout, r.stderr)
+				}
+			}
+			if got, err := os.ReadFile(path); err != nil || string(got) != contents {
+				t.Errorf("refusal changed file: %q (%v)", got, err)
+			}
+			if tc.name == config.FileName {
+				if _, err := os.Stat(filepath.Join(dir, lock.FileName)); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("lock appeared on config refusal: %v", err)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(dir, "whatsapp.db")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("database appeared on startup refusal: %v", err)
+			}
+		})
+	}
+}
+
+func TestStdioReportsInvalidConfigFile(t *testing.T) {
+	const rejected = "synthetic-rejected-value"
+	for _, tc := range []struct{ name, contents, detail string }{
+		{"syntax", `log_level = "` + rejected, "line=1"},
+		{"type", `log_level = ["` + rejected + `"]`, "line=1"},
+		{"value", `log_level = "` + rejected + `"`, "debug, info, warn or error"},
+		{"size", "# " + rejected + "\n" + strings.Repeat("\n", config.MaxFileSize), "1 MiB or less"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := privateDir(t)
+			if err := os.WriteFile(filepath.Join(dir, config.FileName), []byte(tc.contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+			r := runIn(t, nil, "stdio", "--data-dir", dir)
+			r.expect(t, exitUsage)
+			if r.stdout != "" || !strings.Contains(r.stderr, "reason=invalid_configuration") ||
+				!strings.Contains(r.stderr, "config.toml") || !strings.Contains(r.stderr, tc.detail) ||
+				strings.Contains(r.stderr, rejected) || len(r.stderr) > 1024 {
+				t.Fatalf("invalid file diagnostic: stdout=%q stderr=%q", r.stdout, r.stderr)
+			}
+			if _, err := os.Stat(filepath.Join(dir, lock.FileName)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("lock appeared on config refusal: %v", err)
+			}
+		})
 	}
 }

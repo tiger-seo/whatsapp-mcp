@@ -191,7 +191,7 @@ func TestUpdateChatsExistingOnlyNeverCreatesAChat(t *testing.T) {
 	if err := st.UpdateChats(ctx, []ChatUpdate{o}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.GetChat(ctx, alice); !errors.Is(err, ErrNotFound) {
+	if _, err := st.GetChat(ctx, alice, true); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a name offer created the chat: %v", err)
 	}
 	// An existing chat takes the name, in the same call as a chat that is missing.
@@ -203,12 +203,12 @@ func TestUpdateChatsExistingOnlyNeverCreatesAChat(t *testing.T) {
 	if name, q, _, ok, err := st.ChatName(ctx, alice); err != nil || !ok || name != "Alice" || q != NameReal {
 		t.Errorf("existing chat = %q, %v, %v, %v; want Alice, real", name, q, ok, err)
 	}
-	if _, err := st.GetChat(ctx, bob); !errors.Is(err, ErrNotFound) {
+	if _, err := st.GetChat(ctx, bob, true); !errors.Is(err, ErrNotFound) {
 		t.Errorf("the missing chat was created: %v", err)
 	}
 	// Without the option an update still creates the chat, as before.
 	update(t, st, ChatUpdate{JID: bob, Name: "Bob", NameQuality: NameReal, NameTime: at(2)})
-	if _, err := st.GetChat(ctx, bob); err != nil {
+	if _, err := st.GetChat(ctx, bob, true); err != nil {
 		t.Errorf("an ordinary update no longer creates the chat: %v", err)
 	}
 }

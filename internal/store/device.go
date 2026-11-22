@@ -256,6 +256,7 @@ func (sess *deviceSession) run(ctx context.Context, op string, write, bulk bool,
 // runLeased is run without the mapping report. An outermost operation hands the mapping changes its lease
 // collected to mapped; a nested one leaves them on the outer lease.
 func (sess *deviceSession) runLeased(ctx context.Context, op string, write, bulk bool, validate func() error, fn func(context.Context) error, mapped *[]mappingChange) (result error) {
+	reader := op == "ConfigureRecovery" || op == "PendingRepairs"
 	defer func() {
 		if write {
 			sess.refuse(result)
@@ -298,6 +299,12 @@ func (sess *deviceSession) runLeased(ctx context.Context, op string, write, bulk
 		tok.nested.Add(1)
 		tok.mu.Unlock()
 		defer tok.nested.Done()
+		if write || !reader {
+			defer sess.st.gate.writerIntent()()
+		}
+		if reader {
+			defer sess.st.gate.nestedReader()()
+		}
 		if validate != nil {
 			if err := validate(); err != nil {
 				return err
@@ -335,7 +342,14 @@ func (sess *deviceSession) runLeased(ctx context.Context, op string, write, bulk
 	sess.mu.Unlock()
 	defer sess.work.Done()
 
-	release, opCtx, err := sess.st.gate.enter(ctx)
+	enter := sess.st.gate.enter
+	if write || !reader {
+		defer sess.st.gate.writerIntent()()
+	}
+	if reader {
+		enter = sess.st.gate.enterRead
+	}
+	release, opCtx, err := enter(ctx)
 	if err != nil {
 		return sess.st.report(op, err)
 	}
@@ -468,6 +482,7 @@ func (b *DeviceBarrier) removeRevokedWithConfirmation(ctx context.Context, confi
 		return ErrNotReady
 	}
 	op := newOpID()
+	defer sess.st.gate.writerIntent()()
 	release, opCtx, err := sess.st.gate.enter(ctx)
 	if err != nil {
 		return sess.st.report(op, err)
@@ -571,6 +586,7 @@ func (d *deviceContainer) PutDevice(ctx context.Context, dev *wastore.Device) (r
 	sess.repairFence.Lock()
 	defer sess.repairFence.Unlock()
 	op := newOpID()
+	defer sess.st.gate.writerIntent()()
 	release, opCtx, err := sess.st.gate.enter(ctx)
 	if err != nil {
 		return sess.st.report(op, err)

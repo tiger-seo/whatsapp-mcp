@@ -25,13 +25,18 @@ func newDiskGuard(dir string) *diskGuard {
 // check returns a *DiskLowError when the write must be refused. A failed measurement is not a refusal: the
 // write goes ahead and SQLite reports a full disk itself.
 func (d *diskGuard) check() error {
+	err, _ := d.checkMeasured()
+	return err
+}
+
+func (d *diskGuard) checkMeasured() (error, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	now := d.now()
 	if d.measured.IsZero() || now.Sub(d.measured) >= diskCacheAge {
 		free, err := d.free(d.dir)
 		if err != nil {
-			return nil
+			return nil, false
 		}
 		d.measured, d.last = now, free
 	}
@@ -42,7 +47,7 @@ func (d *diskGuard) check() error {
 		d.refusing = true
 	}
 	if d.refusing {
-		return &DiskLowError{Free: d.last, Reserve: diskReserve}
+		return &DiskLowError{Free: d.last, Reserve: diskReserve}, true
 	}
-	return nil
+	return nil, true
 }

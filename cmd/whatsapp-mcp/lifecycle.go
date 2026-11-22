@@ -38,8 +38,10 @@ type lifecycle struct {
 	mu    sync.Mutex
 	steps []stopStep
 
-	done      chan struct{}
-	closeOnce sync.Once
+	done                     chan struct{}
+	closeOnce                sync.Once
+	keepSignalsDuringCleanup bool
+	diagnosticFinalizing     func(pending bool)
 }
 
 // newLifecycle starts listening for SIGINT and SIGTERM. On Windows, Ctrl+C and Ctrl+Break arrive as
@@ -137,7 +139,9 @@ func (lc *lifecycle) watch() {
 // shutdown runs the stop steps and returns the exit code: 0 after a clean stop, 1 if a step failed or
 // the notification deadline passed. The deadline never abandons a cleanup step.
 func (lc *lifecycle) shutdown() int {
-	defer lc.close()
+	if !lc.keepSignalsDuringCleanup {
+		defer lc.close()
+	}
 	lc.cancel()
 	lc.mu.Lock()
 	steps := append([]stopStep(nil), lc.steps...)

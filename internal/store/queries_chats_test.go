@@ -123,7 +123,7 @@ func TestGetChat(t *testing.T) {
 	nameChat(t, st, g, "Team", NameReal)
 	ctx := context.Background()
 
-	c, err := st.GetChat(ctx, g)
+	c, err := st.GetChat(ctx, g, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestGetChat(t *testing.T) {
 		t.Errorf("latest = %+v, want g2", c.Latest)
 	}
 
-	_, err = st.GetChat(ctx, groupTwo)
+	_, err = st.GetChat(ctx, groupTwo, true)
 	if nf := wantNotFound(t, "unknown chat", err); nf != nil && nf.ChatJID != groupTwo {
 		t.Errorf("not found names %q, want %q", nf.ChatJID, groupTwo)
 	}

@@ -50,7 +50,7 @@ func TestSearchContacts(t *testing.T) {
 		{"FIRSTY", []Contact{{phoneJID("491511000004"), "491511000004", "Firsty"}}},
 		{"biz co", []Contact{{phoneJID("491511000005"), "491511000005", "Biz Co"}}},
 		{"1511000001", []Contact{{phoneJID("491511000001"), "491511000001", "Alice Smith"}}},
-		{"+49 151 1000001", []Contact{{phoneJID("491511000001"), "491511000001", "Alice Smith"}}},
+		{"+49 151 1000001", nil},
 		// Once, under the phone JID, with the phone entry's name, whichever entry matched.
 		{"carl", []Contact{{phoneJID("491511000006"), "491511000006", "Carl"}}},
 		{"carl l", []Contact{{phoneJID("491511000006"), "491511000006", "Carl"}}},

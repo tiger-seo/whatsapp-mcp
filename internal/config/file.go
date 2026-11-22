@@ -38,7 +38,7 @@ func readFile(dataDir string, settings []Setting) (*file, error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
-		return nil, &FileError{Path: path, Reason: err.Error()}
+		return nil, &FileError{Path: path, Reason: err.Error(), cause: err}
 	}
 	defer r.Close()
 	// One byte more than allowed tells a file at the limit from a larger one, even if it grows meanwhile.
@@ -51,7 +51,7 @@ func readFile(dataDir string, settings []Setting) (*file, error) {
 		return nil, &FileError{Path: path, Reason: err.Error()}
 	}
 	if len(data) > MaxFileSize {
-		return nil, &FileError{Path: path, Reason: "is larger than 1 MiB"}
+		return nil, &FileError{Path: path, Reason: ErrFileTooLarge.Error(), cause: ErrFileTooLarge}
 	}
 	values := map[string]any{}
 	if err := toml.Unmarshal(data, &values); err != nil {

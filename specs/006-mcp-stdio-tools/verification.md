@@ -1,0 +1,1063 @@
+# Verification: MCP Chat and Contact Tools
+
+## Current State
+
+See [tasks.md](tasks.md#current-state) for the current implementation status and remaining work. The passing Windows store and focused shutdown runs are recorded under [Runtime Gates](#runtime-gates). Earlier failures and blockers are dated evidence, not current status. The [owner reviews](#owner-reviews) and the binding [isolation amendment](#owner-accepted-amendment-to-the-isolation-policy-2026-11-18) are preserved below.
+
+The `owner-judge` review at `7d4336b` returned `PASS` for the revised WAL fence and diagnostic dependency order. The fence is committed as `f430dd0` and the diagnostic-only stdio wiring as `12d2713`. [Local results](#phase-2-wal-fence-and-diagnostic-wiring-2026-11-19) do not clear the remaining store schedules, native Linux/macOS diagnostic gate, or integrated MCP acceptance.
+
+## Planning Evidence
+
+| Date | Check / source | Result |
+| --- | --- | --- |
+| 2026-11-17 | `.specify/scripts/bash/setup-plan.sh --json`, via Git Bash | Exit 0; resolved branch `006-mcp-stdio-tools`, spec and plan under `specs/006-mcp-stdio-tools`. |
+| 2026-11-17 | Feature spec, constitution 3.0.0, source section 8.11 and security review F01-F16 | Owner scope/read decisions loaded; no unresolved product clarification; no new security exception. |
+| 2026-11-17 | Official SDK v1.8.0 metadata/module manifest and pinned source | Stable release/Go compatibility and API/queue/I/O behavior inspected, sources in research R1-R4. No module graph/build/vulnerability verification performed. |
+| 2026-11-17 | Existing store, command lifecycle and owner/fake test seams | Query deltas, admission limits and stdio-only device-fault integration inspected, references in research R5-R7. No tests executed. |
+| 2026-11-17 | `git diff --check`; `git diff --cached --check` | Both exit 0; documentation whitespace validation only. |
+| 2026-11-17 | `git ls-files --eol -- specs/006-mcp-stdio-tools` | Exit 0; all nine tracked/staged feature files show `i/lf w/lf`, no CRLF. |
+| 2026-11-17 | Internal read-only artifact consistency pass (not owner-judge) | Corrected seven design gaps: pre-handler credit retirement, blocked stderr, numeric-ID precision, SDK error sanitization, subscription defaults, valid page zero and notification boundary. No runtime tests or owner verdict inferred. |
+| 2026-11-17 | `.specify/scripts/bash/setup-tasks.sh --json`, via Git Bash | Exit 0; resolved feature `specs/006-mcp-stdio-tools`, active task template and all four optional design-document groups. No implementation or runtime tests executed. |
+| 2026-11-17 | Initial PowerShell task-format validator using `rg` | Exit 1 before validation: `rg` is not available on this shell PATH. Replaced only the search executable with Git's no-index search; no task result inferred from this failure. |
+| 2026-11-17 | PowerShell assertions over `git grep --no-index -h -E '^- \[[ xX]\]' -- specs/006-mcp-stdio-tools/tasks.md` | Exit 0; 42 sequential unchecked IDs, 8 US1/6 US2 labels, 14 parallel markers, checklist format and file references present on every task; no story labels outside story phases. Artifact validation only. |
+| 2026-11-17 | Internal read-only task coverage check (not owner-judge) | One missing diagnostic-emission obligation identified and added explicitly to T017/T018/T025: bounded tool/component name, time, outcome and secret-free category, including pre-dispatch and terminal faults. No circular setup dependency found; no runtime tests or approval inferred. |
+| 2026-11-17 | Task-generation `git diff --check`, `git diff --cached --check` and `git ls-files --eol -- specs/006-mcp-stdio-tools` | Exit 0; task-related staged patch is whitespace-clean; all ten tracked/staged feature files show `i/lf w/lf`, no CRLF. Runtime gates remain not run. |
+| 2026-11-19 | User-requested T024 store-observer split; task-marker/dependency inspection, `git diff --check`, and `git ls-files --eol -- specs/006-mcp-stdio-tools/tasks.md specs/006-mcp-stdio-tools/contracts/store-and-lifecycle.md specs/006-mcp-stdio-tools/verification.md` | 44 task entries with unchanged existing IDs/completion markers; new T043/T044 unchecked in the foundation, no T024 prerequisite for their work, and T024 retains later MCP revalidation. Both Git checks exit 0; all three documents show `i/lf w/lf`. Documentation validation only; no runtime tests, commit or renewed review performed. |
+| 2026-11-19 | Diagnostic shutdown split; read-only dependency inspection, PowerShell marker comparison using `git grep -h -o -E` against HEAD and the worktree, `git diff --check HEAD`, and `git ls-files --eol -- specs/006-mcp-stdio-tools` | The topological order in `tasks.md` separates reporter seams from checkbox closure; neither T024 nor the full native matrix supplies foundation evidence. Marker comparison and Git checks exit 0 on Windows: all 44 original IDs and markers preserved, only unchecked T045/T046 added, feature files remain LF. Design validation only, not an owner verdict or runtime result. |
+
+## Runtime Gates
+
+### Output Deadline and Config Size Follow-up (2026-11-20 UTC)
+
+Stdio checks the framed output failure after the SDK join even when normal guard closure won. The existing output pump timestamps full write acknowledgments; an acknowledgment at or after the effective deadline cannot turn a timeout into success. Ordinary closure with no published failure remains successful. Oversized `config.toml` now gets the typed 1 MiB remedy without echoing file contents.
+
+| Command or gate (`CGO_ENABLED=0`) | Direct result |
+| --- | --- |
+| `go test ./internal/mcp ./cmd/whatsapp-mcp -run '^(TestFramingWrite(CompletionAndGuardStop\|TimeoutVisibleToGuardReader\|CancellationAndFailure)\|TestStdioReportsInvalidConfigFile\|TestMCPStdio(TransportFailure\|OfflineRead))$' -count=10 -timeout 3m` | Windows/amd64: exit 0; both packages passed all ten repetitions. Plain output does not count skips. |
+| `go test ./... -count=1 -timeout 30m -json` | Windows/amd64: exit 0; 10 packages passed, 1,961 named passes, 32 skips, no failures. |
+| `go test -buildvcs=false ./cmd/whatsapp-mcp -run '^TestMCPPipeNative$/^(blocked_stdout\|closed_stdout\|slow_stdout\|first_signal)$' -count=3 -timeout 4m` | WSL2: exit 1; one `blocked_stdout` case timed out at startup waiting for `stdin-entered`, before the fixture exercised stdout. |
+| `go test -buildvcs=false ./cmd/whatsapp-mcp -run '^TestMCPPipeNative$/^blocked_stdout$' -count=3 -timeout 3m` | WSL2 isolated rerun: exit 0, all three repetitions passed. WSL2 is not native Linux CI evidence. |
+| `gofmt -l .`; `go vet ./...`; `go mod verify`; `git diff --check`; `git ls-files --eol` | Exit 0 for each; no formatting, vet, whitespace, or tracked CRLF findings. |
+| `go build -o /dev/null ./cmd/whatsapp-mcp` | Exit 0 for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64. |
+| `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...` | Exit 0; no vulnerabilities found. |
+
+Native CI passed for these changes on 2026-11-20 UTC ([push run 44802121398](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44802121398), commit `5aaaca48442cc9bbfdbefaf26c510f8de6f8fd8e`). Job results and logs were checked on 2026-11-21 UTC with `gh run view 44802121398 --json headSha,event,createdAt,conclusion,jobs` and `gh run view 44802121398 --log`.
+
+| CI gate (`CGO_ENABLED=0`) | Result |
+| --- | --- |
+| `go test -timeout 30m ./...` | Exit 0 on Windows, Linux/amd64 and macOS/arm64; 10 successful package results on each runner (some cached). Full-suite output does not report named-test skip counts. |
+| Native stdio diagnostic shutdown evidence | Linux/amd64 and macOS/arm64: direct test exit 0 on each, 7 pass events (six required subtests and their parent), 0 failures, 0 skips. The workflow checked child exit status and the forced-path observation. |
+| Native integrated MCP pipe evidence | Linux/amd64 and macOS/arm64: direct test exit 0 on each, 60 pass events across two repetitions, 0 failures, 0 skips. The workflow checked repeated required cases, child exit and normal cleanup evidence, and cooperative and integrated drain tests. |
+| `check` | Passed gofmt, vet, module verification, SQLite/libc consistency, vulnerability scan, data-directory isolation check and all five cross-builds. |
+
+The two focused Unix-only steps were skipped as configured on Windows; the Windows full suite passed. The optional heavy-store job did not run. No historical intermittent failure was attributed to either output finding.
+
+On 2026-11-22, `owner-judge` returned a scoped code PASS for `d539ae9..5aaaca4` and relevant callers. It confirmed that a published stdout failure survives normal stop, a late acknowledgment cannot turn a timeout into success, and the oversized-config refusal names the 1 MiB limit. No new blocker was found. The reviewer noted two non-blocking limits: stdin EOF may interrupt a pending reply and still exit 0, an outcome the contract does not specify; and the acknowledgment regression checks timestamps rather than racing a real pipe write at the deadline. The reviewer relied on GitHub CI job results and did not rerun local tests. This is not a gate-clearing review row: the CI evidence is not yet committed, and T042 remains open.
+
+### Stdout Failure and Config Diagnostics Follow-up (2026-11-20 UTC)
+
+The framed writer now publishes a fixed terminal failure before waking the reader. Ordinary cancellation still closes normally. Stdio now identifies ordinary `config.toml` errors and reports numeric parser coordinates when available, without printing parser text or rejected values. Existing permission-refusal remedies and startup exit codes are unchanged.
+
+| Command or gate | Result |
+| --- | --- |
+| `go test ./internal/mcp ./cmd/whatsapp-mcp -run '^(TestFramingWriteTimeoutVisibleToGuardReader\|TestStdioReportsInvalidConfigFile)$' -count=1 -timeout 1m` (before fix) | Exit 1: the reader saw a generic close, and all three config cases lacked the expected file diagnostic. |
+| `go test ./internal/mcp ./cmd/whatsapp-mcp -run '^(TestFramingWriteTimeoutVisibleToGuardReader\|TestFramingWriteCancellationAndFailure\|TestStdioReportsInvalidConfigFile\|TestStdioRefusesNonPrivateStartupFilesWithRemedy\|TestMCPStdioTransportFailure\|TestMCPStdioOfflineRead)$' -count=10 -timeout 4m` | Exit 0 on Windows/amd64; both packages passed all ten repetitions. |
+| `go test -buildvcs=false ./cmd/whatsapp-mcp -run '^TestMCPPipeNative$/^(blocked_stdout\|closed_stdout)$' -count=10 -timeout 6m` | Exit 0 under Ubuntu WSL2; both cases passed ten times. This is not native Linux CI evidence. |
+| `go test ./... -count=1 -timeout 30m` (Windows first run) | Exit 1: nine packages passed; `TestMCPPipeNative/partial_stdin_timeout` did not observe `owner-stop` within the child watchdog. |
+| `go test ./cmd/whatsapp-mcp -run '^TestMCPPipeNative$/^partial_stdin_timeout$' -count=3 -timeout 3m` | Exit 1: the same failure occurred in one of three runs. Its cause remains unverified. |
+| `go test ./... -count=1 -timeout 30m` (Windows rerun) | Exit 0: all ten packages passed without concurrent builds. Plain Go output does not count skips. |
+| `go build -o /dev/null ./cmd/whatsapp-mcp` (`CGO_ENABLED=0`) | Exit 0 separately for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64. |
+| `gofmt -l .`; `go vet ./...`; `go mod verify`; `git diff --check` | Passed; vet/module checks passed after the initial combined call timed out under concurrent load. |
+
+The write failure regression confirms the reviewed ordering defect without establishing the cause of either earlier intermittent native pipe failure. The [push CI run](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44785754591) completed successfully on 2026-11-20 UTC at `d539ae917549704136130bba9f01c6e94a8f111f`. `gh run view 44785754591 --repo tiger-seo/whatsapp-mcp --json attempt,headSha,status,conclusion,jobs` exited 0 and confirmed attempt 2 and the reviewed SHA.
+
+| Attempt | Native evidence |
+| --- | --- |
+| [1](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44785754591/attempts/1) | Check, Windows/amd64 and Linux/amd64 passed. Linux diagnostic and integrated pipe steps each exited 0 (7 and 60 named passes, respectively; no failures or skips). macOS was cancelled before a runner acquired the job. |
+| [2](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44785754591/attempts/2) | Overall success. macOS/arm64 ran afresh and passed; the focused diagnostic and integrated pipe steps each exited 0 (7 and 60 named passes, respectively; no failures or skips). Other results carried forward. |
+
+The full `go test -timeout 30m ./...` step passed on all three platforms; its plain output gives package results, not named test or skip counts. The Unix-only focused steps did not run on Windows, and the optional heavy job was skipped. T042 remains open under the renewed owner verdict below.
+
+### LID Hint CI Follow-up (2026-11-20 UTC)
+
+The Linux failure in run `44743399834` came from a test that slept for 60 ms before committing the mapping, leaving a scheduler-dependent margin before the hint's last attempt. The fixture now waits for the first missing lookup, commits the actual SQLite mapping, then releases that lookup. No mapping observer is registered, so a separate notification cannot satisfy the merge assertion. Production retry counts and delays are unchanged.
+
+With Go 1.27.4 and `CGO_ENABLED=0`, `go test ./internal/wa -run '^TestIngestLID(HintRetriedUntilTheMappingIsVisible|HintDroppedAfterFiveAttempts|StopDuringRetriesEndsTheWorker)$' -count=50 -timeout 4m` exited 0 on native Windows/amd64 and Ubuntu WSL2 (with `-buildvcs=false` on WSL2): 150 selected cases per platform. `go test ./internal/wa -count=1 -timeout 5m` also exited 0 on both (using the same WSL2 flag); the plain package output does not count skips. WSL2 is not native CI evidence. The test fix has not yet been run by GitHub Actions.
+
+Attempt 1 of the [push CI run](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44752853796) for `1292c918992f262b422ef30babaac0b3da37884f` completed on 2026-11-20 UTC with conclusion `failure`. The check, Windows, and macOS jobs passed. The Linux full suite and native diagnostic shutdown step passed. The Linux integrated pipe step exited 1: one of two `TestMCPPipeNative/blocked_stdout` cases exited 0 instead of 1. That step reported 58 named passes, 2 failures (parent and subtest), and 0 skips. The opt-in heavy job was skipped. The LID retry failure did not recur.
+
+On 2026-11-20 UTC, `gh run view 44752853796 --repo tiger-seo/whatsapp-mcp --json attempt,headSha,status,conclusion,jobs` exited 0 and confirmed that [attempt 2](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44752853796/attempts/2) completed successfully at the same SHA. The Linux native integrated pipe step passed on rerun; Windows, macOS, and the check job are green. The first attempt's intermittent `blocked_stdout` failure remains unexplained. T042 still requires renewed owner review.
+
+### Lock and Config Refusal Follow-up (2026-11-20 UTC)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, synthetic files only. Stdio now preserves the checked lock or config file path and its platform-specific permission remedy. Tests verify repeated refusal, unchanged contents, empty stdout, no database creation, and no lock creation on config refusal. Bounded fallbacks name the refused file by role. The fix does not change exit categories or permission checks.
+
+| Command | Direct result |
+| --- | --- |
+| `go test ./cmd/whatsapp-mcp -run '^TestStdioRefusesNonPrivateStartupFilesWithRemedy$' -count=1 -timeout 1m` (before fix) | Exit 1; both file cases lacked the correct path-specific diagnostic. |
+| `go test ./cmd/whatsapp-mcp ./internal/mcp -run '^(TestStdioRefuses(NonPrivateStartupFiles\|NonPrivateDatabase\|UnsafeParent)WithRemedy\|TestOpenDataDirRefused\|TestDiagnosticsPrivate.*)$' -count=3 -timeout 2m -json` | Exit 0; 30 named passes, 3 expected Unix-only skips, no failures. |
+| `go test ./... -count=1 -timeout 30m -json` (first run) | Exit 1; nine packages passed. `TestPerContactMemory/even` failed because `LastInteraction` took 90.37 ms against the existing 50 ms limit. |
+| `go test ./internal/store -run '^TestPerContactMemory$/^even$' -count=1 -timeout 5m -v` | Exit 0; `LastInteraction` took 1.97 ms in isolation. No store code or threshold was changed. |
+| `go test ./... -count=1 -timeout 30m -json` (rerun) | Exit 0; all ten packages passed, 1,951 named passes, 32 skips, no failures. |
+| `gofmt -l .`; `go vet ./...`; `go mod verify`; `git diff --check` | Exit 0 for each; changed tracked files are LF. |
+
+The [push CI run](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44743399834) completed on 2026-11-20 UTC at `a1dd72f96afbd1ff1351b5fb7e526e8815e34cf2` with conclusion `failure`. The check, Windows, and macOS jobs passed. The Linux full `go test -timeout 30m ./...` step exited 1: `TestIngestLIDHintRetriedUntilTheMappingIsVisible` reported `HintsDropped:1` in `internal/wa`. It was the only failed workflow step. The opt-in heavy job was skipped. Native CI is not green for this revision, and owner review remains open.
+
+### Storage Diagnostic Review Follow-up (2026-11-20 UTC)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, all synthetic. Stdio now reports the checked database artifact and its file-specific remedy, names the affected parent when the parent check refuses startup, and queues one mandatory `tool_store_not_quiescent` record without changing drain order. Refusals never repair the artifact or parent in place. Oversized or unsafe path text uses a bounded, operation-specific fallback.
+
+| Command | Direct result |
+| --- | --- |
+| `go test ./cmd/whatsapp-mcp -run '^(TestStdioRefuses(NonPrivateDatabase\|UnsafeParent)WithRemedy\|TestMCPStoreFailureShutdown)$' -count=1 -timeout 1m` (before fix) | Exit 1; database refusal and all four latched schedules lacked their diagnostic, Unix parent test skipped on Windows. |
+| `go test ./cmd/whatsapp-mcp ./internal/mcp -run '^(TestStdioRefuses(NonPrivateDatabase\|UnsafeParent)WithRemedy\|TestOpenDataDirRefused\|TestMCPStoreFailureShutdown\|TestMCPStdioIntegratedDrain\|TestStdioDiagnosticQuietStopFailure\|TestDiagnosticsPrivate.*)$' -count=3 -timeout 3m -json` | Exit 0; both packages passed, 105 named passes, three expected Unix-parent skips, no failures. |
+| `go vet ./...`; `go mod verify`; `git diff --check` | Exit 0 for each. |
+
+The [native push matrix](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44737454326) completed successfully on 2026-11-20 UTC at `5f10f8e1823ed0e7c943fe87f9fd4b955c700cab`. `gh run watch 44737454326 --repo tiger-seo/whatsapp-mcp --exit-status --compact --interval 30` completed successfully, and `gh run view 44737454326 --repo tiger-seo/whatsapp-mcp --json headSha,conclusion,jobs` confirmed that SHA. The full `go test -timeout 30m ./...` step passed on native Windows/amd64, Linux/amd64 and macOS/arm64. The check job passed, including reachable vulnerability scanning and all five cross-builds. The opt-in heavy job was skipped on push.
+
+| Native CI runner | Diagnostic shutdown (`-count=1`, `-timeout 3m`) | Integrated MCP pipes (`-count=2`, `-timeout 8m`) |
+| --- | --- | --- |
+| [Linux/amd64](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44737454326/job/136292319758) | Exit 0; 7 pass, 0 fail, 0 skip | Exit 0; 60 pass, 0 fail, 0 skip |
+| [macOS/arm64](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44737454326/job/136292320039) | Exit 0; 7 pass, 0 fail, 0 skip | Exit 0; 60 pass, 0 fail, 0 skip |
+
+This supplies current native evidence for the reporter changes. T042 still requires a renewed owner verdict.
+
+### Quiet-Stop Diagnostic Review Follow-up (2026-11-20 UTC)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`; synthetic data and a fake owner only. The command test runs `stdio` with the production reporter at log level `error`. It checks exit 1, protocol-only stdout, all eight quiet-stop categories, numeric counts, rejection of duplicate fields, redaction of an unknown reason to `unknown`, and bounded records. It also checks history and receive-loss reasons and the dropped-message count. The existing queue, acknowledgment and exit policies are unchanged.
+
+| Command | Direct result |
+| --- | --- |
+| `go test ./cmd/whatsapp-mcp -run '^TestStdioDiagnosticQuietStopFailure$' -count=1 -timeout 1m -json` (before fix) | Exit 1; parent and all nine subtests failed on missing metadata, no skips. |
+| `go test ./cmd/whatsapp-mcp -run '^TestStdioDiagnosticQuietStopFailure$' -count=3 -timeout 1m -json` | Exit 0; 30 parent/subtest passes, no skips. The duplicate-field assertion was added before the full run below. |
+| `go test ./... -count=1 -timeout 30m -json` | Exit 0; ten packages, 1,946 test/subtest passes, 31 skips, no failures. |
+| `gofmt -l .`; `go vet ./...`; `go mod verify`; `git diff --check` | Exit 0 for each; no formatting, vet or whitespace findings. Changed tracked files are LF. |
+| `go build -o /dev/null ./cmd/whatsapp-mcp` | Exit 0 separately for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64 via Git Bash. |
+| `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...` | Exit 0; no vulnerabilities found. |
+
+Earlier native Linux/macOS CI predates this runtime change; cross-build results do not replace a native rerun. The separate nonblocking oversized-result audit classification was not changed by this patch.
+
+### T039 Local Delivery Gates (2026-11-20 UTC)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, runtime source at `5428fb6`. Synthetic tests only. The working tree already had local `.gitignore` and `AGENTS.chatgpt.md` changes; neither changes the Go runtime source. No optional heavy, soak, measurement or CGO race runs were enabled.
+
+| Command | Direct result |
+| --- | --- |
+| `gofmt -l .`; `go vet ./...`; `go mod verify`; `go list -m github.com/modelcontextprotocol/go-sdk` | Each exited 0 on the native retry; no formatting or vet findings, all modules verified, SDK v1.8.0. An earlier chained tool call timed out without reporting which commands reached completion. |
+| `go test ./... -count=1 -timeout 30m` | Exit 1; eight of ten packages passed. `internal/store` failed `TestAdmissionLimitsOnTheRealStore` (12 queued calls returned `store is busy`; 68 messages stored, expected 80). `internal/wa` failed `TestIngestLogsKeepContentAtDebugAndNeverLogMediaMaterial/debug` (no `history_incomplete` record observed). Command and MCP packages passed. Per-test counts and skips are not available from the exact non-verbose delivery invocation. Causes were not established. |
+| `GOOS=${t%/*} GOARCH=${t#*/} go build -o /dev/null ./cmd/whatsapp-mcp` | Exit 0 separately for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64, using Git Bash. These builds are not native Linux/macOS runtime evidence. |
+| `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...` | Exit 0; no vulnerabilities found. |
+| `go vet ./internal/wa/testdata/cmd/session-check`; `go test ./internal/wa/testdata/cmd/session-check -count=1`; `go build -o /dev/null ./internal/wa/testdata/cmd/session-check` | Each exited 0 in native Git Bash. A separate `go test ./internal/wa/testdata/cmd/session-check -count=1 -json` exited 0 with 21 test/subtest passes, no failures or skips. The initial WSL shell attempt did not find `go` and ran no helper gate. |
+| `git diff --check`; `git ls-files --eol` | Exit 0; no whitespace findings or `w/crlf` across 356 tracked entries. |
+
+Inspection of `git diff origin/main...HEAD -- go.mod go.sum` found the exact SDK and its transitive additions only. Go 1.27.0/toolchain 1.27.4, libsignal v0.2.2, the `bedcf0185245` whatsmeow replacement and SQLite v1.62.0 are unchanged from the base. `gh run view 44652785852 --repo tiger-seo/whatsapp-mcp --json conclusion,headSha,jobs` exited 0 and confirmed success for the `check` job, full suites on Windows, Linux and macOS, and focused Linux/macOS native pipe and diagnostic steps at `9c4e30a`. The tracked commit delta since then was evidence and task status only. That CI pass does not override this local failure. T039 remains open; no delivery or code-review checkpoint was reached.
+
+**Follow-up, 2026-11-20 UTC (Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, `5428fb6` plus a local test-only change):** Both failed parents passed five isolated runs (`go test ./internal/store ./internal/wa -p 1 -run '^(TestAdmissionLimitsOnTheRealStore|TestIngestLogsKeepContentAtDebugAndNeverLogMediaMaterial)$' -count=5 -v -timeout 3m`, exit 0, 10 parent and 10 subtest passes, no skips). The logging fixture could reach final log capture after the producer incremented the counter but before it wrote the warning. It now waits for the emitted warning under the buffer mutex. The store failure was not reproduced in isolation; no store fixture, runtime code or timing budget changed.
+
+Repeating the focused command at `-count=20` with `-json` instead of `-v` exited 0 (40 parent and 40 subtest passes, no skips). The exact `go test ./... -count=1 -timeout 30m` rerun without concurrent build gates exited 0 on all ten packages (command 248.502 s, MCP 111.895 s, store 358.494 s, WhatsApp 80.697 s; exact command does not report per-test counts or skips). `gofmt -l .`, `go vet ./...`, `git diff --check` and the tracked LF check each passed again. This clears T039. The prior native CI evidence covers the same runtime source, not the local fixture change.
+
+### T041 Requirements Traceability
+
+**Quickstart rerun (2026-11-20 UTC):** native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, synthetic data only. The commands below capture direct Go exits and named test/subtest outcomes via `-json` in place of `-v`. Planning-era filters were updated for execution to match the implemented test names, without modifying the reviewed quickstart. The dependency, formatting and full delivery checks are recorded under T039; native Unix subprocess results are linked below. No optional heavy jobs or real-account checks were performed.
+
+| Command | Pass / fail / skip | Exit |
+| --- | ---: | ---: |
+| `go test ./internal/mcp -count=1 -timeout 5m -json` | 380 / 0 / 0 | 0 |
+| `go test ./internal/store -run '^(TestTool\|TestWriter\|TestMCP(Chat\|Contact)Queries\|TestMCPIngestPressure\|TestListChats\|TestGetChat\|TestSearchContacts\|TestContactChats\|TestDirectChat)' -count=1 -timeout 10m -json` | 174 / 0 / 1 | 0 |
+| `go test ./internal/mcp ./cmd/whatsapp-mcp -run '^(TestMCPFlood\|TestMCPIngestPressure)$' -count=3 -timeout 10m -json` | 6 / 0 / 0 | 0 |
+| `go test ./internal/mcp -run '^(TestFraming\|TestGuard\|TestResult)' -count=3 -timeout 5m -json` | 381 / 0 / 0 | 0 |
+| `go test ./cmd/whatsapp-mcp -run '^(TestMCP\|TestShellIngest\|TestLifecycle\|TestStdioDiagnostic)' -count=3 -timeout 10m -json` | 204 / 0 / 0 | 0 |
+| `go test ./internal/wa -run '^(TestOwnerTerminal\|TestRetirementOrder\|TestSimulatorStopDuringQueuedAppStateFetches\|TestMCPActual\|TestIngestLogsKeepContentAtDebugAndNeverLogMediaMaterial)' -count=1 -timeout 10m -json` | 20 / 0 / 0 | 0 |
+
+The single skip is `TestSearchContactsHeapLimitChild`, an entry point for a subprocess, not a missing mandatory case. Every group ran named tests. T040 documents the local read policy and operating limits, and narrows the two inherited backlog entries only to the scope covered by the evidence. T041 reconciles all 33 feature requirements and criteria below. T042 remains open pending authorization for the implementation commit and a current owner code verdict.
+
+The mappings below refer to the [story acceptance](#phase-4-contact-tools-and-five-tool-discovery-2026-11-19),
+[bounds and pressure](#phase-5-abuse-bounds-and-pressure-2026-11-19-utc), [resource measurements](#t035-resource-measurements-2026-11-20-utc),
+[native Windows matrix](#t036-native-windows-pipes-2026-11-20-utc), [native Unix matrix](#t037t038-unix-pipe-follow-up-2026-11-20-utc)
+and [delivery gates](#t039-local-delivery-gates-2026-11-20-utc). Focused and full Windows evidence is native amd64;
+the native Linux/amd64 and macOS/arm64 evidence is from CI on the committed runtime source. Native platform
+claims are limited to those combinations, and the ceiling-sized opt-in grouping measurement was Windows only.
+
+| Requirement | Concrete acceptance evidence |
+| --- | --- |
+| FR-001 | `TestMCPStdioOfflineRead` starts embedded MCP while disconnected; `TestMCPStdioRefusesBeforeReading` and `TestProcessSingleInstance` exercise startup refusal and exclusivity. No HTTP/proxy entry point was added. |
+| FR-002 | `TestFiveToolDiscovery` and `TestMCPStdioOfflineRead` verify exactly five tools; `TestServerConstruction` and `TestServerNoSamplingOrElicitation` check capability limits. |
+| FR-003 | `TestChatToolsDiscovery`, `TestChatToolsInvalidArguments`, `TestContactToolsValidation` and `TestServerSDKExplicitSchemasAndDispatch` check discovery versus handler defaults, explicit false, invalid types and unexpected fields. |
+| FR-004 | `TestChatToolsPaging`, `TestMCPChatQueriesLiteralSearch` and `TestMCPChatQueriesOrder` check literal folded queries, sorting, empty pages and stable ties. |
+| FR-005 | `TestChatToolsExactLookup`, `TestMCPChatQueriesGetMetadataSkipsLatest` and `TestToolGetChatMetadataOnly` check exact identity, not-found and no latest read or budget charge for false. |
+| FR-006 | `TestContactToolsSearch` and `TestMCPContactQueriesSearch` check all four name fields, literal phone digits, alias grouping, excluded domains and stable paging. |
+| FR-007 | `TestContactToolsChats` and `TestMCPContactQueriesDirectAndMembership` check equivalent normalized inputs, phone preference, exact mapped/unmapped LID fallback and no partial phone selection. |
+| FR-008 | `TestContactToolsChats` and `TestMCPContactQueriesDirectAndMembership` check distinct direct rows, stored sender membership and the actual latest message regardless of sender. |
+| FR-009 | `TestChatToolsInvalidArguments`, `TestContactToolsValidation`, `TestResultEmptyPageArray` and `TestResultRefusesBeforeEncoding` check page/offset limits, empty arrays and no partial success. |
+| FR-010 | `TestMCPChatQueriesLatestCompositeIdentity`, `TestResultSafeTextAndOptionalFields`, `TestResultTimestampUTC` and `TestResultOutputSchemas` check identity, caption/text separation, optional fields, RFC 3339 and the explicit output shape. |
+| FR-011 | `TestResultSafeTextAndOptionalFields`, `TestResultOutputSchemas` and the chat/contact SDK calls compare parsed text with structured content; no compact format is accepted. |
+| FR-012 | `TestChatToolsExactLookup`, `TestContactToolsStorageErrors`, `TestGuardSanitizesProtocolErrors` and `TestAbuseSDKRedactionAndRecovery` check clear bounded errors without lost correlation or leaked values. |
+| FR-013 | `TestFiveToolDiscovery` and `TestMCPStdioOfflineRead` reject `get_login_status` without account activity; existing offline status suites passed in the full run. |
+| FR-014 | The same discovery and command tests reject `get_pairing_qr` without disclosure or an owner request; existing pairing regressions ran in the full suite. |
+| FR-015 | `TestMCPStdioOfflineRead`, `TestMCPContactQueriesSearch` and `TestToolFiveReadsExpectedResults` exercise offline data and locally resolved identity/name precedence. |
+| FR-016 | `TestMCPStdioOfflineRead` and `TestAbuseSDKRedactionAndRecovery` exercise owner-launched reads and untrusted instruction text without account actions. The tool facade exposes no such actions. |
+| FR-017 | `TestMCPFlood`, both store and command `TestMCPIngestPressure` families, `TestToolGatePreservesOrdinaryCapacity`, `TestToolAdmissionUsesFreshDiskSample`, `TestGuardHeldWriteKeepsToolCredit` and `TestResultSizeLimits` cover independent admission, WAL/disk, slow output and budgets. T035 documents the controls and limits of measurements. |
+| FR-018 | `TestMCPStdioIntegratedDrain`, `TestMCPStdioDeviceFault`, `TestMCPStoreFailureShutdown`, `TestShellIngestFailureStopsTheCommand`, `TestRetirementOrderOfAConnectedRun` and the native pipe matrices cover actual drain, fault/EOF precedence, lock release and marker ownership. |
+| FR-019 | `TestChatTools*`, `TestContactTools*` and `TestFiveToolDiscovery` exercise all tools through official guarded in-memory SDK transports. `TestMCPStdio*` and native pipe tests cover the command boundary. |
+| SEC-001 | `TestMCPStdioOfflineRead` and `TestAbuseSDKRedactionAndRecovery` cover the all-data local read boundary and no additional authority from input or stored content; residual client-disclosure risk remains. |
+| SEC-002 | `TestFiveToolDiscovery`, `TestMCPStdioOfflineRead` and `TestAbuseSDKRedactionAndRecovery` check deferred-tool refusal, no QR disclosure and no new account work. |
+| SEC-003 | `TestResultSafeTextAndOptionalFields`, `TestResultOutputSchemas`, `TestAbuseResultRejection` and `TestMCPActualMessageDebugRedaction` check provenance, safe rendering, DTO boundaries and log payload handling. |
+| SEC-004 | `TestFramingInput`, `TestFramingTokenLimit`, `TestGuardFourOutstanding`, `TestGuardNotificationLimit`, `TestFramingSlowConsumerDeadline`, `TestResultActualTwoMiBBoundary`, `TestFramingSerializedFrameBoundary` and `TestToolContactCeilingsZeroFolds` check actual byte, shape, queue and SQLite work controls. |
+| SEC-005 | `TestMCPStdioRefusesBeforeReading`, `TestStdioDiagnosticRefusal`, `TestMCPStoreFailureShutdown` and `TestAbuseSDKRedactionAndRecovery` cover private startup, lock/storage order, no mutation and retained unsafe markers. Native CI also ran the existing unsafe-run platform checks. |
+| SEC-006 | `TestDiagnosticsAuditMetadata`, `TestServerSDKFailureIsAudited`, `TestMCPActualHistoryIncompleteAtLogLevels`, `TestMCPActualReceiveOverloadAtLogLevels`, `TestStdioDiagnosticAcknowledgmentAfterCleanup` and the native stderr/EOF matrices cover mandatory reporting, safe categories, failure exit and no durable-audit guarantee. |
+| SEC-007 | T039 records the approved pin diff, `go mod verify`, `govulncheck` and all five CGO-free builds; no production dependency change during delivery. |
+| SC-001 | The five-tool SDK discovery/read acceptance and native stdio offline initialization cover the scripted synthetic journeys. |
+| SC-002 | `TestChatToolsPaging` traverses the unchanged 235-chat fixture at default, 1 and 200; `TestChatToolsInvalidArguments` covers invalid boundaries. |
+| SC-003 | `TestContactToolsSearch`, `TestContactToolsChats`, `TestMCPContactQueriesSearch` and `TestMCPContactQueriesDirectAndMembership` cover all name fields, formatting, aliases and exact direct selection. |
+| SC-004 | `TestMCPContactQueriesDirectAndMembership`, `TestMCPChatQueriesLatestCompositeIdentity`, `TestResultTimestampUTC` and `TestResultEmptyPageArray` check deduplication, ties, timestamps and array shape. |
+| SC-005 | `TestFiveToolDiscovery` and `TestMCPStdioOfflineRead` discover neither login tool and reject both without account work. |
+| SC-006 | `TestMCPFlood`, the T035 pressure tests, `TestGuardSDKBlockedOutputDeadlineRetainsCredit`, `TestToolFacadeRetainsLeaseDuringConnectionCleanup` and `TestMCPStdioIntegratedDrain` check bounded work, continued ingest and actual drain. Detached OS pumps are process-lifetime byte-only I/O, not running tool work. |
+| SC-007 | `TestAbuseFramedRejections`, `TestAbuseSDKRedactionAndRecovery`, `TestMCPStdioOfflineRead` and `TestMCPActualMessageDebugRedaction` check redaction, protocol-only stdout and unchanged synthetic state after abuse. |
+
+Open outside this evidence: real-account behavior in feature 006, native Linux/arm64 and macOS/amd64 runtime,
+`serve` device-only fault shutdown, configurable read access, MCP login/QR and durable audit retention. No
+exception, finding closure beyond this scope or release approval is inferred.
+
+### Phase 5 Abuse, Bounds and Pressure (2026-11-19 UTC)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, SQLite v1.62.0. The tests use temporary synthetic stores and cooperative test streams, except for the existing transport-only inherited-pipe helpers. No real account was used.
+
+| Command | Direct result |
+| --- | --- |
+| `go test ./internal/mcp -run '^TestAbuse' -count=1 -timeout 2m` | Exit 0; three parent tests, 25 subtests, no skips. Earlier runs caught test-fixture compile issues and a mistaken expectation: a shaped tool call with non-object arguments is a tool-level error, not a pre-SDK protocol error. The pre-SDK matrix now uses malformed protocol parameters and checks the fixed error, preserved ID and absent error data. |
+| `go test ./internal/mcp -run '^(TestFraming\|TestGuard\|TestResult)' -count=1 -timeout 5m -v` | Exit 0; 24 framing, 34 guard and 17 result parent tests, no skips (80.636 s). Includes 1,024/1,025 notification forwarding, pre-handler cancellation and credit retirement, four-request/one-tool admission, synchronous overload, exact frame/token/depth and result byte tests, and the 10 s tool/assembly and 5 s public-write paths. |
+| `go test ./internal/store ./cmd/whatsapp-mcp -run '^(TestTool(StoreDeadline\|SQLiteClose\|FirstStep\|Facade\|WALWait)\|TestMCPStoreFailureShutdown\|TestMCPStdioIntegratedDrain)' -count=1 -timeout 3m -v` | Exit 0; nine store parents and 55 subtests; two command parents and 16 subtests; no skips. The new test observes the 5 s context deadline and refusal of a replacement while the expired lease is held. Separate tests cover cancellation during first-step folding, actual connection return, latched control failure and exit 1 after ordered command drain. The pinned-driver later-`Next` counterexample is recorded in [the v1.62.0 follow-up](#t004t005-store-follow-up-2026-111819); it is not an assumption that cancellation interrupts a later step. |
+| `go test ./internal/mcp ./cmd/whatsapp-mcp -run '^(TestMCPFlood\|TestMCPIngestPressure)$' -count=3 -timeout 5m -v` | Exit 0; six total executions, no skips. `TestMCPFlood` sends 256 tool requests against one held credit: one admitted and 255 correlated busy replies, a ping admitted and zero retained entries after completed writes. The command test observes the mandatory busy event while output is held, commits three batches of 16 messages with 64 KiB bodies, releases the original reply unchanged, reads the final ingested message, and observes exit 0 and lock reacquisition. |
+| `go test ./internal/store -run '^(TestMCPIngestPressureWAL(Fence\|Measurements)\|TestToolConcurrentIngestAndReadmission\|TestToolWALActualWritesCancelSnapshot\|TestToolAdmissionUsesFreshDiskSample\|TestToolContactCeilingsZeroFolds\|TestToolFirstStepCancellationDuringContactFolding\|TestToolGatePrioritizesWaitingDevice\|TestToolGatePreservesOrdinaryCapacity)$' -count=1 -timeout 5m -v` | Exit 0; nine parent tests and 11 subtests, no skips (29.570 s). Includes fresh free-space refusal, zero folds beyond contact ceilings, cancellation in the first step and ordinary/device admission priority. |
+| `go vet ./...`; `gofmt -l internal/store/tool_reader_test.go internal/mcp/abuse_test.go internal/mcp/pressure_test.go cmd/whatsapp-mcp/mcp_pressure_test.go`; `git diff --check` | Exit 0 for each; no vet, format or whitespace output. `git ls-files --eol` on the changed tracked paths and feature directory exited 0 and reported LF throughout. The full delivery suite was not run for this slice. |
+
+The adversarial cases cover raw malformed/truncated frames, duplicate and escaped keys/IDs, invalid cancellation shape, secret-bearing pre-dispatch failures at `debug`, `info`, `warn` and `error`, unknown account tools, and result property/UTF-8/escaping rejection. The successful follow-up recovers the literal stored approval text as untrusted data; the rejected calls make zero store-facade calls and leave the sampled conversation and synthetic device identity unchanged.
+
+**Output accounting.** The near-limit fixture retained structured JSON 2,080,768 B (capacity 2,080,768 B), safe text 2,080,768 B, SDK result 4,162,078 B (capacity 4,169,728 B) and wire frame 4,162,124 B including newline (capacity 4,169,728 B). The measured path allocated 27,318,226 B/op in 38 allocations; preflight rejection used 392 B/op and 6 allocations. These are sample capacities and cumulative allocations, not a process peak or a hard heap bound. In go-sdk v1.8.0, `mcp/content.go` serializes the text block, `CallToolResult.MarshalJSON` (`mcp/protocol.go`) serializes the result envelope, and `internal/jsonrpc2/messages.go` then marshals to raw result bytes and separately encodes the JSON-RPC envelope. The guard reuses the result backing bytes when replacing the response ID; the frame adds the newline and one pump handoff. Preflight charges the representations and escaping before these copies, and the sole tool credit lives until the write acknowledgment. The final 8 MiB exact test exercises actual SDK serialization and the newline-inclusive check separately from the deliberately more conservative preflight.
+
+**WAL fence and measurements.** In the mixed run, exact 16 MiB ingest batches (64 messages each) alternate with outer device transactions containing two 4 MiB statements. A real held snapshot refuses 1,107 competing tool calls in the recorded run. The seventh outer transaction (ingest) crossed from 127,435,752 B to 161,409,272 B; `-shm` measured 327,680 B separately. The next writer fails to enter SQLite within its caller deadline and leaves WAL length unchanged. A subsequent ingest waits at the writer until the held transaction and reader connection return, then succeeds without a retry. Oversized WAL refuses readmission until the checkpoint restores it to at most 64 MiB. The deterministic handoff, not the largest observed batch, establishes the ordering under test.
+
+The matched device comparison sampled reset and pinned WAL lengths before the transaction, before commit and after commit: reset 0 / 6,666,192 / 8,454,272 B, pinned 4,231,272 / 10,897,432 / 12,685,512 B. Both samples differ in frame growth by only the 32-byte reset header, with `-shm` at 32,768 B in each run. This measures logical length, not filesystem allocation or a continuous physical peak of the actual crossing transaction. The writer hook counts one check per outer device transaction (not per inner statement) and one per standalone device read/write. Separate synchronous WAL stats averaged 6.317 and 7.353 us over 1,000 samples each; 100 separate free-space calls averaged 22.403 and 19.542 us respectively. These samples estimate call cost but do not isolate serialized writer-hold time. In the matched maximum-batch ingest workload, the baseline and flooded cases each completed 12 writes and recorded 12 writer checks in the sampling window. Baseline: 102 messages/s, 628 ms mean and 808 ms slowest write. Flood: 86 messages/s, 743 ms mean and 923 ms slowest write. The difference includes local scheduling and read contention; it is not attributed to the stat alone.
+
+**T035 status:** The matched crossing, sidecar allocation, writer timing, concurrent query samples and native CI for the measurement commit are recorded below.
+
+#### Phase 5 CI Follow-up (2026-11-20 UTC)
+
+[Push CI for `28bdf68`](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44640050242) passed the `check` job. The store and command packages passed on Windows, Ubuntu and macOS, but each native test job exited 1 because `TestAbuseSDKRedactionAndRecovery` failed in `internal/mcp`; the optional heavy-store job was skipped. The in-memory peer can receive an SDK reply before the guard retires its tool credit. The fixture sent the next request in that window and treated a structured `busy` refusal as successful execution. The fix waits for server-side credit retirement between exchanges and still requires the unknown tool to produce a sanitized protocol error, not `busy`. No production code or admission limits changed.
+
+| Command (native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`) | Direct result |
+| --- | --- |
+| `GOMAXPROCS=1 go test ./internal/mcp -run '^TestAbuseSDKRedactionAndRecovery$' -count=1 -timeout 1m` (before synchronization) | Exit 1; all four log-level cases reproduced the CI failure. A sharper assertion identified the `get_pairing_qr` reply as `busy` in all four. |
+| `GOMAXPROCS=1 go test ./internal/mcp -run '^(TestAbuseSDKRedactionAndRecovery\|TestFiveToolDiscovery\|TestGuardHeldWriteKeepsToolCredit)$' -count=10 -timeout 3m` | Exit 0; 30 parent and 40 log-level subtest executions (30.148 s). |
+| `go test ./internal/mcp -count=1 -timeout 5m` | Exit 0 for the full MCP package (99.475 s). |
+
+[Push CI for `0a138fb`](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44643575891) passed on Go 1.27.4 with `CGO_ENABLED=0`. The `check` job passed and the optional heavy-store job was skipped. The native suite uses non-verbose output, so individual test counts, skips and pressure measurements are not available from this step.
+
+| Native runner | `go test -timeout 30m ./...` | MCP / store package times |
+| --- | --- | --- |
+| Windows/amd64 | Exit 0 | 135.934 s / 261.087 s |
+| Linux/amd64 | Exit 0 | 78.777 s / 168.322 s |
+| macOS/arm64 | Exit 0 | 76.373 s / 211.205 s |
+
+#### T035 Resource Measurements (2026-11-20 UTC)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, pinned SQLite v1.62.0. All stores and writes were synthetic. With `WA_QUERY_PRESSURE=1`, `go test ./internal/store -run '^(TestMCPContactQueryPressure|TestMCPIngestPressure(MatchedCrossing|WriterCheckPaths|WALFence)|TestToolConcurrentIngestAndReadmission|TestToolAdmissionUsesFreshDiskSample)$' -count=1 -timeout 10m -v` exited 0: six parent tests, five subtests, zero skips (32.194 s). The first combined invocation failed at compile time on an unused import, removed before the recorded pass. `go vet ./...` exited 0.
+
+| Matched seventh outer transaction | WAL at start | WAL before commit | WAL after commit | Actual `-shm` allocation |
+| --- | ---: | ---: | ---: | ---: |
+| Pinned snapshot | 127,435,752 B | 159,637,672 B | 161,409,272 B | 327,680 B |
+| Reset WAL, same writes | 0 B | 32,201,952 B | 33,973,552 B | 98,304 B |
+
+The reset replay checkpoints immediately before the identical ingest batch, after applying the same six preceding transactions. Its frame spans match the pinned replay before and after commit, after accounting for the 32-byte reset header. These are samples of the physical file length at transaction boundaries, not a continuous disk high-water counter. In the matched runs the growing WAL was not truncated during the write. The independent mixed-fence case refused 976 competing tool calls and verified that the next writer could not enter SQLite until the snapshot and connection actually returned. `-shm` was measured separately with the filesystem's allocation-size API; its allocation is not part of the WAL frame argument.
+
+**Writer hold cost.** The test hook timestamps the actual serialized stat and subsequent gate publication, not an independent `os.Stat` loop. Checks: one per standalone device read/write, one per two-statement outer device transaction, zero writer checks for tool admission, and one each for recovery checkpoint, connection close and reconnect. On this run the standalone device write's publication interval registered 906.5 us and the outer device transaction's stat registered 524 us; the isolated read, checkpoint, close and reconnect intervals did not register above clock resolution. This is not evidence of zero cost. The 120-write light flood observed 120 checks, 4.5714 ms cumulative stat and 954.6 us maximum measured hold. The matched 768-message baseline and flood each observed 12 checks. Baseline: 108 messages/s, 595 ms mean write, 692 ms slowest, 1.1524 ms cumulative stat and 1.0241 ms maximum hold. Flood: 69 messages/s, 929 ms mean write, 2.146 s slowest, 998.8 us cumulative stat and 998.8 us maximum hold. Publication elapsed was below clock resolution for those ingest samples. Overall throughput differences include scheduling and read contention; do not attribute them to the stat.
+
+**Query resources.** The opt-in grouping fixture contains 100,000 distinct contacts, exactly 4,194,304 chosen-name bytes and 16,777,216 name-field bytes. It returned 200 rows in 2.360 s while 533 writes with 4 KiB message bodies committed without error. SQLite process heap began at 2,283,984 B and reached 29,414,200 B (27,130,216 B increase with ingest included). Sampled Go heap rose from 902,200 B to 4,205,256 B. The exact reader connection reported 5,144 B cache before and 31,256 B at return, `temp_store=MEMORY` and an unchanged zero temp-spill counter. SQLite includes in-memory temp work in the global heap high-water; its public cache gauge is a point sample, not a transient per-cache high-water. This is a ceiling-sized grouping sample, not exhaustive over alias distributions or a separate per-query cap. The maximal-batch/fence scenarios are separate. The contract's source bounds and admission proof still apply independently of these measured runs.
+
+**Final local checks:** `go test ./... -count=1 -timeout 30m` passed all 10 packages on Windows/amd64 (MCP 105.484 s, store 325.500 s); the opt-in query had already passed the focused run above. `go vet ./internal/store` cross-checks for Linux/amd64 and macOS/arm64 both exited 0. Formatting and `git diff --check` were clean.
+
+**Native CI:** [Push CI for `a3d18bd`](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44648290931) passed on 2026-11-20 UTC with Go 1.27.4 and `CGO_ENABLED=0`. The `check` job passed and the optional heavy-store job was skipped. The standard suite included the new WAL measurement tests and instrumented writer, but did not produce individual test counts or pressure samples in its non-verbose output. The opt-in grouping measurement was run separately on Windows/amd64 only.
+
+| Native runner | `go test -timeout 30m ./...` | MCP / store package times |
+| --- | --- | --- |
+| Windows/amd64 | Exit 0 | 98.690 s / 187.537 s |
+| Linux/amd64 | Exit 0 | 77.027 s / 128.526 s |
+| macOS/arm64 | Exit 0 | 78.851 s / 153.961 s |
+
+#### T036 Native Windows Pipes (2026-11-20 UTC)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, uncommitted patch on `a3d18bd`. No real account, device, or network was used. `go test ./cmd/whatsapp-mcp -run '^TestMCPPipeNative$' -count=1 -timeout 5m -v` exited 0: one parent, 13 cases, no skips (88.548 s package time). Children ran the integrated stdio command with inherited OS pipes, a fake owner and real synthetic SQLite stores and locks. A separate temporary control directory carries observations, not bytes on MCP stdout. All command exits were normal, not forced or killed. Counts below are entries/completions for reads and full successful writes; a failed write is not an acknowledgment.
+
+| Case | Child exit | stdin | stdout | stderr |
+| --- | ---: | ---: | ---: | ---: |
+| First signal (Ctrl+Break with stdin idle) | 0 | 1/0 | 0/0 | 12/12 |
+| Partial stdin then EOF | 1 | 17/17 | 0/0 | 14/14 |
+| Partial stdin still open at assembly timeout | 1 | 17/16 | 0/0 | 14/14 |
+| Slow stdout, complete large reply | 0 | 336/336 | 2/2 | 12/12 |
+| Blocked stdout | 1 | 336/335 | 2/1 | 14/14 |
+| Blocked stdin, stdout and stderr together | 1 | 336/335 | 2/1 | 1/0 |
+| Closed stdout | 1 | 151/150 | 1/0 | 14/14 |
+| Client cancellation notification | 0 | 414/414 | 2/2 | 13/13 |
+| Blocked stderr at startup refusal | 1 | 0/0 | 0/0 | 1/0 |
+| Blocked stderr during operation | 1 | 1/0 | 0/0 | 1/0 |
+| Blocked stderr across EOF and owner drain | 1 | 273/273 | 2/2 | 1/0 |
+| Mandatory overflow across EOF and owner drain | 1 | 273/273 | 2/2 | 1/0 |
+| Closed stderr | 1 | 0/0 | 0/0 | 1/0 |
+
+The harness requires owner stop, actual store quiescence, and lock reacquisition before accepting the process result, except startup refusal, which opens no store. In the signal case it also checks the lock stays held until owner release. The EOF cases first get a correlated pre-dispatch denial over stdout; owner-stop then submits loss events while stderr is held. With missing acknowledgment, finalization had pending work after cleanup; overflow had already latched failure. In the three-pipe case each original pump had one outstanding OS operation at shutdown, with no second concurrent call; neither cleanup nor process exit required the pipe peer to resume. The first matrix run passed 11 cases and failed only on a fixture expectation that closed stderr would allow the stdin pump to start; the corrected case allows early refusal and still requires owner/store/lock cleanup and exit 1.
+
+`go test ./internal/mcp -run '^TestDiagnostics' -count=1 -timeout 3m -v` exited 0 (6.212 s). Its two native stderr helper cases exited 0 on successful assertions, not as stand-ins for command exit status. The blocked helper observed 16 ordinary records, 16 mandatory records, 48 ordinary drops, 25 fixed cells, 17 pending submissions including the overflow, and zero mandatory deliveries. It checked the 4 KiB / 1 KiB record ceilings, retained history-incomplete, receive-overload, denied and terminal categories, and did not see a replacement write. The package timeout test observed failure at the 5 s acknowledgment deadline, and partial-write tests required a complete write. The reporter loop owns one earliest-deadline timer by construction; neither helper counts runtime timer objects. `go vet ./...` exited 0. Linux and macOS execution of this integrated harness is not claimed here (T037/T038).
+
+The full native Windows suite, `go test ./... -count=1 -timeout 30m`, passed all 10 packages (command: 245.006 s; MCP: 106.907 s; store: 341.537 s). `gofmt -l .` and `git diff --check` produced no output.
+
+#### T037/T038 Unix Pipe Follow-up (2026-11-20 UTC)
+
+WSL2 Linux/amd64 smoke only: `CGO_ENABLED=0 go test -buildvcs=false ./cmd/whatsapp-mcp -run '^TestMCPPipe(Native|Unix)$' -count=1 -timeout 5m -v` exited 0 (129.147 s), with 2 parents, 17 subprocess cases and no skips. The 13 shared cases matched the Windows command exit codes. The Unix-only exits were 1 for closed stderr before startup, 0 for closed stderr with ordinary logs only, 1 for a storage fault during EOF-driven owner drain, and 1 through the explicit forced callback after a second signal during pending diagnostic finalization. The forced case required store quiescence and lock reacquisition before sending the second signal. Windows `go vet ./...` and the macOS/arm64 cross-vet of `./cmd/whatsapp-mcp` exited 0; neither is native Unix runtime evidence.
+
+The shared Windows/amd64 matrix also passed after the Unix changes (`CGO_ENABLED=0 go test ./cmd/whatsapp-mcp -run '^TestMCPPipeNative$' -count=1 -timeout 5m`, exit 0, 94.047 s). The WSL2 cooperative owner/stream and integrated drain regressions passed twice (`CGO_ENABLED=0 go test -buildvcs=false ./cmd/whatsapp-mcp -run '^Test(MCPHarnessHeldOwnerAndCooperativeStreams|MCPStdioIntegratedDrain)$' -count=2 -timeout 2m`, exit 0, 12.598 s).
+
+**Native CI.** [Run #44652785852](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44652785852) for `9c4e30a` passed `check` and all three platform test jobs. The heavy-store job was skipped. Separate evidence steps ran `CGO_ENABLED=0 go test -count=2 -json -timeout 8m -run '^Test(MCPPipe(Native|Unix)|MCPHarnessHeldOwnerAndCooperativeStreams|MCPStdioIntegratedDrain)$' ./cmd/whatsapp-mcp` and checked for two passing results and expected exit-status records per named subprocess case.
+
+| Native job | UTC start | Direct exit | Pass / fail / skip events | Package time |
+| --- | --- | ---: | ---: | ---: |
+| [Linux/amd64](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44652785852/job/136011545518) | 2026-11-20 01:23:52 | 0 | 60 / 0 / 0 | 115.472 s |
+| [macOS/arm64](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44652785852/job/136011545330) | 2026-11-20 01:24:00 | 0 | 60 / 0 / 0 | 117.591 s |
+
+Each runner executed 34 subprocess cases (17 named cases twice), plus the cooperative and integrated drain regressions. On both platforms the shared 13 cases matched the expected exit codes in the Windows table. Unix-only cases exited 1 for closed stderr before startup, 0 for ordinary-only closed stderr, 1 for the device fault during EOF-driven drain, and 1 through the forced callback after actual cleanup and a second signal. A SIGPIPE termination would not satisfy the expected exit or the child cleanup observations. Only Linux/amd64 and macOS/arm64 were exercised natively; other Unix architectures have no runtime evidence from this run. No real account was used.
+
+### Phase 4 Contact Tools and Five-Tool Discovery (2026-11-19)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, synthetic temporary stores and a disconnected fake owner. The guarded in-memory SDK fixture has 238 chats (235 phone chats, two LID chats, one group), 237 contact entries (235 phone entries, a mapped alias and an unmapped LID), and 475 messages. Contact search returns all 235 matches in stable pages of 50+50+50+50+35+0, matching full, first, push and business fields, plus literal stored digit substrings. A formatted identity resolves locally; the same formatting is not stripped in a text search.
+
+Five equivalent contact inputs, including phone and LID device suffixes, produce identical plural results. The store tests also prove that a mapped LID-only chat is returned for equivalent inputs, that the phone row wins when both rows exist, and that plural results keep both rows and include non-group sender participation. Repeated participation does not duplicate a chat. Tied timestamps select the actual latest by descending message ID even if another person sent it. The first-step plan and source guard assertions pass; a fallback identity used as a display name is charged to the existing 4 MiB chosen-name budget, with no folding at one byte over.
+
+Both transports discover exactly five read-only tools. Stdio rejects the two deferred tools and `subscriptions/listen`, returns only protocol frames at all four log levels, and exits 0 on EOF. The fixture still contains the same message after the command releases the lock. In-memory deferred calls make zero reader calls; valid tool calls use the narrow read-only interface with no owner API. The disconnected command made no pairing request despite synthetic approval text. Success and structured errors were checked against their output schemas and decoded once from text to compare with structured content. No real account, dependency change, commit or push.
+
+| Command | Direct result |
+| --- | --- |
+| `go test ./internal/store -run '^TestMCPContactQueries' -count=1 -v -timeout 2m` (red) | Exit 1: search and membership failed for the intended behavior; source-name limit case passed. No skips. |
+| `go test ./internal/mcp -run '^TestContactTools' -count=1 -timeout 2m` (red) | Exit 1: all four parents failed because the three tools were missing. No skips. |
+| `go test ./internal/mcp -run '^Test(Contact\|Chat)Tools' -count=1 -timeout 2m` | Exit 0 after registration; counts are included in the combined run below. |
+| `go test ./internal/mcp ./cmd/whatsapp-mcp -run '^(TestFiveToolDiscovery\|TestMCPStdioOfflineRead)$' -count=10 -timeout 3m` | Exit 0 after correcting the expected subscription refusal text; 20 parent and 40 log-level subtest executions, no skips. |
+| `go test ./internal/store ./internal/mcp ./cmd/whatsapp-mcp -run '^(TestMCP(Contact\|Chat)Queries\|TestTool.*(Plan\|Equivalence\|FiveReads\|ContactCeilings\|SourceCeiling\|LegacyValues)\|TestSearchContacts\|TestContactNames\|TestDirectChat\|TestContactChats\|TestQueryPlans\|Test(Contact\|Chat)Tools\|TestFiveToolDiscovery\|TestMCPStdio\|TestServer)' -cover -count=1 -json -timeout 5m` | Exit 0: 88 store, 85 MCP and 27 command test/subtest passes, one helper-only store skip. Focused parent-run statement coverage: store 36.3%, MCP 66.3%, command 36.7%. The initial run exposed a fixture that counted the display fallback as zero bytes; the corrected test verifies the boundary without raising it. |
+| `go test ./... -count=1 -json -timeout 30m` (final) | Exit 0: 10 packages, 1,882 test/subtest passes, 30 skips, zero failures. Store 281.630 s, MCP 103.601 s, command 140.384 s. The first run failed on two older schema fixtures that omitted mandatory latest detail from the direct-contact result; those fixtures now use `latest_message: null` when there is no message. |
+| `gofmt -l .`; `go vet ./...`; `git diff --check`; `go build -o D:\tmp\kilo\phase4-<GOOS>-<GOARCH> ./cmd/whatsapp-mcp` | Exit 0; formatting and whitespace clean, and all five CGO-free builds passed: windows/amd64, linux/amd64, linux/arm64, darwin/amd64, darwin/arm64. |
+
+**Not verified in Phase 4:** sustained-ingest and inherited-pipe acceptance, native Linux/macOS runtime behavior for this phase, and the feature delivery/code-review gates. Configurable read access and both login tools remain deferred. Both Git implementation hooks are optional and were not run.
+
+### Phase 3 Chat Tools and Stdio (2026-11-19)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`. Only synthetic temporary data, cooperative streams, fake owners and the existing simulator were used. `list_chats` and `get_chat` are the only registered tools. The 35-chat fixture returns 30+5 and the unchanged 235-chat fixture is traversed at omitted/default limit 30 and explicit 1 and 200. The store tests assert literal NFC/case folding, stable ties, composite latest identity and no latest statement for metadata-only reads. The offline command test returns fake approval text with `untrusted_data: true`, observes no pairing request or connectivity requirement, and reopens the store to verify the fixture is unchanged. The tools hold only a local reader, with no send, pairing or recovery API.
+
+| Command | Direct result |
+| --- | --- |
+| `go test ./internal/store -run '^TestMCPChatQueries' -count=1 -v -timeout 5m` (red) | Exit 1: mixed-case Unicode stored JID failed to match two queries; three other parents and five literal-search subtests passed, no skips. |
+| `go test ./internal/mcp -run '^TestChatTools' -count=1 -v -timeout 5m` (red) | Exit 1: five parent tests failed because the tools were absent; 3 paging and 20 argument subtests failed, no skips. The earlier harness-only compilation attempt was not runtime evidence. |
+| `go test ./cmd/whatsapp-mcp -run '^TestMCPStdio(OfflineRead\|DeviceFault)$' -count=1 -v -timeout 60s` (red) | Exit 1: two parents and seven subtests failed, the serve control passed, no skips. No MCP initialization; a preexisting device fault did not stop stdio, and a fault during owner drain exited 0. |
+| `go test ./internal/store -run '^(TestMCPChatQueries\|TestTool.*(Plan\|Equivalence\|FiveReads))' -count=1 -v -timeout 5m` | Exit 0: 11 parents and 14 subtests, no skips. First-step plan and equivalence assertions stayed green after folding stored JIDs. |
+| `go test -cover ./internal/mcp -run '^TestChatTools' -count=10 -timeout 3m` | Exit 0: 50 parent and 230 subtest executions; 43.0% package statement coverage from the focused chat tests. An earlier full run exposed a test-only race between the in-memory peer receiving the response and the guard retiring its credit; the final harness observes retirement before issuing the next sequential call. No admission policy was relaxed. |
+| `go test ./cmd/whatsapp-mcp -run '^TestMCPStdioIntegratedDrain$' -count=3 -v -timeout 60s` | Exit 0: three parents and 27 subtests, no skips. See drain assertions below. |
+| `go test ./internal/mcp ./internal/store ./cmd/whatsapp-mcp ./internal/wa -run '^(TestChatTools\|TestMCPChatQueries\|TestTool.*(Plan\|Equivalence\|FiveReads)\|TestMCPStdio\|TestMCPStoreFailureShutdown\|TestStdioDiagnostic\|TestProcessStdoutStaysEmpty\|TestShellIngest\|TestStopSteps\|TestStoreNotQuiescent\|TestRetirementOrder\|TestQuietStopPasses\|TestSimulatorStopDuringQueuedAppStateFetches\|TestOwnerTerminal)' -count=1 -json -timeout 6m` | Exit 0: MCP 5 parents/23 subtests, store 11/14, command 20/35, owner 7/0; zero skips and failures. |
+| `go test ./... -count=1 -json -timeout 30m` (final source) | Exit 0: 10 packages, 1,840 parent/subtest passes, 30 skips (platform, helper-only or opt-in), zero failures. Store: 652 passes, 11 skips, 295.879 s. Command: 267 passes, 1 skip, 147.980 s. MCP: 312 passes, no skips, 101.349 s. |
+| `gofmt -l .`; `go vet ./...`; `git diff --check`; `go build -o D:\tmp\kilo\phase3-<GOOS>-<GOARCH> ./cmd/whatsapp-mcp` | Formatting, vet, whitespace and all five builds passed: windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64. Cross-builds are not native runtime results. |
+
+The prelatched store and diagnostic startup refusals never start a session. In the other latch schedules a real guarded SDK handler enters a held fake read and observes cancellation before returning. The store and lock remain owned until handler return and the subsequent fake-owner join. Runtime, EOF-race and owner-drain failures exit 1; clean EOF and the orderly test control exit 0. The second-signal callback is checked separately with an injected exit function; it is not a native process exit. Both startup refusal and shutdown leave the run marker to the existing owner rules. The injected held read/latch proves command ordering, not SQLite cancellation; the store's real-lease regressions ran separately in the full suite. `serve` still ignores a device-only fault as a terminal command signal and retains its ingest-failure exit behavior.
+
+**Not verified in Phase 3:** the full native inherited-pipe matrix (T036-T038), sustained ingest under MCP pressure and matched WAL/`-shm` evidence (T035), and five-tool discovery and feature delivery gates. Neither optional Git implementation hook ran. No real-account use, commit or push.
+
+### Phase 2 Acceptance CI (2026-11-19)
+
+[Push CI at `1548d2c7880647b4c629f4967caae02a0e7293cf`](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44598888828) passed with `CGO_ENABLED=0`. `go test -timeout 30m ./...` exited 0 on all three runners. The static and cross-build checks also passed. The opt-in heavy store job was skipped by design on push.
+
+| Runner | Full suite (`internal/store` elapsed) | Focused native diagnostic step |
+| --- | --- | --- |
+| [Linux/amd64](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44598888828/job/135824598500) | Exit 0 (140.295 s) | Started 19:32:40 UTC; exit 0, 7 passes, 0 failures, 0 skips |
+| [Darwin/arm64](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44598888828/job/135824597789) | Exit 0 (149.179 s) | Started 19:33:36 UTC; exit 0, 7 passes, 0 failures, 0 skips |
+| [Windows](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44598888828/job/135824598639) | Exit 0 (160.075 s) | Not applicable to the Unix subprocess subset |
+
+The focused command was `go test -count=1 -json -timeout 3m -run '^TestMCPDiagnosticShutdownNative$' ./cmd/whatsapp-mcp`. Each Unix runner passed the parent and all six named cases: `blocked_startup`, `blocked_operation`, `blocked_drain`, `closed_stderr`, `first_signal`, and `forced_second_signal`. Every child reported `child_exit=1 expected_exit=1 signal=none`; only `forced_second_signal` reported `forced_callback=true`.
+
+Together with the prior red/green, WAL fence, and T043/T044 evidence below, this closes the Phase 2 store and diagnostic gates (T004/T005, T045/T046, and T015/T016). The earlier macOS saved-session shutdown delay did not recur in this run; its cause was not established. The result does not cover the integrated MCP shutdown or sustained-ingest delivery gates, and Phase 3 has not started.
+
+### Phase 2 Native CI and Triage (2026-11-19)
+
+[Push CI at `3b70355`](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44594097004), `CGO_ENABLED=0`: the static checks and Ubuntu job passed. `go test -timeout 30m ./...` reported `internal/store` passing on all three platforms. The full macOS and Windows jobs failed; this is not a green acceptance run.
+
+| Native runner | Focused `TestMCPDiagnosticShutdownNative` result | Full suite result |
+| --- | --- | --- |
+| Linux/amd64 (Ubuntu) | Go test exit 0; 7 pass (parent plus six cases), 0 fail, 0 skip | Exit 0 |
+| Darwin/arm64 (macOS) | Go test exit 0; 7 pass (parent plus six cases), 0 fail, 0 skip | Exit 1: `TestStdioDiagnosticExpiryStopsRunningCommand`, `TestShellSavedSessionAttemptTimeoutAndCancellation/serve`, and `TestIngestLIDRelookupOfAFlushHasOneDeadline` |
+| Windows | Not run; Unix subprocess subset | Exit 1: `TestGuardSDKResponseConstructionFailure` |
+
+On both Unix runners the focused command was `go test -count=1 -json -timeout 3m -run '^TestMCPDiagnosticShutdownNative$' ./cmd/whatsapp-mcp`. The named cases (`blocked_startup`, `blocked_operation`, `blocked_drain`, `closed_stderr`, `first_signal`, `forced_second_signal`) each recorded child exit 1 with no signal termination; only `forced_second_signal` observed the forced callback.
+
+The follow-up changes are test-only: settle SDK initialization before measuring the outstanding tool credit, isolate the ingest test's simulated slowdown to the flush it checks, and instrument the in-process diagnostic expiry test to distinguish cleanup from finalization without extending its cleanup watchdog. The macOS saved-session failure logged a successful quiet-stop check followed by the test lifecycle's five-second owner timeout. The cause of the remaining owner delay is unverified; no timeout or production shutdown behavior was changed.
+
+Local Windows/amd64, `CGO_ENABLED=0`: `go test ./... -count=1 -timeout 30m` exited 0 (10 packages); `go vet ./...` exited 0. Focused repeated runs exited 0: SDK response-construction failure (200 runs), guarded MCP tests and diagnostic/store-failure shutdown tests (three runs each), ingest flush deadline (20 runs), and saved-session timeout/cancellation (two runs, both `serve` and `stdio`). These results do not verify the test changes on macOS. Phase 2 remains open.
+
+### Phase 2 Acceptance Follow-up (2026-11-19)
+
+All runs used `CGO_ENABLED=0` and synthetic data. Real SQLite tests cover rollback with a paused failed WAL stat, a queued writer at handoff, device lookups through the writer pool before and after expiry, an independent reader, an aged device lease with two autocommit writes, and a discarded writer connection. The stat hook simulates the crossing in the small scheduling fixtures; the existing ingest and device tests exercise an actual 128 MiB crossing. Capacity is tested with a deterministic gate schedule. Prepared `RETURNING` rows retain writer ownership until close and preserve metadata; cancellation and optional driver interfaces are checked separately.
+
+| Environment and command | Direct result |
+| --- | --- |
+| Windows/amd64, `go test ./internal/store -run '^(TestWriter\|TestToolWAL)' -count=1 -v -timeout 90s` | Exit 0 (19.807 s); 11 parent tests and 4 subtests, no skips. |
+| Windows/amd64, `go test ./cmd/whatsapp-mcp ./internal/mcp -run 'TestStdioDiagnostic\|TestDiagnostics\|TestMCPStoreFailureShutdown' -count=1 -timeout 90s` | Both packages exit 0 (11.187 s, 5.952 s). Includes T043/T044, ordinary-only sink failure/drop, mandatory overflow retaining the unsafe marker, expiry while running, and bounded private-directory fallback. |
+| Windows/amd64, `go test ./... -count=1 -parallel 1 -timeout 30m` | First run failed in `TestGuardOfficialInMemory`: an in-memory response may reach the client before the writer retires the credit. Synchronized the test without changing the guard. The final full run exited 0, 10 packages (store 301.730 s, command 140.089 s, MCP 90.733 s). `go test ./internal/mcp -run '^TestGuardOfficialInMemory$' -count=100 -timeout 35s` also exited 0. |
+| WSL2, `go test -p 1 -buildvcs=false ./cmd/whatsapp-mcp -run '^TestMCPDiagnosticShutdownNative$' -count=1 -v -timeout 3m` | Exit 0 (33.329 s), all six named cases passed, zero skips. Each child exited 1 without signal termination; only the forced-second-signal case observed the forced callback. Smoke test, not native Linux evidence. |
+| Windows/amd64, `go vet ./...`, `gofmt -l .`, `git diff --check HEAD` | Exit 0; no formatting or whitespace diagnostics. |
+
+Native Linux and macOS store and diagnostic evidence remains pending. No commits, push, real-account activity, or Phase 3 changes were made in this follow-up.
+
+### Phase 2 WAL Fence and Diagnostic Wiring (2026-11-19)
+
+Synthetic temporary stores and fake owners only. The writer connector measures and publishes the WAL fence before the next writer reaches SQLite. Tests exercise actual reader transaction retention across cancellation, ingest and adapter transactions, expiry with retained accounting, interface parity, and a fresh tool-only free-space sample. The diagnostic slice retains stdin-discard and the store-control observer; no MCP transport or tools were registered.
+
+| Environment and command | Direct result |
+| --- | --- |
+| Windows, `go test ./internal/store -run '^(TestToolAdmissionUsesFreshDiskSample\|TestToolWALActualWritesCancelSnapshot)$' -count=1 -timeout 90s` before T005 | Exit 1, two expected failures: stale free-space acceptance and a second SQLite write before snapshot release. |
+| Windows, `go test ./internal/store -count=1 -parallel 1 -timeout 15m` | Exit 0 (390.783 s) after restoring admitted-writer shutdown grace. A subsequent focused run covered the final checkpoint validation and extra adapter tests; the full run predates those edits. |
+| Windows, `go test ./internal/store -run 'TestTool(WAL\|Admission\|ConcurrentIngest)\|TestWriterDriverInterfaceParity' -count=1 -v -timeout 70s` | Exit 0 (25.921 s), 10 parent tests and 4 subtests, no skips. Real held snapshots for ingest and multi-statement adapter transactions; stable-generation admission, fresh disk sampling, fail-fast latch, WAL recovery and parity. |
+| Windows, `go test ./cmd/whatsapp-mcp -run '^TestStdioDiagnostic' -count=1 -timeout 60s` before wiring | Exit 1, two expected refusal failures: rejected value appeared in stderr and owner startup bypassed the typed reporter. |
+| Windows, `go test ./cmd/whatsapp-mcp -count=1 -timeout 6m` | Exit 0 (134.378 s) after migrating stderr-based assertions. A later focused run verified the additional finalization and failed-delivery race tests. |
+| Windows, `go test ./cmd/whatsapp-mcp ./internal/mcp -run 'TestStdioDiagnostic\|TestDiagnostics\|TestMCPStoreFailureShutdown\|TestCommandCompletionFirstSignalDrainsRealStore' -count=1 -timeout 65s` | Both packages exit 0 on final local source (7.878 s, 6.033 s). Includes all seven T043/T044 subtests, actual store drain on first signal, redacted refusals, configured log levels, prelatched failure, operation/EOF-drain cases, and a healthy acknowledgment after cleanup. |
+| WSL2, `go test -p 1 -buildvcs=false ./cmd/whatsapp-mcp -run '^TestMCPDiagnosticShutdownNative$' -count=1 -v -timeout 3m` | Exit 0 (28.742 s), all six cases passed with no skips; each child exited 1 without signal termination. Only the forced-second-signal case observed the forced callback. Smoke evidence only, not native Linux. |
+| Windows host, `GOOS=darwin GOARCH=arm64 go vet ./cmd/whatsapp-mcp`; local `go vet ./...` | Both exit 0; neither establishes native runtime behavior. All runs used `CGO_ENABLED=0`. |
+
+**At the end of this slice:** The remaining T004 transaction/lease and fault schedules and native store evidence were open. The follow-up above records the additional local tests. The focused CI step still must produce passing named subprocess evidence, counts/skips and child outcomes on native Linux and macOS. Phase 3 and T035 matched-frame, WAL-stat and `-shm` measurements have not started.
+
+### Guarded MCP Foundation (2026-11-19)
+
+Native Windows/amd64, `CGO_ENABLED=0`, pinned SDK v1.8.0, synthetic inputs only. The guarded server now stops the connection when the SDK error latch or diagnostic-delivery latch fires. The public session wait joins SDK work before disposing of unwritten request credits, and checks both latches after joining so a disconnect cannot hide failure. This is a package-level result; the command-to-store drain remains T024 work. No production tool or real account was used.
+
+**No-response paths on the pinned SDK:** Only requests with valid, unique synthetic IDs are admitted. The MCP preempter handles cancellation notifications but returns `ErrNotHandled` for calls (`mcp/transport.go:259-272`); there is no asynchronous-response tool registration, and the guard refuses subscriptions before dispatch. For queued cancellation the SDK's `handleAsync` skips the handler and calls `processResult` (`internal/jsonrpc2/conn.go:670-679`). The same result path runs after entered handlers return. It constructs and attempts to write a response independently of the cancelled request context (`conn.go:704-724`). If construction fails, `OnInternalError` reaches the payload-free SDK latch (`mcp/transport.go:233-235`), which stops the guard. The SDK can skip `Write` only when already closing or after a read/write error (`conn.go:151-168,750-764`): the managed session stops the guard before joining, and a guard I/O error stops it before returning. A stopped reader cancels incoming requests (`conn.go:541-559`); SDK `Wait` joins incoming work before guarded credits are discarded. There is no guessed cancellation grace time and no inference that a cancellation request or blocked-pipe timeout is a completed drain. Recheck this argument if the SDK pin or dispatch surface changes.
+
+| Command | Direct result |
+| --- | --- |
+| `go test -p 1 ./internal/mcp -run '^TestServerSDKMarshalFailureLatches$' -count=1 -v -timeout 20s` | Exit 1 before session latch wiring: one expected failure, no skips. The preceding terminal attempt returned no test exit. |
+| `go test -p 1 ./internal/mcp -run '^TestServer' -count=1 -v -timeout 35s` | Exit 0 after latch wiring: eight tests and nine subtests, no skips. |
+| `go test -p 1 ./internal/mcp -run '^(TestGuardAdmissionAndRetirement\|TestGuardFourOutstanding\|TestServerSDKFailureWaitsForHeldHandler)$' -count=1 -v -timeout 20s` | Exit 1 before the tool-overload fix: one expected failure, two passes, no skips. |
+| `go test -p 1 ./internal/mcp -run '^(TestGuardCancellationBeforeSDKHandlerRetiresCredit\|TestGuardAdmissionAndRetirement\|TestGuardFourOutstanding)$' -count=1 -v -timeout 20s` | Exit 0: three tests, no skips. The queued cancellation does not enter the handler, writes a correlated error, and permits reuse of the external ID. |
+| `go test -p 1 ./internal/mcp -run '^TestServerSDKExplicitSchemasAndDispatch$' -count=1 -v -timeout 15s` | Exit 1 before middleware auditing: five subtests passed, but the parent found no mandatory audit for structured argument errors. |
+| `go test -p 1 ./internal/mcp -run '^TestGuardRejectsNotificationMethodsWithRequestIDs$' -count=1 -v -timeout 15s` | Exit 1 before the fix: one expected failure, no skips. Notification methods sent as calls were reaching SDK dispatch. |
+| `go test -p 1 ./internal/mcp -count=1 -json -timeout 5m` | Exit 0 on final source: 128 parent tests, 152 subtests, zero skips, 88.827 s; prior checkpoints also passed (127 parents, 152 subtests, zero skips). Includes actual Windows pipe tests, structured busy replies, read-only discovery annotations, latch-to-session shutdown and a held handler that keeps its credit until actual SDK join. |
+| `go test -p 1 ./internal/wa -run '^TestMCPActual(HistoryIncompleteAtLogLevels\|ReceiveOverloadAtLogLevels\|MessageDebugRedaction)$' -count=1 -v -timeout 6m` | Exit 0: three tests and eight subtests, no skips; 2.533 s. Exercises real producer paths using synthetic data and the simulator, not a real account. |
+| `gofmt -l .`; `go vet ./...`; `git diff --check`; `go build -o D:\tmp\kilo\mcp-foundation-<GOOS>-<GOARCH> ./cmd/whatsapp-mcp` | Formatting, vet and whitespace checks passed. Each build exited 0: windows/amd64, linux/amd64, linux/arm64, darwin/amd64, darwin/arm64. Cross-builds are not native runtime evidence. |
+
+T011/T012/T014 and T017/T018 are complete at the foundation boundary. T015/T016 remain open. Read-only source inspection confirmed the prior dependency cycle: `cmd/whatsapp-mcp/commands.go` still calls `runShell` with stdin-discard and no reporter/SIGPIPE setup; the existing T044 observer watches the store latch, not diagnostic delivery. `internal/mcp/server.go` stops its guarded session on diagnostic failure, and `TestDiagnosticsStderrSubprocess` exercises the reporter in a helper process, not `runStdio`. Neither proves how the command exits after cleanup. Under the old plan this required T024 wiring, which itself waited for T015/T016 to close. The repository-wide delivery suite and coverage gates were not run in this slice.
+
+| Gate | Evidence still required |
+| --- | --- |
+| Foundation: T045/T046, then T015/T016 closure | Intended local red command cases, then passing stdio diagnostic-only cases: startup/refusal and ordinary log-level change on one reporter, timely acknowledgment with clean exit, failure already latched or raised during operation/drain, EOF and signal races, normal exit 1 after actual ordered owner/store cleanup and lock release, and no wait for diagnostic I/O in cancellation or cleanup or change to marker ownership. Rerun focused producer/reporter and lifecycle regressions. Record both focused T046 CI run links and tested commit, date, native OS/architecture, required named cases, counts/skips and test/child exit outcomes for blocked/closed stderr, SIGPIPE and first/forced-second signals. Zero matches and required-case skips fail the gate. Not verified. |
+| Phase 3: T024/T026 | Install actual MCP transport and revalidate both latches with actual handler/SDK join, correct owner/store/lock order, and exit 1 despite EOF. Existing package-level guarded-session evidence and pre-MCP command evidence cannot prove this. Not verified. |
+| Delivery: T034-T039/T041 | Retained bounds, sustained ingest and store CI evidence; full integrated native Windows/Linux/macOS subprocess matrix including stdin/stdout, stderr and signal cases; wider command regression and delivery gates. Not verified. |
+
+Record each native run's command, date, OS/architecture, counts/skips and direct exit statuses, including expected child exit 1. Do not infer native Linux/macOS evidence from Windows, WSL2 or cross-builds. No new runtime tests were run for the sequencing revision.
+
+### T010 Result-Encoding Bounds (2026-11-19)
+
+Native Windows/amd64, `CGO_ENABLED=0`, SDK v1.8.0. `go test ./internal/mcp -run '^TestResultNearLimitPassesFramePreflight$' -count=1` exited 1 before the fix: a valid 5,900,806-byte SDK frame was rejected because the framer charged already-encoded raw JSON twice. `go test -p 1 ./internal/mcp -count=1 -json -timeout 5m` on the final patch exited 0 in 87.645 s: 125 parent tests, 152 subtests, zero skips. This includes T009, the near-limit write with newline, and raw-frame preflight boundaries for HTML and Unicode line separators. The intermediate package run exited 1 on the former factor-two test boundary (123 parent and 152 subtest passes, zero skips); the updated boundary keeps the 8 MiB cap and envelope reserve. `go vet ./...`, `gofmt -l .`, `git diff --check` and LF checks passed. `go build -o D:\tmp\kilo\t010-<GOOS>-<GOARCH> ./cmd/whatsapp-mcp` exited 0 for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64 (the first loop timed out before the last result, which was rerun separately). Cross-builds are not native runtime coverage.
+
+**Allocation-bound audit:** The DTO preflight charges fields, rows, escaping and fixed keys before marshaling, then checks the actual structured length. The ASCII renderer checks exact size before allocating one string backing buffer. Accepted input caps both representations at 2 MiB each. `TextContent.MarshalJSON` escapes quotes/backslashes at most twice in the ASCII text (HTML and controls were already escaped), so its encoded payload is at most 4 MiB plus fixed keys. `CallToolResult.MarshalJSON` embeds structured content as raw JSON; its inner buffer and the outer `NewResponse`/`marshalToRaw` copies each encode at most 6 MiB plus fixed fields. `EncodeMessage` embeds the raw result again, not as a quoted string; the framer reserves raw bytes, remaining escape expansion, ID and envelope before encoding, then checks actual bytes including the newline before write. This route requires the untyped SDK `Server.AddTool` handler with a pre-encoded DTO result and no added result metadata; the typed wrapper's additional marshal and schema round trip are not covered. The one-tool credit and writer serialize in-flight outputs; later integration must preserve those assumptions.
+
+The near-limit benchmark sample had structured/text lengths of 2,080,768 bytes each, SDK result length 4,162,078 bytes and frame length 4,162,124 bytes including newline. Its measured encoding chain used 30,568,820 bytes/op and 39 allocations/op; rejected preflight used 392 bytes/op and six allocations/op. These are sample allocation totals, not peak live heap. The source audit bounds result-dependent encoded copies; buffer capacity rounding, `encoding/json` pool retention and feature-wide peak heap with other live work are not measured bounds here. T034 covers retained-state delivery evidence; the store-to-DTO story mapping is outside T010.
+
+### T004/T005 Completion (2026-11-19)
+
+Native Windows/amd64, SQLite v1.62.0, `CGO_ENABLED=0`. The complete `go test -p 1 ./internal/store -parallel 1 -count=1 -json -timeout 30m` run exited 0 in 735.829 s: 322 parent tests, 305 subtests, 11 skips (child-only entries, opt-in test, or unavailable Windows symlink privilege), zero failures. Query plans, scale, mapped identity ceilings, device priority and WAL readmission passed. Both per-contact memory children passed with unchanged limits: `LastInteraction` used 93,592 bytes in 2.0008 ms (even) and 942.6 us (phone). `-parallel 1` serialized parallel test fixtures only; the concurrency schedules within the tests still ran.
+
+`go test -p 1 ./internal/store -run '^TestPerContactMemory$/^even$' -count=1 -v -timeout 8m` also passed (one parent, one subtest, one child execution, zero skips; 144.636 s). `go test -p 1 ./internal/store -run '^TestToolGatePrioritizesWaitingDevice$' -count=10 -v -timeout 2m` passed ten times, zero skips, in 3.315 s. Earlier drafts of the new schedule failed because the fixture used an unguarded seed device; they are not evidence of a production admission failure. The passing schedule uses a guarded device write and parks it after waiter registration, outside the gate mutex. It asserts cancellation of the active tool, refusal with one free slot and a waiting device, no added tool waiters, and readmission after the device completes. T043/T044 separately supply the command failure and drain evidence. This is not a feature-wide or native Linux/macOS acceptance result.
+
+### T004/T005 Mapped Identities and Regression Runs (2026-11-19)
+
+Native Windows/amd64, SQLite v1.62.0, `CGO_ENABLED=0`, synthetic data only. The new mapping test uses both alias directions. The phone-mapping case also asserts zero contact folds. The guard counts the domain suffix in the JID ceiling and does not slice a rejected source contact identity. Fixture batching preserves the plan data and assertions. The pressure test's retry window covers the existing checkpoint cooldown and asserts successful admission and WAL recovery, not a new production deadline.
+
+| Command | Direct result |
+| --- | --- |
+| `go test -p 1 ./internal/store -run '^TestToolMappedIdentitySourceCeiling$' -count=1 -v -timeout 1m` | Exit 1 before the fix: both subtests failed, no skips. Search accepted the oversized mapped phone and folded six values. |
+| `go test -p 1 ./internal/store -run '^(TestToolMappedIdentitySourceCeiling|TestToolContactAggregatePlan|TestToolDirectChatPointPlans|TestToolFiveReadsExpectedResults|TestToolContactCeilingsZeroFolds)$' -count=1 -v -timeout 2m` | Exit 0 after the source guards: five tests and six subtests passed, no skips; 6.244 s. |
+| `go test -p 1 ./internal/store -run '^(TestTool|TestSearchContacts|TestDirectChat|TestContactChats)' -count=1 -json -timeout 5m` | Exit 1 while the initial full rerun was also running: 50 parent and 77 child passes, one helper skip. The at-ceiling contact case hit a deadline and the maximum-batch case timed out waiting for WAL recovery before the retry fix. |
+| `go test -p 1 ./internal/store -run '^TestTool' -count=1 -timeout 5m` | Exit 0 on the final patch, 34.866 s. Nonverbose output did not report counts. |
+| `go test -p 1 ./internal/store -count=1 -json -timeout 30m` (three runs) | All exited 1. The earlier T043/T044 checkpoint run finished with 319 parent and 279 child passes, 11 skips, and one `TestQueryPlans` fixture-seeding failure (809.953 s). After fixture batching: 320 parent and 305 child passes, 11 skips, one `TestQueryScale` full-size text-search deadline (859.491 s). On the final patch: 320 parent and 304 child passes, 11 skips and two failure events for `TestPerContactMemory/even` and its parent (578.602 s); `TestQueryPlans`, `TestQueryScale`, the mapped identity cases and WAL readmission all passed. The captured final output did not retain the memory child's detailed assertion. |
+| `go vet ./...`; `git diff --check`; `git ls-files --eol` on changed tracked files | All exit 0; no vet findings, whitespace errors or CRLF in the changed tracked files. |
+
+These earlier failures precede the passing serialized Windows run above. No production timing or resource limit was relaxed.
+
+### T043/T044 Stdio Store Failure (2026-11-19)
+
+Native Windows/amd64, `CGO_ENABLED=0`, SQLite v1.62.0; temporary stores and fake owners only for the new tests. `go test -p 1 ./cmd/whatsapp-mcp -run '^TestMCPStoreFailureShutdown$' -count=1 -v -timeout 90s` exited 1 before the observer: six subtests failed and the serve control passed, with zero skips. An earlier tool invocation timed out before yielding a test result.
+
+After the observer, `go test -p 1 ./cmd/whatsapp-mcp -run '^(TestMCPStoreFailureShutdown|TestMCPHarnessHeldOwnerAndCooperativeStreams|TestShellIngestFailureStopsTheCommand|TestShellLifecycleStopWithoutTerminalSignalIsUnchanged|TestShellIngestFailureAfterPairLink|TestStopStepsInReverseOrder|TestStoreNotQuiescentWaitsBeforeLock|TestStoreCloseErrorAfterDrainReleasesLock)$' -count=3 -v -timeout 2m` exited 0 (24 parent and 27 child executions, zero skips; 30.702 s). This pairs injected command-latch and real lock/owner ordering tests with store-side `TestToolFacadeControlFailureRetainsLease` and `TestToolFacadeRetainsLeaseDuringConnectionCleanup` from the focused v1.62.0 store run below. An injected latch does not prove SQLite cancellation. The command observer joins before return and checks the latch after cleanup, without installing MCP or the diagnostic reporter.
+
+`go test -p 1 ./internal/wa -run '^(TestQuietOrder|TestOwnerTerminal)' -count=1 -v -timeout 4m` exited 0 (two owner terminal tests, zero skips; 0.668 s). `go test -p 1 ./internal/wa -run '^(TestRetirementOrderOfAConnectedRun|TestRetirementOrderCheckerRejectsEveryViolation|TestRetirementOrderCheckerRejectsIngestStepsOutOfPlace)$' -count=1 -v -timeout 2m` exited 0 (three tests, zero skips; 0.842 s). `go vet ./cmd/whatsapp-mcp` passed.
+
+The broader `go test -p 1 ./cmd/whatsapp-mcp -run 'TestMCPStoreFailureShutdown|TestMCPHarness|TestShell|TestStopSteps|Test.*Lifecycle|Test.*Lock' -count=3 -v -timeout 5m` exited 1: one saved-session `serve` case reported `work_running` on quiet stop (later repetitions of that case passed), then the overall five-minute timeout fired during another `serve` case. The new observer cases passed on all three repetitions. This broader run is not a passing package regression.
+
+### Post-rebase SQLite Check (2026-11-19)
+
+On rebased tip `ca86799` with the existing uncommitted store edits, native Windows/amd64 and `CGO_ENABLED=0`, `go test -p 1 ./internal/store -run '^TestTool' -count=1 -json -timeout 5m` ran against `modernc.org/sqlite v1.62.0` and exited 0 in 35.623 s: 44 parent tests and 74 subtests passed, with zero skips or failures. The finite ingest fixture completed 120 light writes and twelve 64-message maximum-byte batches without ingest errors. The maximum-byte run observed 16,332 successful reads, 41,374 busy refusals, zero cancelled reads and a sampled post-write WAL peak of 67,984,152 bytes.
+
+On the same platform, `CGO_ENABLED=0 go run D:/tmp/kilo/u1-spike/cancel-wal.go` exited 0 (one synthetic scenario, zero skips). While a cancelled later `Next` was held in a scalar callback, the writer completed 1,000 inserts; the passive checkpoint reported 336 log frames and zero checkpointed frames. After releasing the callback, closing rows and ending the transaction, the truncate checkpoint reported zero WAL bytes. In v1.62.0, `stmt.go` and `sqlite.go` still scope the query's interrupt/progress handler to the initial query call; `rows.go` adds context-aware lock waits on later steps, not a general later-step interruption mechanism.
+
+These reruns supported the first-step design but did not repeat the full T001 spike, which used v1.61.0. See the completion and shutdown entries above for later Windows evidence and the review table for the renewed design verdict.
+
+### T004/T005 Store Follow-up (2026-11-18/19)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`; synthetic temporary stores only. Dates below are local (UTC+02:00). Existing uncommitted changes in `bench_test.go`, `tool_reader_test.go`, `tasks.md` and this file were preserved. No implementation commit, account action or optional heavy/soak/measurement run was performed.
+
+The additional tests exposed missing source-byte checks for latest-message IDs/sender identities, listed chat identities and device-contact identities. SQL now uses `octet_length` before selecting those values or folding contact fields. An oversized identity gives `ErrResourceLimit`, never a partial successful result; metadata-only `GetChat` still avoids latest-message work. The contact precheck retains the same entry/name budgets and runs in the same first-step statement. Contact aggregate equivalence now also covers REAL and NULL legacy names, alongside controls/NUL, integers, BLOBs and invalid UTF-8 bytes. The contact-chat aggregate checks identity length before hex encoding as well.
+
+`TestToolFirstStepCancellationDuringContactFolding` cancels the caller inside a real SQLite folding callback, compares observed folding with an independently measured complete-read count, checks zero retained gate/reader resources, then performs a successful fresh read. The initial 1,000-fold cutoff was invalid because one contact can cause multiple folds; it failed under full-suite load with 1,579 folds. The corrected test uses 10,000 synthetic entries and the measured complete workload rather than an arbitrary callback count or duration. Twenty repeated runs and the complete tool-test group passed after the correction; no full-suite pass after that correction is claimed.
+
+`TestToolConcurrentIngestAndReadmission` now has light and maximum-byte subtests. Each maximum batch contains 64 messages and charges exactly 16 MiB through `MessageFieldBytes`, including identity bytes, by shortening the last message's text within its existing field ceiling. Twelve such batches (768 messages) are written while back-to-back facade reads run. The test checks ingest errors, sampled post-write WAL against 128 MiB plus one observed batch, successful post-ingest readmission and recovery to at most 64 MiB. It is finite pressure evidence with fast metadata reads, not a sustained worst-case grouping/heap/temp test or a proof that every guard threshold was reached. The separately existing held-snapshot test covers actual threshold cancellation and recovery.
+
+| Date | Command | Direct result |
+| --- | --- | --- |
+| 2026-11-18 | `go test -p 1 ./internal/store -run '^(TestToolLatestIdentitySourceCeilings|TestToolListChatIdentitySourceCeiling)$' -count=1 -v -timeout 2m` | Exit 1 before guards: two failed parents and three failed identity subtests; over-limit values incorrectly succeeded. |
+| 2026-11-18 | `go test -p 1 ./internal/store -run '^(TestToolLatestIdentitySourceCeilings|TestToolListChatIdentitySourceCeiling|TestToolLatestSender|TestToolGetChatMetadataOnly|TestToolListChatsFirstStepPlans)' -count=1 -v -timeout 2m` | Exit 0 after guards; six parents/five subtests passed, zero skips, 1.506 s. |
+| 2026-11-18 | `go test -p 1 ./internal/store -run '^(TestToolContactIdentitySourceCeiling|TestToolFirstStepCancellationDuringContactFolding|TestToolContactAggregateLegacyValues)$' -count=1 -v -timeout 2m` | Exit 1 before the contact identity guard: one expected failed parent; two parents/six legacy subtests passed, zero skips, 0.584 s. |
+| 2026-11-18 | `go test -p 1 ./internal/store -run '^(TestToolContactIdentitySourceCeiling|TestToolFirstStepCancellationDuringContactFolding|TestToolConcurrentIngestAndReadmission|TestToolContactChatsFirstStepPlan|TestToolContactAggregatePlan)$' -count=1 -v -timeout 5m` | Exit 0; five parents/two subtests passed, zero skips, 15.124 s. Light: 120 writes, 1,668 reads, WAL peak 4,717,432 B. Maximum batches: 12 writes, 16,619 reads, WAL peak 34,228,992 B, max observed growth 33,870,520 B. Zero busy/cancelled reads and zero ingest errors in this run. |
+| 2026-11-19 | `go test -p 1 ./internal/store -count=1 -json -timeout 30m` (first attempt; terminal timeout 600,000 ms) | Interrupted at the terminal limit before final counts/exit were printed; no direct test exit or full-suite acceptance inferred. Both contact-memory children printed PASS in this partial attempt. |
+| 2026-11-19 | `go test -p 1 ./internal/store -count=1 -json -timeout 30m` (retry; terminal timeout 1,900,000 ms) | Direct exit 1, 1,332.900 s; 317 parent and 302 child/seed passes, 11 skip events, four failure events. Failures: `TestPerContactMemory/even` and its parent (89.9519 ms versus existing 50 ms threshold; memory 93,592 B), `TestQueryScale` (full text-search deadline), and the new cancellation assertion described above. The phone memory child passed at 25.064 ms. Seven skipped parents are helper-only or opt-in; four skipped symlink subtests lack Windows privilege. Counts come from JSON events with `$LASTEXITCODE` captured after the test pipeline, not from its last output-filter status. |
+| 2026-11-19 | `go test -p 1 ./internal/store -run '^TestToolFirstStepCancellationDuringContactFolding$' -count=20 -v -timeout 3m` | Exit 0 after the test correction; 20 parent executions passed, zero skips, 11.689 s. |
+| 2026-11-19 | `go test -p 1 ./internal/store -run '^TestTool' -count=1 -json -timeout 5m` | Direct exit 0; 44 parents/74 subtests passed, zero skips/failures, 90.029 s. Light: 120 writes, 2,169 reads, WAL peak 5,018,192 B. Maximum batches: 12 writes, 14,926 reads, WAL peak 34,228,992 B, maximum observed batch growth 33,870,520 B. Zero ingest errors, zero busy/cancelled reads in this run. |
+| 2026-11-19 | `go test -p 1 ./internal/mcp -count=1 -timeout 5m` | Direct exit 0, 89.981 s; nonverbose run does not independently report test/skip counts. Store/SDK compatibility evidence only, not tool/lifecycle feature acceptance. |
+| 2026-11-18/19 | `gofmt -w internal/store/tool_reader_test.go internal/store/queries.go internal/store/contacts.go`; later `gofmt -l .` | Exit 0; final listing printed nothing. |
+| 2026-11-19 | `go vet ./...` | Direct exit 0; no findings. |
+| 2026-11-19 | `go build -o D:\tmp\kilo\t004-t005-<GOOS>-<GOARCH> ./cmd/whatsapp-mcp`, with `GOOS`/`GOARCH` set for each approved target | Direct exit 0 individually for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64. Cross-builds only; no native Linux/macOS runtime coverage inferred. |
+| 2026-11-19 | `git diff --check`; `git ls-files --eol` | Both exit 0; no whitespace errors or tracked `w/crlf`. |
+
+Read-only inspection of the non-`Store.read` pool users found their reader declarations present (`RunGuard`, recovery identity, `LoadDevice`, and recovery methods inside device leases), including nested reader accounting without a second active lease, and post-write WAL checks on the inspected device/run-marker paths. This is static evidence, not the missing per-path stress matrix. The Go ignore rules were checked and `/vendor/` added. Direct inspection of the ignored `.specify/extensions.yml` found only optional before/after implementation commit hooks; neither was executed. The initial glob did not find this ignored file, so pre-hook discovery was late; no mandatory implementation hook was registered or missed.
+
+The focused Windows pass at this checkpoint was not sufficient to close T004/T005. The later completion and T043/T044 shutdown evidence are recorded above; sustained ingest and native Linux/macOS acceptance remain open.
+
+### Resume Check (2026-11-18)
+
+Before the interim checkpoint commit, `CGO_ENABLED=0 go test -p 1 ./... -run '^$' -count=1 -timeout 5m` exited 0 on native Windows/amd64; all 10 packages compiled, with zero tests run. This is compilation evidence only, not feature or phase acceptance.
+
+Native Windows/amd64, `CGO_ENABLED=0`: `go test -p 1 ./internal/store -run '^TestTool' -count=1 -v -timeout 5m` exited 0 with 13 parent tests and two subtests, zero skips, package time 3.520 s. `go test -p 1 ./internal/mcp -count=1 -v -timeout 5m` exited 0 with 74 parent tests, zero skips, package time 46.002 s. The latter includes T009's control, invalid-UTF-8, omission/null, timestamp, overflow, no-truncation and preflight cases. These checks do not establish the missing store-isolation schedules, transport/lifecycle integration, allocation bounds or native platform gates.
+
+`go mod verify` with `CGO_ENABLED=0` exited 0 and reported all modules verified during the phase 2 work. `go version` exited 0 and reported `go1.27.4 windows/amd64` for the active toolchain.
+
+`go test -p 1 ./internal/config ./internal/lock ./internal/walog -count=1 -timeout 5m` with `CGO_ENABLED=0` exited 0 on native Windows/amd64, with package times 2.851 s, 2.194 s and 1.043 s respectively. The non-verbose run did not report test or skip counts; it is not a substitute for the final feature gate.
+
+`go test -p 1 ./internal/config -count=1 -v -timeout 5m` with `CGO_ENABLED=0` exited 0 on native Windows/amd64 in 4.492 s, with three skips: Unix-only file permissions, symlink privilege and Windows FIFO absence. The verbose output includes individual tests and fuzz seeds; its pass count was not independently tallied.
+
+`go test -p 1 ./internal/lock -count=1 -v -timeout 5m` with `CGO_ENABLED=0` exited 0 in 1.426 s: 14 parent tests and two subtests passed; three parent tests and three subtests were skipped for helper-only execution, unavailable symlink privilege, or Unix-only permission checks.
+
+`go test -p 1 ./internal/walog -count=1 -v -timeout 5m` with `CGO_ENABLED=0` exited 0 in 1.107 s: three tests passed, zero skips, including the bridge's argument-drop and template-bounding checks.
+
+`go test -p 1 ./internal/private ./internal/buildinfo -count=1 -v -timeout 5m` with `CGO_ENABLED=0` exited 0 on native Windows/amd64. `internal/private` had 15 passes and four skips because symlink creation requires an unavailable privilege; Windows junction and access checks passed. `internal/buildinfo` had three parent passes and three subtest passes, zero skips. Package times were 1.476 s and 1.384 s respectively.
+
+An earlier phase 2 integration check on the same date/platform, `go test -p 1 ./internal/mcp -count=1 -v -timeout 5m`, exited 1 in 88.528 s with two failing parent tests and zero skips. `TestGuardToolDeadlineCancelsSDKHandler` timed out waiting for cancellation; `TestServerKnownToolFailureAuditIdentity` observed `tool=unknown` for `list_chats`. Other exercised tests passed. Both cases passed in the later focused checkpoint below; the full package has not yet been revalidated after all ongoing changes.
+
+T004 legacy contact aggregate follow-up: `go test -p 1 ./internal/store -run '^TestToolContactAggregateLegacyValues$' -count=1 -v -timeout 5m` exited 1: the control and integer subtests passed, while a legacy BLOB name failed with storage I/O error. After converting the already size-checked selected name to TEXT in the JSON aggregate, `go test -p 1 ./internal/store -run '^TestToolContactAggregateLegacyValues$|^TestToolContactSourceFieldCeiling$|^TestSearchContacts' -count=1 -v -timeout 5m` exited 0 with six parent tests passed, one child-only parent skipped, three subtests passed and the heap-limit subprocess passed, package time 1.777 s. `gofmt -l internal/store/tool_reader_test.go internal/store/contacts.go` exited 0 with no output. Other non-TEXT values and first-step isolation requirements remain to be proven.
+
+An invalid-UTF-8 BLOB follow-up to the same aggregate test exited 1: JSON decoding replaced a legacy byte with U+FFFD. The selected, size-checked name now crosses the JSON aggregate as hex and is decoded back into its original bytes. The identical combined regression command exited 0 with six parent tests passed, one child-only parent skipped, four legacy-value subtests passed and the heap-limit subprocess passed, package time 1.565 s; the same `gofmt -l` check exited 0 with no output. T004 remains incomplete; no feature-wide safety claim is made.
+
+`go test -p 1 ./internal/store -count=1 -timeout 30m` with `CGO_ENABLED=0` on native Windows/amd64 printed `ok` in 312.026 s. The background-process monitor did not report a direct process exit code or test/skip counts, so this run is only provisional regression evidence and does not satisfy the final command-recording gate.
+
+### T003 Command Harness (2026-11-18)
+
+Native Windows/amd64, `CGO_ENABLED=0`: `go test ./cmd/whatsapp-mcp -run '^TestMCPHarnessHeldOwnerAndCooperativeStreams$' -count=20 -v -timeout 5m` exited 0 with 20 passes and zero skips; the same command with `-count=1` exited 0 with one pass and zero skips after formatting. `gofmt -l cmd/whatsapp-mcp/mcp_test_helpers_test.go` exited 0 with no output. These exercise controlled fake-owner completion and cooperative stream teardown only.
+
+The initial `go test ./internal/mcp -run '^TestHarnessFixtureAndSDK$' -count=1 -v -timeout 2m` exited 1 before compilation because the first SDK import required module-file updates. An alternate temporary module file run exited 0 with one test and zero skips. After resolving the six already-reviewed transitive dependencies into `go.mod`, `go test -mod=mod ./internal/mcp -run '^TestHarnessFixtureAndSDK$' -count=1 -v -timeout 2m` exited 0 with one test and zero skips. `go test ./internal/mcp ./cmd/whatsapp-mcp -run '^TestHarnessFixtureAndSDK$|^TestMCPHarnessHeldOwnerAndCooperativeStreams$' -count=1 -v -timeout 5m` exited 0 with two tests and zero skips (package times 7.828 s and 17.406 s); `go mod verify` exited 0. The synthetic fixture contains 235 chats and contacts, local alias mapping and latest messages, and initializes the official in-memory SDK without account networking. At that checkpoint the common server-end guard and metadata-only store method did not yet exist.
+
+After those seams became available, the counted fixture was changed to use `Store.ToolReader()` and the SDK server end to use `GuardTransport`. On native Windows/amd64 with `CGO_ENABLED=0`, `go test -p 1 ./internal/mcp -run '^TestHarnessFixtureAndSDK$' -count=1 -v -timeout 2m` exited 0 with one test and zero skips in 0.981 s. This is harness verification, not full guard or store safety acceptance.
+
+### Foundation In Progress (2026-11-18)
+
+Native Windows/amd64, `CGO_ENABLED=0`: T006 adds the five-method narrow read interface and public DTO definitions. `go test -v ./internal/mcp -count=1 -timeout 10m` exited 0, one existing harness test passed; `go build ./cmd/whatsapp-mcp` exited 0, and `gofmt -l internal/mcp/results.go` exited 0 with no output. These establish compilation, not DTO rendering or budget correctness; those are T009/T010. DTO construction must enforce provenance, counts, non-nil arrays, timestamps and media types.
+
+T004 has a first negative test, `go test ./internal/store -run '^TestToolContactSourceFieldCeiling$' -count=1 -v -timeout 5m`, which exited 1 with one intended failure and zero skips: an oversized contact source returned nil instead of `ErrResourceLimit`. The remaining T004 schedules and T005 implementation are not complete.
+
+Further T004 red run: `go test ./internal/store -run '^TestTool(ContactSourceFieldCeiling|ReadDoesNotSucceedAfterCancellation)$' -count=1 -v -timeout 5m` exited 1 with two intended failures and zero skips: the oversized source was accepted and a read reported success after cancellation. No isolation or completion guarantee is inferred.
+
+An early partial gate continuation: `go test ./internal/store -run '^TestToolGate|^TestToolReadDoesNotSucceedAfterCancellation$' -count=1 -v -timeout 5m` exited 0 with seven parent tests and two subtests, zero skips. At that checkpoint the cancellation case passed but the contact source-ceiling test still failed and the tool facade, bounded queries and WAL/disk checkpoint policy were incomplete; later checkpoints below record subsequent changes. This early result alone does not approve the gate for MCP use.
+
+Later 2026-11-18 Windows checkpoints: `go test -p 1 ./internal/store -run '^TestToolContactChats(FirstStepPlan|WalkCeiling)$' -count=1 -v -timeout 5m` exited 1 before the aggregate rewrite with two expected failures. `go test -p 1 ./internal/store -run '^TestToolLatestSenderChatNameSourceCeiling$' -count=1 -v -timeout 5m` exited 1 before the source guard, and `go test -p 1 ./internal/store -run '^TestToolFacadeGetChatAdmission$' -count=1 -v -timeout 5m` exited 1 against the initial refusing facade. After those changes, `go test -p 1 ./internal/store -run '^TestTool|^TestListChats|^TestGetChat|^TestDirectChat|^TestContactChats|^TestSearchContacts' -count=1 -v -timeout 5m` exited 0 with 38 parent tests and 11 subtests passed, one child-only parent skipped and its heap-limit subprocess passed. `go test -p 1 ./internal/wa ./internal/mcp -run '^$' -count=1 -timeout 5m` exited 0 with no tests run, compilation only. The tests used `CGO_ENABLED=0`; isolation stress, native platform coverage and complete shutdown evidence remain open.
+
+Later sender-name guard on 2026-11-18, native Windows/amd64 and `CGO_ENABLED=0`: `go test -p 1 ./internal/store -run '^TestToolLatestSenderNameSourceCeiling$' -count=1 -v -timeout 5m` exited 1 before the guard, as the oversized contact name was accepted. `go test -p 1 ./internal/store -run '^TestTool' -count=1 -v -timeout 5m` subsequently exited 0 with 15 parent tests and six subtests, zero skips. This does not complete the other first-step queries or isolation schedules.
+
+T015/T016 are incomplete. Before a diagnostic filtering prototype, `go test ./internal/mcp -run '^TestDiagnosticHandlerLevelFiltering$' -count=1` exited 1: one test failed, with the `ERROR` subtest rejecting mandatory WARN records. The isolated retry `go test internal/mcp/diagnostics.go internal/mcp/diagnostics_test.go -run '^TestDiagnosticHandlerLevelFiltering$' -count=1 -v` exited 0 with one test and four subtests passed, zero skips. The post-edit package test exited 1 during concurrent edits to `tools.go`; it did not execute the test. An initial isolated attempt timed out at 120 s without a direct exit result. `gofmt -l internal/mcp/diagnostics.go internal/mcp/diagnostics_test.go` exited 0 with no output. At that checkpoint the prototype was synchronous and not suitable for integration; see the subsequent checkpoint below.
+
+Later diagnostic checkpoint on native Windows with `CGO_ENABLED=0`: `go test -p 1 ./internal/mcp -run '^TestDiagnostics' -count=1 -v -timeout 45s` exited 0 with 15 tests and four subtests, zero skips. `go test -p 1 ./internal/wa -run '^TestMCPActual(HistoryIncomplete|ReceiveOverload)AtLogLevels$' -count=1 -v -timeout 6m` exited 0 with two tests and eight subtests, zero skips; this exercises the real history producer and a synthetic simulator, not an account. The earlier isolated structured-attributes/human-failure and late-acknowledgment tests each failed before their fixes and passed afterward. T015/T016 and command integration remain incomplete.
+
+The diagnostic edge-case repeat `go test -p 1 ./internal/mcp -run '^TestDiagnostics(LevelRouting|QueueOverflowAndFinish|SinkFailure|BoundEventAttribute|PriorityAndOrdinaryBound|AuditMetadata|PartialWriteAcknowledgment|OrdinarySinkFailureThenMandatory|OversizedMandatoryLatches|OrdinaryStructuredAttributes|HumanFailure|OrdinarySeverityIdentity|TerminalFailureIdentity|LateAcknowledgmentLatches)$' -count=20 -timeout 60s` exited 0 (14 tests repeated 20 times). `go test -p 1 ./internal/wa -run '^TestMCPActual(HistoryIncomplete|ReceiveOverload)AtLogLevels$' -count=3 -timeout 6m` exited 0 (two tests and eight subtests repeated three times). These do not prove native subprocess or command lifecycle behavior.
+
+An independent review identified two false-failure races when a timely mandatory-write acknowledgment was buffered but not yet accounted at timer expiry or `Finish`. Both new buffered-ack tests failed before the fix. On native Windows/amd64, `CGO_ENABLED=0 go test -p 1 ./internal/mcp -run '^TestDiagnostics(BufferedAcknowledgmentAtFinish|FinishRejectsLateOrFailedAcknowledgment|BufferedAcknowledgmentAtExpiry)$' -count=1 -v -timeout 2m` then exited 0 with three parent tests and two subtests, zero skips, in 0.381 s; late and failed acknowledgments still latch failure. This does not prove subprocess/lifecycle integration or race-detector coverage.
+
+Further diagnostics work on 2026-11-18: `go test -p 1 ./internal/mcp -run '^TestDiagnosticsOrdinaryPrivateAttributes$' -count=1 -v -timeout 60s` exited 1 before the attribute-filter change, and `go test -p 1 ./internal/mcp -run '^TestDiagnosticsLevelRouting$' -count=1 -v -timeout 60s` exited 1 with four expected loss-warning failures before that change. `go test -p 1 ./internal/mcp -run '^TestDiagnostics' -count=1 -v -timeout 60s` then exited 0 with 17 parent tests and four subtests, zero skips. General redaction of ordinary message text, allowlisted values and group names was not established and requires further work. All tests used `CGO_ENABLED=0` on native Windows.
+
+Redaction follow-up on the same platform: `go test -p 1 ./internal/mcp -run '^TestDiagnosticsOrdinaryUntrustedText$' -count=1 -v -timeout 60s` exited 1 before fixed message/value/group filtering, then exited 0 with one test and zero skips. `go test -p 1 ./internal/mcp -run '^TestDiagnostics' -count=1 -v -timeout 60s` exited 0 with 18 tests and four subtests; `go test -p 1 ./internal/wa -run '^TestMCPActual(HistoryIncompleteAtLogLevels|ReceiveOverloadAtLogLevels|MessageDebugRedaction)$' -count=1 -v -timeout 6m` exited 0 with three tests and eight subtests, zero skips. Ordinary numeric attributes are omitted; known fixed producer identities and log levels remain. Command integration and actual inherited-stderr verification remain open.
+
+An early T007/T008 checkpoint: `go test ./internal/mcp -run '^TestCommon' -count=1` initially exited 1 on three behavioral tests covering 21 invalid-input cases, and a subsequent run exited 0 before the error-result test was added. The isolated `go test internal/mcp/tools.go internal/mcp/results.go internal/mcp/validation_test.go -run '^TestCommon' -count=1 -v -timeout 5m` exited 0 with four tests and 21 subtests, zero skips. A concurrent package run failed to compile due to work in progress in `connection.go`, and an earlier isolated attempt had a transient import failure. At that checkpoint schema coverage and acceptance of safe integral numeric spellings were incomplete; see the follow-up below.
+
+T007/T008 follow-up: `go test ./internal/mcp -run '^TestCommon(ExactJSONNumbers|SchemaValidation)$' -count=1 -v -timeout 5m` exited 1 on three intended safe-integral-number cases. A required-string schema red run, `go test ./internal/mcp -run '^TestCommon(RequiredStringSchemas|MetadataOnlyAndUnknownFields)$' -count=1 -v -timeout 5m`, exited 1 with four required-string subtests failing as intended. After both fixes, `go test -p 1 ./internal/mcp -run '^TestCommon' -count=1 -v -timeout 5m` exited 0 with 11 top-level tests and 71 subtests, zero skips, package time 0.254 s. Metadata-only assertions here cover argument values, not the store query; integration and store error mapping remain later work.
+
+T008 low-disk error construction: `go test ./internal/mcp -run '^TestCommonLowDiskError$' -count=1 -v -timeout 5m` exited 1 with one intended failure before the fixed unavailable reason was added; `go test ./internal/mcp -run '^TestCommon' -count=1 -v -timeout 5m` then exited 0 with 12 tests and 71 subtests, zero skips. The later handlers must map the actual store refusal to this fixed error without echoing private details; that integration is not yet tested.
+
+T009/T010 remain incomplete. `go test ./internal/mcp/results.go ./internal/mcp/results_test.go -run '^TestResultEmptyPageArray$' -count=1 -v` exited 1 with one expected failure (empty array encoded null); `go test ./internal/mcp -run '^TestResult' -count=1 -v` subsequently exited 0 with seven tests, zero skips. A rejected synthetic preflight case measured 392 bytes/op and six allocations/op; that is not a successful-response peak-memory bound. SDK source audit identifies further copies in `TextContent.MarshalJSON`, `CallToolResult.MarshalJSON`, `jsonrpc2.NewResponse`/`marshalToRaw` and `EncodeMessage`; typed `AddTool` marshals and replaces structured content before the guard. Exact limits, final frame integration and complete SDK allocation bounds remain unverified.
+
+T009/T010 later checkpoint: `go test ./internal/mcp/results.go ./internal/mcp/results_test.go -run '^TestResultSemanticValidation$' -count=1 -v` exited 1 on the expected invalid-value cases. `go test -p 1 ./internal/mcp -run '^TestResult' -count=1 -v -timeout 2m` subsequently exited 0 with 14 tests and nine subtests, zero skips. Samples construct 2 MiB boundary-sized values and check all five output schemas. A successful 2,080,768-byte synthetic structured/text sample allocated 35,432,767 bytes/op across 47 allocations for the measured encoding chain; it is not a live peak or global bound. Go's `encoding/json` pooled buffers and incomplete one-tool integration leave retained SDK heap unproven; these tasks remain unchecked. The timestamp conversion helper is not yet wired to store-to-DTO mapping.
+
+On 2026-11-18, native Windows/amd64 with `CGO_ENABLED=0`, `go test -p 1 ./internal/mcp -run '^TestResultSDKEncodingEscapedBudget$' -count=1 -v -timeout 5m` exited 0 with one test and zero skips, package time 0.992 s. The test checks structured and safe-text charges against actual SDK result marshaling and the complete JSON-RPC envelope for a heavily escaped synthetic result. It does not establish SDK peak heap or credit lifetime.
+
+`go test -p 1 internal/mcp/results.go internal/mcp/tools.go internal/mcp/results_test.go internal/mcp/validation_test.go -run '^TestResultHTMLMetacharacterCharges$' -count=1 -v -timeout 5m` with `CGO_ENABLED=0` exited 0 on native Windows/amd64, with one parent test and three subtests, zero skips, in 0.308 s. The current preflight charges six encoded bytes for each `<`, `>` and `&`, matching `encoding/json` HTML escaping before marshaling. This particular test was added after that behavior was already present, so no failing-first result was observed for it.
+
+`go vet internal/mcp/results.go internal/mcp/tools.go internal/mcp/results_test.go internal/mcp/validation_test.go` with `CGO_ENABLED=0` exited 0 with no output on the same platform and date; this isolated vet does not replace the full project gate.
+
+`go test -p 1 internal/mcp/results.go internal/mcp/tools.go internal/mcp/results_test.go internal/mcp/validation_test.go -count=1 -v -timeout 5m` with `CGO_ENABLED=0` exited 0: 27 parent tests and 80 subtests passed, zero skips, in 3.633 s. The successful near-limit encoding sample reported 40,755,534 bytes/op and 53 allocs/op; this remains total allocations rather than a peak-memory bound.
+
+The same isolated command after adding the HTML-escape test exited 0 in 4.515 s with 28 parent tests and 83 subtests passed, zero skips. The successful near-limit sample measured 44,768,610 bytes/op and 58 allocs/op; it is still not a retained-heap measurement.
+
+The pinned SDK source was also inspected at `mcp/content.go:34-47` (text content marshal), `mcp/protocol.go:372-387` (result marshal), and `internal/jsonrpc2/messages.go:118-120,148-155` (response and frame marshaling). These paths allocate serialized intermediates before the framing connection sees the response. The DTO preflight bounds represented structured bytes and safe-text bytes to 2 MiB each, and charges twice the text plus the structured form and envelope for the 8 MiB frame; this limits represented payload size but does not by itself prove a bound on Go allocator or pooled-buffer retention. Registration must use a path that preserves the preflighted result and leaves arbitrary SDK metadata/input requests unset.
+
+T011/T012 remain incomplete: isolated behavioral red `go test -vet=off -p 1 ./internal/mcp/connection_test.go -run '^TestGuard' -count=1 -v -timeout 60s` exited 1 with three expected failures; `go test -vet=off -p 1 ./internal/mcp/connection.go ./internal/mcp/connection_test.go -run '^TestGuard' -count=1 -v -timeout 60s` subsequently exited 0 with five tests and 12 subtests, zero skips. The prototype does not yet cover the complete pre-dispatch, notification, response-retirement and in-memory acceptance obligations and must not be integrated as complete. T013/T014 likewise remain incomplete; their prototype must not be integrated until framing deadlines, preflight and the remaining bounds are verified.
+
+Guard continuation: `go test -vet=off -p 1 ./internal/mcp/connection.go ./internal/mcp/connection_test.go -run '^TestGuard(MalformedParamsAndNotifications|NotificationLimit)$' -count=1 -v -timeout 60s` exited 1 (one intended failure, one pass); `go test -p 1 ./internal/mcp -run '^TestGuard' -count=1 -v -timeout 2m` then exited 0 with 12 tests and 12 subtests, zero skips. The tool deadline, no-response termination, full shape validation, mandatory diagnostics and actual integration remained open. The SDK can suppress response writes on marshal failure, so a successful focused run does not establish credit retirement.
+
+Guard ID-reuse checkpoint on 2026-11-18: the guard's ID-reuse regression exited 1 before synthetic internal ID mapping. `go test -p 1 ./internal/mcp -run '^TestGuard' -count=1 -v -timeout 2m` with `CGO_ENABLED=0` then exited 0 with 18 parent tests and 12 subtests, zero skips. The guard translates cancellation IDs and restores external response IDs; a direct deterministic test verifies distinct internal IDs after external reuse and the SDK error latch is exercised by an in-memory marshal failure. A delayed cancellation through the SDK scheduler, the tool deadline and lifecycle observation of the latch remain unverified.
+
+Phase 2 continuation, 2026-11-18, native Windows/amd64, `CGO_ENABLED=0`: `go test -p 1 ./internal/mcp -run '^TestServerSDKExplicitSchemasAndDispatch$' -count=1 -v -timeout 60s` exited 0, one parent test and five subtests, zero skips. `go test -p 1 ./internal/mcp -count=1 -v -timeout 3m` exited 0, 123 parent tests and their subtests, zero skips (88.257 s). This includes the previously failing deadline and known-tool audit identity tests; it does not establish an SDK no-response completion signal, owner lifecycle integration, store isolation acceptance, or native Linux/macOS behavior.
+
+Phase 2 store continuation, 2026-11-18, native Windows/amd64, `CGO_ENABLED=0`: `go test -p 1 ./internal/store -run '^(TestToolConcurrentIngestAndReadmission|TestToolSQLiteCloseCancellationRaces|TestToolFiveReadsExpectedResults|TestToolWALActualWritesCancelSnapshot)$' -count=1 -v -timeout 5m` exited 0, four parent tests and 50 subtests, zero skips (16.586 s). The concurrent test recorded 120 synthetic ingest writes, 1,538 successful reads, zero busy/cancelled reads, sampled peak WAL 4,705,072 bytes and maximum observed batch growth 321,360 bytes. This finite, light run does not establish maximal-ingest bounds, the full T004/T005 checkpoint, or native Linux/macOS behavior. A prior monitor run passed but did not expose a direct exit code and is not counted as this evidence.
+
+T004 follow-up, 2026-11-18, native Windows/amd64, `CGO_ENABLED=0`: added `TestToolFacadeRetainsLeaseDuringConnectionCleanup` and `TestToolCheckpointWaitingForWriterExcludesToolRead`. The first holds the reader cleanup hook before `Conn.Close`, cancels the caller and checks the gate retains the lease and refuses replacement; the second holds the actual writer connection, triggers recovery from an oversized synthetic WAL, and checks the checkpoint retains the tool place and excludes a tool read. `go test -p 1 ./internal/store -run '^(TestToolFacadeRetainsLeaseDuringConnectionCleanup|TestToolCheckpointWaitingForWriterExcludesToolRead)$' -count=1 -v -timeout 2m` exited 0, two tests, zero skips; the same command with `-count=10` exited 0, 20 test executions, zero skips (9.784 s). These were added against the existing implementation, so no pre-implementation failing run is claimed. `go test -p 1 ./internal/store -run '^TestTool' -count=1 -v -timeout 5m` exited 0, 40 parent tests and 67 subtests, zero skips (53.998 s). The run includes a finite 120-write concurrent-ingest fixture, not maximal sustained pressure. The command's unsuccessful exit on the tool-store control-failure latch depends on the unimplemented T024 observer and has not been verified; T004 remains unchecked.
+
+Full store regression, 2026-11-18, native Windows/amd64, `CGO_ENABLED=0`: `go test -p 1 ./internal/store -count=1 -v -timeout 30m` exited 1 in 462.126 s. The output reported 312 passing top-level tests/fuzz seed groups, one failed parent (`TestQueryPlans`) with four failed and 20 passing subtests, seven skipped parent tests and four skipped Windows symlink subtests (missing symlink privilege); 292 subtests/seeds passed overall. The old plan checker rejected the reviewed page-aggregate sort and bounded primary-key ceiling count in four cases. After narrowly recognizing these two plan lines only for the bounded aggregate SQL and adding negative checker tests, `go test -p 1 ./internal/store -run '^(TestQueryPlans|TestPlanProblemsRejectsBadPlans|TestBoundedChatPlanKeepsUnsafeOperations|TestToolListChatsFirstStepPlans|TestToolContactChatsFirstStepPlan)$' -count=1 -v -timeout 8m` exited 0, five parent tests and 26 subtests, zero skips, in 126.427 s. This targeted rerun is not a passing full store suite; a full rerun and remaining isolation evidence are still required.
+
+Full store rerun after the checker correction, 2026-11-18, native Windows/amd64, `CGO_ENABLED=0`: `go test -p 1 ./internal/store -count=1 -timeout 30m` exited 1 in 454.553 s. The nonverbose run did not report total test or skip counts; its reported failure was `TestPerContactMemory/phone`, whose child measured `LastInteraction` at 161.0353 ms against its existing 50 ms threshold. The earlier full run measured the corresponding phone case at 2.5585 ms. An isolated `go test -p 1 ./internal/store -run '^TestPerContactMemory$' -count=1 -v -timeout 8m` then exited 0 in 98.989 s: one parent, two subtests and two child executions passed, zero skips, with phone 9.0041 ms and even 3.9979 ms. This suggests timing sensitivity but does not establish its cause or replace a passing full suite; no threshold was changed.
+
+Query-plan checker follow-up, 2026-11-18, native Windows/amd64, `CGO_ENABLED=0`: `go test -p 1 ./internal/store -run '^TestBoundedChatPlanKeepsUnsafeOperations$' -count=1 -v -timeout 1m` exited 1, one parent test, zero skips: duplicate primary-key scans and aggregate sorts were wrongly accepted. After restricting each exception to one occurrence, `go test -p 1 ./internal/store -run '^(TestBoundedChatPlanKeepsUnsafeOperations|TestPlanProblemsRejectsBadPlans|TestToolListChatsFirstStepPlans|TestToolContactChatsFirstStepPlan)$' -count=1 -v -timeout 2m` exited 0, four parents and two subtests, zero skips (0.564 s). `go test -p 1 ./internal/store -run '^TestQueryPlans$' -count=1 -v -timeout 8m` exited 0, one parent and 24 subtests, zero skips (124.196 s). The full suite was not rerun after this test-only change.
+
+SDK cancellation source inspection, 2026-11-18, pinned `github.com/modelcontextprotocol/go-sdk v1.8.0`: `internal/jsonrpc2/conn.go:670-679,704-724` constructs a response even when cancellation precedes handler entry; cancellation alone is not evidence of a suppressed response. Result marshaling can fail before transport `Write`, and SDK shutdown can also refuse a write (`internal/jsonrpc2/messages.go:116-120`, `internal/jsonrpc2/conn.go:709-724,750-764`). The public middleware does not cover every pre-handler path or response serialization, and the SDK logger is a global error signal, not a per-request completion callback. The guard retains credits after cancellation, but without a response or observed terminal latch it cannot generally distinguish running work from completed work that produced no write. Owner observation of the latch and actual handler/session drainage remain unverified. Do not invent a post-cancellation deadline or interpret cancellation as completion; a source-specific proof of all reachable paths or an owner-reviewed termination policy is still needed.
+
+The real SDK deadline regression `go test -p 1 ./internal/mcp -run '^TestGuardToolDeadlineCancelsSDKHandler$' -count=1 -v -timeout 30s`, `CGO_ENABLED=0`, exited 1 with one intended failure: a held handler was not cancelled by 11 seconds. The proposed guard-side reader pump must also preserve the one-frame/no-read-ahead bound and deadline coverage while a synchronous overload reply is blocked. No deadline guarantee is claimed from the other passing guard tests.
+
+Later guard integration checkpoint on native Windows with `CGO_ENABLED=0`: `go test -p 1 ./internal/mcp -run '^(TestGuard|TestServer|TestFraming)' -count=1 -v -timeout 120s` exited 0 with 56 parent tests and 42 subtests, zero skips, before an additional blocked-output case was added. `go test -p 1 ./internal/mcp -run '^(TestGuardSDKBlockedOutputDeadlineRetainsCredit|TestGuardDeadlineRetainsPendingAndCredit|TestGuardBusyWriteDeadlineRetainsCredit|TestGuardFramingHeldMessagePreventsReadAhead|TestServerKnownToolFailureAuditIdentity)$' -count=20 -timeout 60s` exited 0, five tests repeated 20 times, zero skips. The new demand-driven guard reader and held-frame acknowledgment, SDK cancellation and typed tool identity need further audit: no-response watchdog, actual handler/store drainage and cancellation versus already-writing response have not been proven.
+
+T013/T014 isolated red: `go test -p 1 internal/mcp/transport.go internal/mcp/transport_test.go -run '^TestFramingInput$' -count=1` exited 1 because oversized and truncated frames were accepted. Subsequent `go test -p 1 internal/mcp/transport.go internal/mcp/transport_test.go -run '^TestFraming' -count=1 -v -timeout 60s` exited 0 with three tests and 12 subtests. A full-package attempt failed on a transient vet import error during concurrent edits. Frame timer start, pre-marshal output bounds, duplicate keys and the rest of the specified matrix remained unverified at that checkpoint.
+
+Later native Windows framing checkpoint: `go test -p 1 internal/mcp/transport.go internal/mcp/transport_test.go -run '^TestFraming(InheritedPipes|SerializedFrameBoundary)$' -count=1 -v -timeout 45s` exited 0 with two tests and three subtests, zero skips. The child inherited OS pipes; its blocked partial input and blocked 1 MiB output returned after approximately 10.02 s and 5.23 s respectively, and it exited without joining the blocked pumps. SDK-serialized frames including newline at 8 MiB minus one, equal, and plus one were checked against the final-size helper; the production preflight conservatively rejects these large frames, so this is not proof of successful near-boundary transport. Encoding CPU deadline and whole-process memory peak remain unproven.
+
+On 2026-11-18, native Windows and `CGO_ENABLED=0`, `go test -p 1 internal/mcp/transport.go internal/mcp/transport_test.go -run '^TestFraming(NoFurtherWritesAfterClose|CancelledWriteNeverStarts)$' -count=1 -v -timeout 30s` exited 1 before the pump change: one test observed 32 writes after close, one passed. After the fix, `go test -p 1 internal/mcp/transport.go internal/mcp/transport_test.go -run '^TestFraming' -count=1 -v -timeout 90s` exited 0 with 19 tests and 23 subtests, zero skips. `go vet internal/mcp/transport.go internal/mcp/transport_test.go` and `gofmt -l internal/mcp/transport.go internal/mcp/transport_test.go` both exited 0. SDK guard/session integration and tool deadline enforcement remain unverified.
+
+The expanded native Windows framing suite `go test -p 1 internal/mcp/transport.go internal/mcp/transport_test.go -run '^TestFraming' -count=1 -v -timeout 120s` exited 0 with 23 tests and 23 subtests, zero skips, in 71.298 s. It includes slow partial writes, an uncancellable write interrupted by connection close, idle input and a partial-frame deadline that is not reset by later bytes. T013's test-writing work is complete; tool-admission cancellation and actual SDK handler drainage remain unverified, so T014 remains open.
+
+T017/T018 are incomplete: `go test ./internal/mcp -run '^TestServerConstruction$' -count=1 -v -timeout 5m` first exited 1 with one expected failure for default SDK capabilities, then exited 0 with one test and zero skips after a server-construction prototype. `gofmt -l internal/mcp/server.go internal/mcp/server_test.go` exited 0 with no output. The test used an unguarded in-memory connection and is not acceptance evidence; pre-dispatch guarding and mandatory diagnostics are not integrated, and no tools are registered.
+
+Later server tests on 2026-11-18, native Windows and `CGO_ENABLED=0`: `go test -p 1 ./internal/mcp -run '^TestServerSDKFailureIsAudited$' -count=1 -v -timeout 2m` exited 1 with one intended failure because an SDK unknown-tool error was not audited. A revised `TestServerConstruction` exposed that the SDK accepted `resources/subscribe` despite disabled capabilities. The guard and SDK logger latch are being addressed; T017/T018 remain open.
+
+### T002 Dependency Review (2026-11-18)
+
+Native Windows/amd64; `CGO_ENABLED=0`. The following commands returned exit 0 directly:
+
+| Command | Result |
+| --- | --- |
+| `go mod download -json github.com/modelcontextprotocol/go-sdk@v1.8.0` | Downloaded the exact SDK; its module requires Go 1.25.0. |
+| `go get github.com/modelcontextprotocol/go-sdk@v1.8.0` | Added the SDK; no existing module version, WhatsApp fork, libsignal or toolchain change in the resulting `go.mod`. |
+| `go list -mod=mod -deps github.com/modelcontextprotocol/go-sdk/mcp` | Resolved the SDK package dependency graph with CGO disabled and added transitive checksums. |
+| `go mod verify` | All downloaded modules verified, both before and after SDK package dependency resolution. |
+| `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...` | No vulnerabilities found in currently imported project packages; the SDK is not yet imported by project code. |
+| `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 github.com/modelcontextprotocol/go-sdk/mcp` | No vulnerabilities found in the SDK package scan. |
+| `go test ./internal/store -run '^TestListChatsSearch$' -count=1 -v -timeout 5m` | Exit 0; one existing synthetic-store test passed, zero skips, package time 0.609 s. Baseline only, not feature acceptance. |
+| `go test ./internal/store -run '^TestListChats' -count=1 -v -timeout 5m` | Exit 0; three existing synthetic-store tests passed, zero skips, package time 2.336 s. Baseline only, not feature acceptance. |
+| `go test ./internal/store -run '^TestListChatsLatest$' -count=1 -v -timeout 5m` | Exit 0; one existing synthetic-store test passed, zero skips, package time 0.930 s. Baseline only, not feature acceptance. |
+| `go test ./internal/store -run '^TestListChatsSortAndPage$' -count=1 -v -timeout 5m` | Exit 0; one existing synthetic-store test passed, zero skips, package time 1.750 s. Baseline only, not feature acceptance. |
+| `go test ./internal/store -run '^TestGetChat$' -count=1 -v -timeout 5m` | Exit 0; one existing synthetic-store test passed, zero skips, package time 2.816 s. Baseline only, not feature acceptance. |
+| `go test ./internal/store -run '^TestSearchContacts' -count=1 -v -timeout 5m` | Exit 0; four parent tests passed, one child-only entry skipped in the parent and passed in its subprocess, package time 2.475 s. Baseline only, not feature acceptance. |
+| `go test ./internal/store -run '^TestDirectChat|^TestContactChats' -count=1 -v -timeout 5m` | Exit 0; three parent tests and three subtests passed, zero skips, package time 6.390 s. Baseline only, not feature acceptance. |
+| `go test ./internal/store -run '^TestAdmissionLimitsOnTheRealStore$' -count=1 -v -timeout 5m` | Exit 0; one existing synthetic-store admission test passed, zero skips, package time 1.121 s. Baseline only, not the new tool isolation policy. |
+| `go test ./internal/store -run '^TestGate' -count=1 -v -timeout 5m` | Exit 0; eight existing gate tests passed, zero skips, package time 1.347 s. Baseline only, not the new tool isolation policy. |
+| `go test ./internal/store -run '^TestGateQuiesceOutcome$' -count=1 -v -timeout 5m` | Exit 0; one existing gate test passed, zero skips, package time 0.541 s. Baseline only. |
+| `go test ./internal/store -run '^TestCancellationFreesTheSlot$' -count=1 -v -timeout 5m` | Exit 0; one existing synthetic-store test passed, zero skips, package time 1.229 s. Baseline only. |
+| `go test ./cmd/whatsapp-mcp -run '^TestShellLifecycleStopWithoutTerminalSignalIsUnchanged$' -count=1 -v -timeout 5m` | Exit 0; one existing fake-owner lifecycle test passed, zero skips, package time 24.263 s. Baseline only, not MCP acceptance. |
+| `go test ./cmd/whatsapp-mcp -run '^TestShellIngestFailureStopsTheCommand$' -count=1 -v -timeout 5m` | Exit 0; one parent test and two serve/stdio subtests passed, zero skips, package time 9.491 s. Baseline only, not MCP acceptance. |
+| `go test ./internal/wa -run '^TestOwnerTerminalIgnoresADeviceStorageFault$' -count=1 -v -timeout 5m` | Exit 0; one existing owner test passed, zero skips, package time 1.293 s. Baseline only. |
+| `go test ./internal/wa -run '^TestOwnerTerminal' -count=1 -v -timeout 5m` | Exit 0; two existing owner tests passed, zero skips, package time 1.563 s. Baseline only. |
+| `go test ./internal/wa -run '^TestQuietStopReportsDroppedMessagesWithoutFailing$' -count=1 -v -timeout 5m` | Exit 0; one existing owner test passed, zero skips, package time 1.157 s. Baseline only. |
+| `go test ./internal/wa -run '^TestIngestLiveStoreErrorIsTerminal$' -count=1 -v -timeout 5m` | Exit 0; one existing synthetic ingest test passed, zero skips, package time 2.390 s. Baseline only. |
+| `go test ./internal/wa -run '^TestQuietStopPassesAfterACleanRetirement$' -count=1 -v -timeout 5m` | Exit 0; one existing owner test passed, zero skips, package time 0.831 s. Baseline only. |
+| `go test ./internal/wa -run '^TestQuietStopEachSourceFailsWithItsReason$' -count=1 -v -timeout 5m` | Exit 0; one existing parent test and four subtests passed, zero skips, package time 1.999 s. Baseline only. |
+| `go test ./internal/wa -run '^TestQuietStopNeverAttemptedIsNotChecked$|^TestQuietStopAfterTheStopBoundFails$' -count=1 -v -timeout 5m` | Exit 0; two existing owner tests passed, zero skips, package time 0.923 s. Baseline only. |
+| `go test ./internal/wa -run '^TestIngestHistoryFailuresAreReportedAndNotTerminal$' -count=1 -v -timeout 5m` | Exit 0; one parent test and three subtests passed, zero skips, package time 0.544 s. Baseline only; mandatory MCP diagnostics are not implemented. |
+| `go vet ./...` | Exit 0 on the existing project packages; baseline only, before MCP implementation. |
+| `gofmt -l .` | Exit 0 with no output; baseline only, before MCP implementation. |
+
+The SDK package imports six newly selected transitive modules: `github.com/google/jsonschema-go v0.4.3`, `github.com/segmentio/encoding v0.5.4`, `github.com/segmentio/asm v1.1.3`, `github.com/yosida95/uritemplate/v3 v3.0.2`, `golang.org/x/oauth2 v0.35.0`, and `golang.org/x/time v0.15.0`. Their module Go versions are 1.14 through 1.25; the SDK requires 1.25 and existing selected `x/sys` and `x/sync` require 1.26, all within the project's Go 1.27 baseline. The Windows dependency graph has no cgo files; `segmentio/asm` includes architecture-specific assembly, so CGO-free does not mean Go source exclusively.
+
+An independent review on Windows with `CGO_ENABLED=0` and `GOTOOLCHAIN=local` (Go 1.27.3, not the configured 1.27.4) reported direct exit 0 for `go list -mod=readonly -m all`, `go mod graph`, `go mod verify`, and the SDK dependency and module-version listings. `go build -mod=readonly github.com/modelcontextprotocol/go-sdk/mcp` exited 0 separately for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64. These are cross-compiles of the SDK package, not native execution or application builds. An interrupted combined SDK/application build produced no usable evidence. No implementation or feature acceptance is inferred from these checks.
+
+The two listing commands were:
+
+```powershell
+go list -mod=readonly -deps -f '{{if not .Standard}}{{.ImportPath}}|{{.Module.Path}}|{{.Module.Version}}|cgo={{.CgoFiles}}{{end}}' github.com/modelcontextprotocol/go-sdk/mcp
+go list -mod=readonly -m -f '{{.Path}} {{.Version}} go={{.GoVersion}}' github.com/modelcontextprotocol/go-sdk github.com/google/jsonschema-go github.com/segmentio/asm github.com/segmentio/encoding github.com/yosida95/uritemplate/v3 golang.org/x/oauth2 golang.org/x/time golang.org/x/sys golang.org/x/sync
+```
+
+| Gate | Status |
+| --- | --- |
+| Supported store-isolation/query-resource/completion prerequisite | Policy specified from the T001 spike (native Windows/amd64 and a WSL2 race run); design review outstanding; implementation evidence pending (T004/T034/T035 on all three CI platforms). |
+| Five tools through official in-memory transport | Not run; no implementation yet. |
+| Schema/default/output consistency and all acceptance scenarios | Not run. |
+| Input/dispatch/notification/output and memory bounds | Not run; fixed values are review proposals, not measured guarantees. |
+| Flooded reads plus synthetic ingest/device writes, no admission-induced stop | Not run. Requires supported isolation/bounds argument from T001 as well as workload evidence; backlog remains open. |
+| Mandatory diagnostic admission/acknowledgment and failure fallback | Not run. Ordinary dropping no longer applies to mandatory loss/audit/fault records. |
+| EOF/cancellation/terminal device faults and serve regressions | Not run. |
+| Native Windows/Linux/macOS blocked/closed pipe and SIGPIPE tests | Not run on every platform. Cross-compilation is not native evidence. |
+| Gofmt, vet, module integrity, full tests, vulnerability scan and five builds | Not run for implementation; no new implementation is present. |
+| Real account | Not required for automated feature acceptance; not authorized or run. |
+
+No runtime PASS, platform protection claim, compliance claim, exception or owner review verdict is inferred from this document. Populate implementation evidence with exact commands, dates, counts/skips and direct exit codes. Follow [quickstart.md](quickstart.md).
+
+## Analysis Remediation (2026-11-17)
+
+The user authorized documentation fixes after the read-only analysis. No constitution, pin, database, production code, resource-budget approval or owner verdict is changed by this remediation.
+
+| Finding | Document action | Status / remaining evidence |
+| --- | --- | --- |
+| C1 - mandatory reports discarded | SEC-006, stdio contract/R3, plan/DTO state and T015/T016/T018/T036/T037 separate mandatory records from ordinary logs; fixed acknowledgment/failure latch makes overflow/failed delivery an unsuccessful normal stop. Outer Handler.Enabled admits WARN/ERROR at error level, then mandatory routing precedes the ordinary configured filter; audit uses a typed independent reporter. | Design corrected; delivery/overflow/loss-warning/severity/EOF-race tests not run. No claim that an undelivered record was recorded downstream. |
+| U1 - ingest isolation not enforced | Withdraw opportunistic shared-gate proof and PASS; contracts/R6/T001 require a supported admission/resource/control argument, exact ceilings and adversarial/native evidence before design PASS or implementation. No implicit extra lease/reader, pin change or ErrBusy retry. | **OPEN at 2026-11-17**; policy specified 2026-11-18 (contracts/store-and-lifecycle.md), design review pending. Static inspection identifies relevant driver limitations, not a verified solution. Stop for an explicit owner prerequisite decision if existing architecture cannot meet FR-017. |
+| I1 - mapped-LID fallback | FR-007/cross-story acceptance and T027 now explicitly prefer exact phone chat then exact mapped LID; phone/JID/LID inputs return the LID row when only it exists. | Artifact inconsistency corrected; runtime acceptance not run. |
+| A1 - timer called completion ceiling | Contracts/plan/R6/tasks distinguish 1 s/10 s cancellation requests and 5 s public output-wait termination from actual SQL/transaction/pump completion. Real resource accounting stays until return. | Wording corrected; establishing actual supported store completion bounds remains part of OPEN U1/T001, not an assumed one-second drain. |
+| I2 - US1 requires US2 discovery | US1 independently discovers two chat tools; a separate cross-story acceptance/T031 requires exactly five after both stories. | Story/dependency inconsistency corrected; no reduced final feature scope. |
+| A2 - formatted phone search ambiguous | T027 gives explicit matching/nonmatching fixtures; query formatting remains literal, identity inputs still normalize. | Expected result specified; tests not run. |
+| C2 - default 235-chat traversal absent | T020/quickstart explicitly traverse all 235 chats with omitted limit (30), 1 and 200, asserting completeness and uniqueness. | Test assignment corrected; tests not run. |
+
+Static source research used the actual `go.mod` SQLite pin v1.61.0 and existing store admission/SQL; it ran no cancellation/isolation experiment. No module was downloaded/updated. The implementation permission and quiet-stop/marker requirements remain unchanged. Design approval must cover the corrected full feature directory after the prerequisite is resolved; artifact consistency review is not owner-judge.
+
+## U1 Scratch Experiment: Later Next (2026-11-17)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, repository module with `modernc.org/sqlite v1.61.0`. Synthetic WAL database and scratch harness: `D:\tmp\kilo\u1-spike\main.go` and `synthetic.db`; no real account data. One cancelled later-step case, one uncancelled comparison and one cancelled initial-query case; no skipped cases in these three runs. All commands exited 0 directly:
+
+```powershell
+$env:CGO_ENABLED='0'; go run 'D:\tmp\kilo\u1-spike\main.go'; exit $LASTEXITCODE
+$env:CGO_ENABLED='0'; $env:U1_BASELINE='1'; go run 'D:\tmp\kilo\u1-spike\main.go'; exit $LASTEXITCODE
+$env:CGO_ENABLED='0'; $env:U1_INITIAL='1'; go run 'D:\tmp\kilo\u1-spike\main.go'; exit $LASTEXITCODE
+```
+
+The harness opens one `database/sql` connection, begins a context-owned transaction, and runs `SELECT 1 UNION ALL SELECT sum(x + spike_mark() * 0) FROM (WITH RECURSIVE r(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM r WHERE x<2000000) SELECT x FROM r)`. After consuming the first row, the second `Next` runs in a goroutine. The public registered scalar `spike_mark` signals its first invocation within the aggregate, before cancellation; the callback itself runs once per aggregate row and affects measured runtime. The harness waits for actual `Next`, closes rows, rolls back or observes automatic rollback, then performs a write using the same single-connection pool. The retained scratch source contains the full reproduction and a 20 s failure watchdog; watchdog termination is not considered a successful drain.
+
+| Case | Query return / entered | Request / actual return | Close and reuse |
+| --- | --- | --- | --- |
+| Cancel | Query 0.559 ms; aggregate entered 1.107 ms | Cancel at 1.107 ms; `Next=true`, `rows.Err()=context canceled` at 2.477 s, 2.476 s after cancellation. | `rows.Close` nil at 2.478 s; rollback reports already rolled back; write nil at 2.479 s, pool in-use 0. |
+| Baseline | Query 0.622 ms; aggregate entered 1.172 ms | No cancel; `Next=true`, nil error at 1.724 s, 1.723 s after entry. | Close and rollback nil; write nil at 1.729 s, pool in-use 0. |
+| Initial query | Aggregate entered 1.094 ms | Cancel at 1.094 ms; `QueryContext` returned `context canceled` at 1.636 ms, 0.542 ms later. | Rollback reports already rolled back; write nil at 9.812 ms, pool in-use 0. |
+
+These are individual observations, not calibrated upper bounds. The scratch query and callback do not establish the duration or memory of production queries, SQLite VM-only cancellation, or all transaction-close races. Broader initial-query cancellation, folding, connection-acquisition cancellation, query plans, resource/WAL bounds, admission schedules and native Linux/macOS remain not verified. U1 stays BLOCKED; no completion policy or owner approval is inferred.
+
+Documentation checks on 2026-11-17: `git diff --check` exit 0; `git ls-files --eol -- specs/006-mcp-stdio-tools` exit 0, all eleven tracked feature files `i/lf w/lf`. These checks do not verify the runtime mechanism.
+
+## U1 Follow-up: Query Plans and WAL (2026-11-17)
+
+Native Windows/amd64, Go 1.27.4, pinned SQLite driver, `CGO_ENABLED=0`; synthetic data only. Direct command results:
+
+| Command | Result |
+| --- | --- |
+| `$env:CGO_ENABLED='0'; go test ./internal/store -run '^TestQueryPlans$' -count=1 -v -timeout 5m; exit $LASTEXITCODE` | Exit 0; one test with 24 passing subtests, zero skips, 57.139 s package time. Representative existing plans assert activity/name ordered scans, keyed get/direct lookups, indexed contact-chat membership probes, and contact-search GROUP BY/ORDER BY temporary B-trees. Assertions cover these fixtures only and do not prove scan/resource ceilings. |
+| `$env:CGO_ENABLED='0'; go run 'D:\tmp\kilo\u1-spike\wal.go'; exit $LASTEXITCODE` | Exit 0; initial scratch version explicitly disabled autocheckpoint and held a snapshot across 1,000 synthetic 1 KiB inserts. Passive checkpoint reported busy/log/checkpointed `0,360,0`, WAL 1,483,232 bytes; after rollback, truncate checkpoint `0,0,0`, WAL zero. The retained harness was subsequently extended to 4,000 inserts and an environment-controlled default autocheckpoint. |
+| `$env:CGO_ENABLED='0'; $env:U1_DEFAULT_CHECKPOINT='1'; go run 'D:\tmp\kilo\u1-spike\wal.go'; exit $LASTEXITCODE` | Exit 0; default autocheckpoint 1,000 pages; snapshot saw zero rows before and after 4,000 inserts in 40 transactions, 111.474 ms write time. Passive checkpoint `0,1465,0`, WAL 6,035,832 bytes; after rollback truncate checkpoint `0,0,0`, WAL zero. |
+
+The WAL harness uses two public `database/sql` connections against a separate synthetic database, not the actual Store admission layer or its full production pragmas. It explicitly runs a passive checkpoint and later a truncate checkpoint; no checkpoint-duration, disk-ceiling, writer-isolation or worst-case claim follows. It demonstrates that a small read result and automatic checkpoint setting do not by themselves release a held snapshot's WAL. At that stage no batch prototype, admission schedule or cross-platform runtime evidence had been established; see the subsequent activity-keyset experiment below.
+
+## U1 Follow-up: Activity Keyset (2026-11-17)
+
+Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, `modernc.org/sqlite v1.61.0`; scratch source `D:\tmp\kilo\u1-spike\keyset.go` and synthetic database `keyset.db`. No production code or account data. Both executions of `$env:CGO_ENABLED='0'; go run 'D:\tmp\kilo\u1-spike\keyset.go'; exit $LASTEXITCODE` exited 0. Between runs the NULL continuation was edited to add the explicit `last_message_time IS NULL` predicate; the retained source is the second version.
+
+The fixture has 235 distinct JIDs, five repeated non-NULL timestamps and NULL timestamps. It compares the complete activity-order traversal against `ORDER BY (last_message_time IS NULL), last_message_time DESC, jid`. Batch sizes 1, 7, 50 and 200 respectively used 242, 42, 11 and 6 SQL queries; all returned exactly 235 entries equal to baseline. Each traversal also counted 102 JIDs containing `00`; that count is not a paging/filter acceptance test. The full traversal is materialized by the scratch harness and is not a production bounded-memory implementation.
+
+| Query shape | Reported plan on final run |
+| --- | --- |
+| First non-NULL candidates | `SEARCH chats USING COVERING INDEX chats_last_activity (<expr>=?)` |
+| Equal timestamp, later JID | `SEARCH chats USING COVERING INDEX chats_last_activity (<expr>=? AND last_message_time=? AND jid>?)` |
+| Lower timestamps | `SEARCH chats USING COVERING INDEX chats_last_activity (<expr>=? AND last_message_time<?)` |
+| First NULL candidates | `SEARCH chats USING COVERING INDEX chats_last_activity (<expr>=?)` |
+| Later NULL JID, explicit `last_message_time IS NULL` | `SEARCH chats USING COVERING INDEX chats_last_activity (<expr>=? AND last_message_time=? AND jid>?)` |
+
+The first version's later-NULL query omitted the explicit null predicate and reported only `(<expr>=?)`, despite `jid>?`; it did not demonstrate a JID range seek. Plan output describes planner strategy, not measured VM steps or a guarantee for other query shapes/statistics. The experiment has no page/offset, source-size, candidate-exhaustion, concurrent write, SQLite heap, WAL or actual-completion measurements. The query strategy, numeric limits, contact grouping and full admission policy remain unverified; U1 is still BLOCKED.
+
+## U1 Focused Follow-up: List Chats Paging (2026-11-17)
+
+Native Windows/amd64, Go 1.27.4, pinned `modernc.org/sqlite v1.61.0`, `CGO_ENABLED=0`. Synthetic scratch sources and database under `D:\tmp\kilo\u1-spike`; no account data or production code. Both commands exited 0 directly:
+
+```powershell
+$env:CGO_ENABLED='0'; go run 'D:\tmp\kilo\u1-spike\keyset.go'; exit $LASTEXITCODE
+$env:CGO_ENABLED='0'; go run 'D:\tmp\kilo\u1-spike\page.go'; exit $LASTEXITCODE
+```
+
+`keyset.go` rebuilds the 235-chat fixture. `page.go` keeps a single read transaction, walks activity-index candidates in batches, filters synthetic JIDs in Go, and compares pages against full SQL ordering/filtering. Twelve cases ran, zero skips: nine successful baseline comparisons and three expected candidate-budget errors with a nil result, not a partial page.
+
+| Case | Filter / offset / limit / batch / budget | Inspected / returned | Outcome |
+| --- | --- | --- | --- |
+| 1 | empty / 0 / 30 / 7 / 235 | 30 / 30 | Matches baseline |
+| 2 | empty / 100 / 30 / 7 / 235 | 130 / 30 | Matches baseline |
+| 3 | empty / 234 / 30 / 7 / 235 | 235 / 1 | Matches baseline |
+| 4 | `00` / 0 / 30 / 1 / 235 | 53 / 30 | Matches baseline |
+| 5 | `00` / 30 / 30 / 50 / 235 | 130 / 30 | Matches baseline |
+| 6 | `00` / 100 / 30 / 7 / 235 | 235 / 2 | Matches baseline |
+| 7 | `0234` / 0 / 20 / 7 / 235 | 235 / 1 | Matches baseline |
+| 8 | `absent` / 0 / 20 / 7 / 235 | 235 / 0 | Matches baseline |
+| 9 | empty / 100 / 30 / 7 / 110 | 110 / 0 | Budget error, no partial result |
+| 10 | `absent` / 0 / 20 / 50 / 234 | 234 / 0 | Budget error, no partial result |
+| 11 | `00` / 0 / 30 / 200 / 10 | 10 / 0 | Budget error, no partial result |
+| 12 | empty / 0 / 30 / 7 / 30 | 30 / 30 | Matches baseline at exact budget |
+
+Counts are candidates inspected by Go, not SQLite VM steps: `rows.Next` is called before checking whether the candidate budget is exhausted, and may execute SQLite work for one additional row; SQL itself may do more than one unit of work per returned row. This model does not implement folded name/JID matching, latest messages, source-length checks, resource accounting, real admission, cancellation or concurrent writes. Results do not clear T001.
+
+### Candidate Budget Boundary Follow-up (2026-11-17)
+
+The scratch `page.go` was subsequently revised in place: each statement's SQL `LIMIT` is `min(batch size, remaining candidate budget)`, the iteration loop stops at that limit, and the next statement is not issued when no candidate budget remains. Thus the retained source reproduces this run, not the earlier pre-check version. Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, SQLite v1.61.0, same 235-row synthetic fixture. Command `$env:CGO_ENABLED='0'; go run 'D:\tmp\kilo\u1-spike\page.go'; exit $LASTEXITCODE` exited 0; **13 cases, zero skips**: the previous nine successful baseline comparisons and three no-partial budget failures, plus one exact-budget failure.
+
+The successful full page at budget 30 inspected and returned 30 candidates. With an absent filter and budget 235, after inspecting all 235 fixture rows the model returned a budget error with no rows because it did not probe for end-of-input; at budget 236 the same empty page succeeded. The former is a deliberate conservative false-positive resource error, not proof that it is the final approved API policy. SQL execution/VM work can exceed the number of returned candidates, and no timing, heap, WAL, actual cancellation, production query or ingest-isolation bound follows from these cases. T001 stays BLOCKED.
+
+## U1 Focused Cancellation and Concurrent Writes (2026-11-17)
+
+Native Windows/amd64, Go 1.27.4, pinned SQLite v1.61.0, `CGO_ENABLED=0`. Synthetic scratch program `D:\tmp\kilo\u1-spike\cancel-wal.go` uses a separate synthetic WAL database, two `database/sql` connections and a scalar callback deliberately held by a channel. No real account or Store admission path was used. Command `$env:CGO_ENABLED='0'; go run 'D:\tmp\kilo\u1-spike\cancel-wal.go'; exit $LASTEXITCODE` exited 0; one controlled scenario, no skips.
+
+After a read transaction's first result established a snapshot, a later `Next` entered the held callback. The context was cancelled and the handler was confirmed still running at 100.312 ms. While held, 1,000 synthetic 1 KiB rows were committed; passive checkpoint returned `busy=0, log=336, checkpointed=0`, WAL 1,384,352 bytes at 123.970 ms. The callback was then released; `Next=true` with `rows.Err()=context canceled`; rows close returned nil and rollback reported the transaction already rolled back. After actual return, truncate checkpoint returned `0,0,0` and WAL size zero.
+
+The callback is intentionally blocked to make the schedule deterministic; it does not establish a normal folding duration, production query timing, a maximum retained WAL, or an ingest error. Writes succeeded in this run. It demonstrates that cancellation and a successful concurrent writer do not by themselves prove snapshot return. The source-derived near-capacity gate schedule and decision alternatives in research.md are reasoning, not an executed stress test. T001 remains BLOCKED; native Linux/macOS, actual store/device contention and a complete enforcement mechanism remain not verified.
+
+## U1 First-Step Aggregation Prototype (2026-11-17)
+
+Native Windows/amd64, Go 1.27.4, pinned `modernc.org/sqlite v1.61.0` (SQLite 3.54.1), `CGO_ENABLED=0`. Scratch program `D:\tmp\kilo\u1-spike\firststep.go`, run from the repository root so the module's pin is used; it builds `firststep.db` (172 MB) on first run: 300,000 synthetic chats plus 300 chats with 8,000-byte names, using the production `chats` schema and both indexes; 100,000 synthetic `whatsmeow_contacts` entries (30% `@lid`, half of them mapped) plus 5 group entries; one 64 MiB text value. Memory statistics are switched on before SQLite initialises, as `internal/store/sqlite.go` does. `fold_s` (Go `strings.ToLower`, one Go callback per value) stands in for `mcp_fold`; the contact SQL is otherwise the current `SearchContacts` text and the chat SQL the current `ListChats` text. No account data or production code.
+
+Command `CGO_ENABLED=0 go run D:/tmp/kilo/u1-spike/firststep.go` exited 0 directly (output kept in `firststep.out`); `done failures=0`. An earlier run without the memory-statistics step exited 1 on the two heap cases: `hard_heap_limit` is accepted but not enforced unless statistics are on (`DEFAULT_MEMSTATUS=0` in `PRAGMA compile_options`; separate check `heaplimit.go`, exit 1, 0 of 3 over-limit queries refused). This matches the store's existing handling and is not a store defect.
+
+The prototype wraps each page query as `SELECT count(*), json_group_array(json_array(...) ORDER BY <page order>) FROM (<current query> LIMIT ? OFFSET ?)`, so every SQLite step of the read runs inside the first `step`, where the pinned driver's interrupt watcher and 1,000-instruction progress handler are installed (`stmt.go:287-299`, `sqlite.go:80-139`).
+
+| Check | Result |
+| --- | --- |
+| Equivalence, wrapped versus current SQL | 23 of 23 pages identical: 13 chat pages (activity and name order, empty/rare/no-match/Unicode/`@g.us` filters, offsets up to 300,250) and 10 contact pages (empty, rare, name, phone digits, Unicode, no match, offsets up to 99,990). |
+| Plans | Wrapped queries keep the current plans (index scan for chats; GROUP BY and ORDER BY temp B-trees for contacts) and add one `USE TEMP B-TREE FOR json_group_array(ORDER BY)` over at most the page's rows. |
+| Cancellation, current chats SQL, later `Next` scanning to a rare match | Uncancelled median 268 ms; cancelled at 89 ms; 5 runs, cancel-to-return median 168 ms, max 280 ms: the step is not interrupted and runs on. |
+| Cancellation, wrapped chats | Uncancelled median 383 ms; cancelled at 128 ms; 5 runs, `context canceled`, cancel-to-return reported as 0 s in every run, below this host's timer resolution. |
+| Cancellation, current contacts SQL (sort in first step) | Uncancelled median 994 ms; cancelled at 331 ms; 5 runs, median 8.6 ms, max 9.2 ms. |
+| Cancellation, wrapped contacts | Uncancelled median 1,020 ms; cancelled at 340 ms; 5 runs, median 8.0 ms, max 8.7 ms. |
+| After each cancelled run | Rows close and rollback returned immediately; a write on a second connection then succeeded in at most 5.0 ms. |
+| SQLite heap high-water (process-wide, includes open connections' page caches of about 2.3 MB) | Chats pages, current or wrapped: 2.27–2.34 MB. Contacts over all 100,000 entries, current or wrapped: 12.5–12.6 MB. Wrapping adds no measurable heap. |
+| `sqlite.Limit(reader, SQLITE_LIMIT_LENGTH, 1 MiB)` | Wrapped page of 100 long chats (804,001 JSON bytes) succeeds; 200 long chats fails in the first step with `string or blob too big (18)`. On the reader `zeroblob(2000000)` fails; on another connection it succeeds: the limit is per connection. |
+| 64 MiB text under a 32 MiB `hard_heap_limit` | `octet_length(v)` returns 67,108,864 and `CASE WHEN octet_length(v) <= 4096 THEN fold_s(v) END` returns the fallback without calling the fold on the value, both without error; `length(v)` and `SELECT v` fail with `out of memory (7)`. `octet_length` does not load the value. |
+
+Limits: single host, single runs of five samples, synthetic data and a stand-in fold; timings are not bounds. Cancellation latency inside the first step is bounded by 1,000 VM instructions plus one Go callback, which the length guard bounds; the measurements agree but do not prove a maximum. Not covered: GetChat/DirectChat/ContactChats wrappers, latest-message retrieval, folded JID filtering, the Store admission path, concurrent ingest during a wrapped read, WAL retention under the wrapped form, other native targets. T001 remains BLOCKED pending those and the owner decisions in spike.md.
+
+## U1 First-Step Prototype, Part 2: Remaining Tools, WAL and Rollback (2026-11-17)
+
+Same host, toolchain, pin and stand-in fold as part 1. `D:\tmp\kilo\u1-spike\firststep2.go` extends `firststep.db` (now 294 MB) with the production `messages` schema and its sender indexes: two messages in each of 30,000 groups, one in every tenth direct chat, a target contact writing as a phone in the newest group and as its mapped LID in an old group, its direct chats, and one chat whose latest message is 64 MiB (impossible through the store's 256 KiB write limit; stands for legacy or damaged data). `D:\tmp\kilo\u1-spike\rollback.go` reuses the fixture.
+
+| Command (repository root) | Exit | Result |
+| --- | --- | --- |
+| `CGO_ENABLED=0 go run D:/tmp/kilo/u1-spike/firststep2.go` | 0 | `done failures=0`; output in `firststep2.out`. |
+| `CGO_ENABLED=0 go run D:/tmp/kilo/u1-spike/rollback.go` | 1 (expected) | Four pooled-connection forms clean; two dedicated-connection forms left transactions open (below). Output in `rollback.out`. |
+
+| Check | Result |
+| --- | --- |
+| ContactChats keys, wrapped versus streamed | 14 of 14 identical: current (direct plus group-only) and planned (direct plus any chat) membership; both identities, phone only, LID only, unrelated and unknown contacts; limits and offsets. |
+| Latest message, `octet_length`-guarded versus current SQL | 44 of 44 chats identical. Plan: point lookups only (`chats` primary key, `messages_chat_time`, contact and LID-map keys). |
+| ContactChats plans | Streamed and wrapped both scan `chats_last_activity` with covering per-chat probes of `messages_chat_sender_phone` and `messages_chat_sender_jid`; wrapping adds one sort over at most the page. The walk is proportional to the chat count, not the page. |
+| Cancellation, ContactChats current key walk | Streamed: uncancelled median 221 ms, 5 runs cancel-to-release median 61 ms, max 82 ms. Wrapped: uncancelled 352 ms, median 0 s, max 34 µs. |
+| Cancellation, ContactChats planned key walk | Streamed: uncancelled 1,324 ms, median 121 ms, max 508 ms. Wrapped: uncancelled 948 ms, median 0 s, max 125 µs. Release is measured to `Conn.Close` returning. |
+| WAL under concurrent writes, planned key walk, 3 runs each | A writer committed 1 KiB rows throughout (169–260 writes per read, max write 4.6–18.5 ms, no write error). At cancel the WAL held 1.16–1.78 MB. TRUNCATE checkpoint issued at cancel completed `0,0,0` with WAL 0 bytes after 441, 599, 682 ms streamed and 5.0, 4.1, 3.3 ms wrapped. |
+| 64 MiB latest message under a 32 MiB SQLite heap limit | Current latest-message query fails `out of memory (7)`; guarded query succeeds, text NULL, `octet_length` 67,108,864, so the store can return `resource_limit` without loading it. |
+| Cancelled reads in the store's pattern (pooled `Conn` per read, `BeginTx(ctx, nil)`, deferred `Rollback`, `Conn.Close`) | 400 runs (streamed and wrapped, default and read-only transactions), deadlines spread over 5–95% of a warm run: no transaction left open. |
+| Cancelled reads on one `sql.Conn` held across reads | Probe `ROLLBACK` after each read found the old transaction still open in 33 of 100 streamed and 72 of 100 wrapped runs. An earlier `firststep2.go` version that held one connection failed the same way: `cannot start a transaction within a transaction`. Cause, from Go 1.27.4 `database/sql/sql.go:2214-2226,2136-2158`: on context cancellation `Tx.awaitDone` marks the transaction done and rolls back in its own goroutine, so the caller's `Rollback` returns `ErrTxDone` before SQLite has rolled back; only `Conn.Close` waits for it. |
+| Success after the deadline | Streamed forms returned a complete, error-free result after their deadline had passed in 2–10 of 100 runs per form (an uninterruptible later step finished first). Wrapped forms: 0 in every form. |
+
+Interpretation and limits: wrapping removes the later-step problem for all four multi-row reads; GetChat and DirectChat are already single-row point lookups whose only gap was materialising oversized values, closed by the guard. Snapshot release coincides with `Conn.Close`, so the tool reader must obtain and close a connection per read, as `Store.read` does, and must check its context after a successful read. Not covered: the real `mcp_fold`, folded JID filtering, the Store gate and device paths, other native targets, and memory or walk ceilings (ContactChats and filtered ListChats still walk every chat; contact grouping grows with the contact count). T001 remains BLOCKED pending those and the owner decisions in spike.md.
+
+## U1 Walk and Grouping Ceilings (2026-11-18)
+
+Same host, toolchain and pin (Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`, SQLite 3.54.1). Scratch `D:\tmp\kilo\u1-spike\ceiling.go` reuses `firststep.db` (300,303 chats, messages from part 2) and builds `ceiling-contacts.db` (266 MB, six synthetic contact variants, each its own device). `mcp_fold` is registered with an exact copy of `internal/store/fold.go` (NFC plus full case folding), not a stand-in. Readers use the store's read pragmas (`temp_store(MEMORY)`, `hard_heap_limit(268435456)`, `query_only(1)`) and a fresh pooled connection per measured read. Heap figures are SQLite's process-wide high-water above the level before the read, with memory statistics on.
+
+| Command (repository root) | Exit | Result |
+| --- | --- | --- |
+| `CGO_ENABLED=0 go run D:/tmp/kilo/u1-spike/ceiling.go` (first version) | 0 | `done failures=0`. Equivalence held, but the plans showed `USE TEMP B-TREE FOR ORDER BY` in the outer page query: a sorter of up to offset+limit rows (7.6 MB at offset 100,000 with 20-byte names; proportional to name size). |
+| `CGO_ENABLED=0 go run D:/tmp/kilo/u1-spike/probe/probe.go` | 0 | Plans of five forms: the outer sort disappears when the walk exposes its first order term as a column (`last_message_time IS NULL AS k0`, `name_quality = 0 AS k0`) and the outer query orders by `k0, ...`; the outer `ORDER BY` stays in the SQL. Without the alias, or with a materialised CTE, SQLite sorts. |
+| `CGO_ENABLED=0 go run D:/tmp/kilo/u1-spike/ceiling.go` (alias form, final) | 0 | `done failures=0`; output in `ceiling.out`. |
+
+**Chat walk ceiling.** `list_chats` and `get_contact_chats` walk at most C chats in page order (`... FROM chats ORDER BY <index order> LIMIT C`), filter, page and aggregate in the first step. A third column, evaluated only when the page is short, counts the table up to C+1 rows on the primary key. Rule: a full page is exact; a short page is exact only if the table has at most C chats; otherwise `resource_limit`, no partial page. Tested C = 1,000, 100,200, 150,500 and 400,000 against the current SQL.
+
+| Check | Result |
+| --- | --- |
+| `list_chats`, 16 cases (both orders, empty/rare/no-match/Unicode/`@g.us`/long-name filters, offsets to 100,000) × 4 ceilings | 39 identical to the current SQL, 25 `resource_limit`; no refusal when the table fits in the walk, no success that differs. |
+| `get_contact_chats` (planned membership), 7 cases × 4 ceilings | 11 identical, 17 `resource_limit`; no refusal when the table fits. |
+| Plans, final form | Walk: `SCAN chats USING INDEX chats_last_activity` / `chats_name` (covering for contact chats, with the two per-chat `messages_chat_sender_*` probes); the only temp B-tree is `json_group_array(ORDER BY)` over at most the page; the size check is `SCAN chats USING COVERING INDEX sqlite_autoindex_chats_1` inside a scalar subquery. |
+| Work at C = 100,200 (5 runs each): activity/name no-match, name long-name filter, unfiltered offset 100,000, contact-chats full walk | Median 86–325 ms, max 468 ms (contact chats). SQLite heap above base: 29–79 KB, and 2.16 MB for the activity scan, which reads table rows into the connection's page cache. Unfiltered offset 100,000 fell from 7.6 MB (sorted form) to 79 KB. |
+| Cancellation at a third of the run, 5 runs each | All `context canceled`; cancel-to-return median 0 s (below timer resolution), max 119 µs. |
+
+**Contact grouping ceilings.** `search_contacts` first reads, without folding, at most E+1 of the device's person entries: their count, the bytes of each chosen name, the bytes of all four name fields and the longest field. The grouped, folded, sorted page runs in the same statement only when all four are within the ceilings; otherwise its column is NULL and nothing is grouped or folded (`resource_limit`).
+
+| Variant (device) | Entries | Chosen-name / all-field bytes | Current SQL: elapsed, SQLite heap above base |
+| --- | --- | --- | --- |
+| `short` (address-book names, 18 B) | 100,000 | 1.8 MB / 7.2 MB | 1.2–1.6 s, 14.9–17.0 MB |
+| `ascii` (four 1 KiB `x` names) | 20,000 | 20.5 MB / 81.9 MB | 2.7–7.5 s, 83.5–99.7 MB |
+| `expand` (four 1 KiB U+0390 names; folding triples them) | 20,000 | 20.5 MB / 81.9 MB | 4.6–9.5 s, 83.5–99.7 MB |
+| `edge_e` (four 40 B U+0390 names) | 100,000 | 4.0 MB / 16.0 MB | 1.5–2.1 s, 23.6 MB |
+| `edge_s` (four 1 KiB U+0390 names) | 4,096 | 4,194,304 / 16,777,216 | 0.9–1.5 s, 17.1–20.5 MB |
+| `edge_s_ascii` (four 1 KiB `x` names) | 4,096 | 4,194,304 / 16,777,216 | 0.4–1.1 s, 17.1–20.5 MB |
+
+Each variant measured with empty and `0001` queries at offsets 0 and 100,000 (the larger offset keeps every person in the ORDER BY sorter). A two-point fit from `short` and `ascii` gives about 63 bytes per entry plus 4.8 bytes per chosen-name byte; it predicted 25.5 MB for `edge_e` and 20.4 MB for `edge_s`, measured 23.6 and 20.5 MB. Fold expansion did not change the high-water (`expand` equals `ascii`).
+
+| Check, proposed ceilings E = 100,000 entries, S = 4 MiB chosen-name bytes, A = 16 MiB all-field bytes, field 1 KiB | Result |
+| --- | --- |
+| Equivalence and refusal, 14 cases × 5 ceiling sets (unbounded, E = 1,000, S = 1 MiB, field = 100, A = 2 MiB) | 21 identical to the current SQL, 49 `resource_limit`; every refusal exactly when a ceiling is exceeded, with zero `mcp_fold` calls; no run over a ceiling. |
+| At the proposed ceilings | `short`, `edge_e`, `edge_s`, `edge_s_ascii` run: max 2.33 s, max SQLite heap 23.6 MB above base. `ascii` and `expand` refused in 377–550 ms, 146 KB, no folds. |
+| Cancellation at a third of the run, 5 runs each (`short`, `edge_e`, `edge_s`) | All `context canceled`; median 5.2–10.8 ms, max 36.8 ms. |
+
+Interpretation and limits: both ceilings run entirely in the first step, so the earlier cancellation result applies; the chat ceiling makes walk work independent of the chat count, and the contact precheck bounds grouping memory and fold work before either starts. The ceilings are proposals, not approved values: the 32 MiB tool heap share they are sized against, C = maxOffset + maxListSize and the conservative refusal of a short page on a store larger than C (including a contact whose chats all lie beyond the newest 100,200) are owner decisions. Not covered: ingest's own SQLite heap demand alongside a tool read (so whether 256 MiB minus the share is sufficient is not shown), the Store admission gate and device paths, real-store integration, other native targets. Single host, five-run samples; timings are not bounds. T001 remains BLOCKED.
+
+## Owner Decisions on U1 (2026-11-18)
+
+The owner approved, in this session: a 32 MiB SQLite heap share for one tool read; keeping the 100,000 offset cap (which sets the 100,200-chat walk ceiling); conservative `resource_limit` for short pages on stores over that ceiling; capacity-neutral tool admission; and one extra ordinary waiter place while a tool read holds a slot (ordinary capacity stays 16 active + 64 waiting = 80; no 17th active slot or fifth reader). Later the same day the owner also approved the WAL guard (tool admission only while the -wal file is at most 64 MiB, cancellation above 128 MiB), the free-space admission condition (at least 640 MiB free) and the platform plan (Linux and macOS recorded as not verified now; the cancellation, ceiling, admission and WAL-guard tests become implementation tests run in CI on Linux, Windows and macOS). These are decisions on the U1 prerequisite, not an owner-judge review verdict.
+
+## U1 Experiment 2: Coordinated Admission Model (2026-11-18)
+
+Scratch module `D:\tmp\kilo\u1-spike\admission` (`gate.go`, `baseline.go`, `gate_test.go`; standard library only). `Gate` models a coordinated store gate under one mutex: ordinary operations (message writes, store reads, guarded device calls; nested device calls reuse their lease and never re-enter, `internal/store/device.go:280`) keep the current limits; a tool read is admitted only when no ordinary operation waits and a slot and a reader are free, never queues, and is cancelled when an ordinary operation must wait for a slot or when a fourth concurrent ordinary read needs its reader; its slot and reader stay accounted until it actually releases; the ordinary waiter cap is 64 plus one while a tool holds a slot. `Baseline` is the acquire path of `internal/store/admit.go` at `ade34d2`.
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `CGO_ENABLED=0 go test -count=1 -v -timeout 2m ./...` (in the module, native Windows/amd64, Go 1.27.4), three iterations while fixing the harness | 1, 1, 0 | First run: schedule 1 failed because the test's waiter released at once (a slot really was free), and the invariant "waiting ≤ 64 + tool" fired when a tool released with 65 waiters (transient: the freed slot admits one). Second: a "waiter while a slot is free" check fired between a release's broadcast and the waiter's wake-up (transient). Both checks were replaced: the cap is asserted where a waiter registers, and missed wake-ups are detected as admission-wait timeouts, which must be zero. Final run: seven schedule tests and one stress test with three subtests, zero failures. |
+| `wsl -d Ubuntu ... CGO_ENABLED=1 go test -race -count=3 -timeout 5m ./...` (WSL2, Go 1.27.3) | 0 | `ok`, no race reports. WSL2, not native Linux. |
+
+| Schedule (final native run) | Result |
+| --- | --- |
+| 1. Ordinary operation waiting when a tool requests entry | Tool refused (`tool busy`) with no queue entry; the freed slot goes to the waiter, never to the tool. |
+| 2. Ordinary arrivals after tool admission | 15 admitted at once with no cancellation; the 16th waits and cancels the tool at once; during a held 20 ms drain the slot stays accounted, a replacement tool is refused; the arrival is admitted when the tool releases. |
+| 3. Earlier counterexample (tool + 15 active + 64 waiting, then an ingest write) | The write becomes waiter 65 and is admitted; the 81st ordinary operation is refused with 80 ordinary operations in flight. The baseline gate without tools refuses the same 81st operation. |
+| 4. Repeated tool readmission against a full gate with a waiting ordinary operation | 10,000 of 10,000 attempts refused (tools can starve under load). |
+| 5. Reader contention | Writes and three ordinary reads do not cancel the tool; a fourth ordinary read does; tool admission is refused while four ordinary reads run. |
+| 6. Close while a tool has not returned | Close cancels it, refuses both classes at once and returns only after the tool's actual release. |
+| 7. Control failure: tool held past the admission wait (shortened to 100 ms) | The waiting ordinary operation fails with `ErrBusy`. The guarantee rests on the measured release latency of a cancelled first-step read (≤ 37 ms in the ceiling runs), not on the gate. |
+| Stress, 3 s each: 120, 24 and 12 workers (one in three ordinary operations a read) plus a tool loop whose reads return 0–3 ms after cancellation | No invariant violation, zero admission-wait timeouts, zero unexpected errors. 120 workers: 31,896 admitted, 106,604 `ErrBusy`, every one with 80 ordinary operations in flight; tools 0 admitted (starved). 24 workers: 33,605 admitted, 0 busy; tools 344 admitted, 342 cancelled. 12 workers: 17,660 admitted, 0 busy; tools 1,065 admitted, 684 cancelled. |
+
+Result: in the model, a tool read never lowers ordinary capacity or overtakes waiting ordinary work; its only effect is to delay an ordinary operation by the tool's release latency. This is a model of the gate, not the store's code: the real gate change, its integration with `enter`/`quiesce`/device leases and a real-store schedule test are implementation work.
+
+## U1 Experiment 4: Integrated Store Run (2026-11-18)
+
+Scratch test `D:\tmp\kilo\u1-spike\zz_u1_integrated_test.go`, copied into `internal/store` only for each run and deleted afterwards (`git status` showed no change under `internal/` after every run). It opens a real store (`openTest`), seeds a synthetic device and the `edge_e` contact set (100,000 entries, four 40-byte U+0390 names; worst heap at the approved ceilings), runs the bounded `search_contacts` form through `Store.read` with the store's own `mcp_fold`, and ingests through `StoreMessages` (1,000 messages of 15 KiB, about 15 MiB of fields, or 60 of 256 KiB). Native Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`. Command each time: `U1_SPIKE=1 CGO_ENABLED=0 go test ./internal/store -run '^TestU1Integrated$' -count=1 -v -timeout 20m`.
+
+| Run | Exit | Result |
+| --- | --- | --- |
+| 1, single concurrent phase | 0 | Ingest without errors, but the -wal file reached **756,802,832 bytes** while back-to-back tool reads ran. |
+| 2, three phases | 1 | The first warm-up tool read failed with `context deadline exceeded`: it exceeded the store's 10 s operation limit (later runs took 3.1–4.5 s; the cause of the slow run was not identified). Cancellation returned the error as designed; no ingest was running. |
+| 3, three phases, -wal size guard | 0 | See the final run; same pattern (peak 159,954,912 bytes guarded). |
+| 4, byte-budget guard (cancel after 32 MiB of message fields committed during a read) | 0 | Ineffective: peak 606,641,192 bytes with 3 reads cancelled. Back-to-back reads chain their snapshots, so the WAL is never free of readers long enough to reset. |
+| 5, final | 0 | Below. |
+
+| Final run phase (20 s each, from a truncated WAL) | Batches / errors | Tool reads | Peak -wal | SQLite heap above use |
+| --- | --- | --- | --- | --- |
+| Ingest only (continuous, both batch shapes) | 22 / 0 | none | 41,438,992 | 0.59 MB |
+| Back-to-back tool reads, unguarded | 15 / 0 | 5 completed | **602,751,912** | 24.3 MB |
+| Tool reads admitted only while -wal ≤ 64 MiB, cancelled when it passes 128 MiB | 17 / 0 | 2 completed, 3 cancelled, 4,694 refused | 160,548,192 | 23.9 MB |
+| Same guard, light ingest (one message every 500 ms) | 40 / 0, max 17 ms | 6 completed, 0 cancelled, 0 refused | 2,830,472 | 23.8 MB |
+
+Alone: a tool read at the ceilings 3.1–3.7 s and 23.8 MB SQLite heap above use; a 15 MiB batch 0.9–1.1 s and 0.1 MB; a 60 × 256 KiB batch 0.65–0.79 s and 0.58 MB; 4.4 MB in use before. After every phase, four further batches with no tool brought the -wal file back to at most 64 MiB (`journal_size_limit`) by the second batch.
+
+Interpretation and limits: SQLite heap is not the binding constraint (24.3 MB together, against 256 MiB). WAL retention is: tool reads that follow each other keep a snapshot open continuously, and the WAL then grows with all ingest; no ingest error occurred within 20 s, but on a real disk that growth ends at the disk guard, which refuses writes. A -wal size admission guard (≤ 64 MiB, the existing `walLimitBytes`) with cancellation at 128 MiB bounded the peak to 2 × 64 MiB plus one batch here. The store has no public WAL hook in the pinned driver (it exposes commit, rollback and pre-update hooks), so the guard reads the file size; a file of at most 64 MiB implies a WAL reset since the last growth beyond it. Not shown: behaviour on a nearly full disk (a proposed free-space condition is in research.md R6), guarded device operations under load, the real coordinated gate, other native targets. Single host, single runs; timings are not bounds. T001 remains BLOCKED.
+
+## U1 Design-Review Follow-up: 5 s Timer and WAL Recovery (2026-11-18)
+
+After the design review of `68ce167` (CONCERNS), the owner accepted a 5 s tool-store timer, a recovery TRUNCATE checkpoint and the low-disk refusal. Scratch test `D:\tmp\kilo\u1-spike\zz_u1_timer_test.go`, copied into `internal/store` only for the run and deleted afterwards (`git status` clean under `internal/`). Real store (`openTest`), synthetic device with the `edge_e` contact set (100,000 entries, four 40-byte U+0390 names), 150,000 chats with two messages in every tenth, written through the writer. Native Windows/amd64, Go 1.27.4.
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `U1_SPIKE=1 CGO_ENABLED=0 go test ./internal/store -run '^TestU1Timer$' -count=1 -v -timeout 30m` | 0 | `PASS` in 100.07 s; output in `timer.out`. |
+
+| Read through `Store.read` with a 5 s cancellation request, 15 runs each | Timeouts | Min / median / p90 / max |
+| --- | --- | --- |
+| `search_contacts` at the ceilings, offset 0 | 0 | 1.645 / 1.835 / 2.351 / 2.669 s |
+| `search_contacts` at the ceilings, offset 100,000 | 0 | 1.854 / 2.079 / 2.375 / 2.590 s |
+| `list_chats` activity, no-match walk of C = 100,200 | 0 | 130 / 141 / 167 / 173 ms |
+| `list_chats` name, no-match walk | 0 | 93 / 120 / 149 / 171 ms |
+| `list_chats` unfiltered, offset 100,000 | 0 | 107 / 120 / 181 / 192 ms |
+| `get_contact_chats` walk | 0 | 234 / 247 / 315 / 357 ms |
+
+| WAL recovery without writes | Result |
+| --- | --- |
+| Three rounds: an ordinary read snapshot held while six 15 MiB batches commit, then released, then no writes for 200 ms | -wal 209,642,112 / 226,183,912 / 241,015,912 bytes after release, unchanged without writes (the size guard would refuse every tool read: the defect the review found). `PRAGMA wal_checkpoint(TRUNCATE)` on the writer: busy 0, took 698 / 959 / 784 ms, -wal 0 bytes afterwards. |
+| TRUNCATE issued while an ordinary read stays open for 300 ms | Waited in the busy handler, then succeeded: 550 ms, -wal 0 bytes. |
+
+Interpretation and limits: the 5 s request covers the measured reads with margin on this host. Earlier real-store runs at the contact ceilings took 3.1–4.5 s and one cold run over 10 s, so slower hosts can still return `timeout`; the CI tests assert mechanisms, not durations. The recovery checkpoint costs about 1 s of writer time for a WAL near 2 × 64 MiB plus batches, and runs at most once per 30 s. Not shown: the gate-driven trigger itself (implementation, T004/T005), a near-full disk, other native targets.
+
+### Remediation Validation
+
+| Date | Command / check | Result |
+| --- | --- | --- |
+| 2026-11-17 | PowerShell checklist assertions over `git grep -h -E '^- \[[ xX]\]' -- specs/006-mcp-stdio-tools/tasks.md` | Exit 0: 42 sequential unchecked tasks, US1 8, US2 6, parallel 14, expected story boundaries and a file reference on every task. |
+| 2026-11-17 | `git diff --check` | Exit 0: documentation patch whitespace-clean. |
+| 2026-11-17 | `git ls-files --eol -- specs/006-mcp-stdio-tools` | Exit 0: all ten tracked feature files show i/lf and w/lf, no CRLF. |
+| 2026-11-17 | Internal read-only remediation consistency pass and focused logger follow-up | Added explicit outer Enabled admission before ordinary severity filtering for real WARN sources at error level; corrected Handler ordering/current TextHandler terminology. No runtime tests, owner review or isolation proof. U1 remains OPEN/BLOCKED. |
+
+## Owner-Accepted Amendment to the Isolation Policy (2026-11-18)
+
+The design review of `87c3a11` returned CONCERNS. The owner accepted it without a further review, with the amendment below. It is recorded here, not in `contracts/store-and-lifecycle.md`, so that the reviewed commit stays current for the review gate; **it is binding for T004 and T005 and overrides sections 4 and 5 of that contract where they differ.** The code review checks the implementation against both. Fold it into the contract at the next design change that needs a review anyway.
+
+**M1: the recovery checkpoint is tool-class work.**
+
+1. A pending or running recovery checkpoint occupies the tool place in the gate, exactly like a tool read: while it is pending or running, tool reads are refused with `busy`, and a tool read and a checkpoint never hold the tool place together.
+2. It starts only under the tool admission conditions: no ordinary operation waiting and an active slot free. It never waits for a slot. If those conditions do not hold, it is not started; the next refused tool call tries again, subject to the 30 s rate limit.
+3. While it holds its slot, the ordinary waiter cap is 65, as for a tool read, so ordinary capacity stays 80.
+4. Because it never coexists with a tool snapshot, its busy-handler wait is only for ordinary reads, which are short.
+5. It does not count as a reader (it uses the writer connection). Ordinary writes queue behind it on the single writer connection for its duration (measured 0.55–0.96 s). Unlike a tool read, it is not cancelled by waiting ordinary work, because SQLite's checkpoint does not stop on interrupt in a useful state; the rate limit bounds how often this happens.
+6. T004 adds two schedules: (a) a checkpoint pending or running while a tool call arrives: refused with `busy`, no tool snapshot while the checkpoint holds the place; (b) checkpoint holding a slot with 15 ordinary active and 64 waiting: the next ordinary operation becomes waiter 65, and only the 81st ordinary operation gets `ErrBusy`.
+
+**Low findings, also binding for T005:**
+
+- If reading the `-wal` file size fails, the tool read is refused with `busy` and an ordinary `store.limit` event; it is not admitted on an unknown WAL size. A missing `-wal` file counts as size 0.
+- The free-space check (`diskGuard.check`, which may call the OS) and the `-wal` size checks run outside the gate's mutex. The gate decides on values read before it takes the lock; a check that has become stale between reading and deciding at most admits one tool read that the 128 MiB cancellation then bounds.
+- The checkpoint does not use `Store.write`, which opens a `BEGIN IMMEDIATE` transaction in which `wal_checkpoint` cannot run. It runs `PRAGMA wal_checkpoint(TRUNCATE)` directly on a writer connection under its own gate entry, and does not consult the disk guard: it frees disk space, so it must run even while the guard refuses writes.
+- Stale text superseded by `tasks.md` Current state, the contract's "Isolation Policy" and this amendment: `spike.md` "Resume Here" lines 12-13 and the "1 s store timer" mention near line 130; `research.md` R6 lines that say "Keep T001 blocked" or call the ceilings "not approved"; this file's "No review has run for 006" under the reviews table.
+
+## WAL Transaction Fence Proposal (2026-11-19)
+
+The [proposed fence](contracts/store-and-lifecycle.md#5-wal-guard) retains post-transaction measurement but orders it before the writer handoff. It supersedes the cancellation-only/stale-stat rationale of the 2026-11-18 amendment for review; the tool-class checkpoint, refusal on unknown WAL size and no filesystem I/O under the gate mutex stay binding. The next writer waits for actual reader return on the existing ordinary admission/control-failure path. No numeric WAL prediction, extra queue, new shutdown reason or changed retry semantics is proposed.
+
+**Source inspection and interception:** `Store.write` uses an explicit transaction; run-marker writes and device removal acquire the writer directly. The device container and delegates share `dbutil.NewWithDB(s.writer, ...)`; pinned `go.mau.fi/util v0.11.0` `dbutil/transaction.go:43-45,66-72,118-162` shows that `DoTxn` reuses the transaction in context and `Exec` without it goes to the writer. Pinned `modernc.org/sqlite v1.62.0` `connector.go:78-115` exposes `NewConnector` over the same package-level driver used by `sql.Open`. Wrap that connector for the one writer `sql.OpenDB` pool; the adapter, explicit transactions and autocommit then reach the same driver boundary. `tx.go:45-72` attempts rollback after a failed commit but preserves the original error, so a failed finalization must not make the next writer eligible on the assumption that the underlying transaction is clean. No wrapper has been implemented or verified.
+
+**Chosen free-space policy:** Sample fresh at tool admission and refuse the tool on a low or failed sample without changing the ordinary disk cache. Charge 128 MiB for the prefix the tool can retain beyond the same crossing transaction's physical frame span if written into a reset WAL. At the 640 MiB floor, that leaves 512 MiB before ordinary growth. This is a marginal WAL-retention argument for matched frame spans, not a hard bound on ordinary WAL size or on external disk use. Verify frame placement against the pin and the fresh-sample behavior independently of the held-snapshot test; a peak from one stress run does not establish the comparison.
+
+**Evidence still needed:** The prior held-snapshot experiment showed that actual release allows reset/truncation, not that the writer handoff enforces the new fence. After design clearance, T004/T005 need the crossing/next-writer/release schedule, coverage across explicit and implicit device transactions and reconnect, stable admission, and a fence that starts waiting partway through an existing lease. A checked-out but idle writer is allowed; entering SQLite before actual snapshot return is not. T035 repeats the mechanism under sustained native pressure, including the matched WAL-frame comparison and readmission. No new runtime tests ran for this amendment.
+
+After the drain failure latches, the next writer-pool calls must fail without waiting on the still-held snapshot; assert that for both a queued write and a device lookup. The pinned connection's context-aware, reset and validation methods are in `conn.go:1115-1130,1515-1564`; prepared context methods and row metadata are in `stmt.go:477-496` and `rows.go:282-354`. T004 must check the wrapper retains, and does not invent, optional interfaces. T035 must measure the serialized WAL-stat overhead as part of its existing pressure run.
+
+## Owner Reviews
+
+| Stage | Date | Commit | Verdict | Owner decision |
+| --- | --- | --- | --- | --- |
+| design | 2026-11-18 | 68ce167 | CONCERNS | Amend and review again: 5 s store timer, recovery TRUNCATE checkpoint, low-disk refusal accepted; all low findings fixed in the design |
+| design | 2026-11-18 | 87c3a11 | CONCERNS | Accepted without another review; M1 and the low findings fixed by the owner-accepted amendment in this file (binding for T004/T005) |
+| design | 2026-11-19 | 889ff65 | PASS | |
+| design | 2026-11-19 | 42827be | CONCERNS | |
+| design | 2026-11-19 | 8594218 | BLOCK | |
+| design | 2026-11-19 | 7d4336b | PASS | |
+| code | 2026-11-20 | c31b523 | BLOCK | |
+| code | 2026-11-20 | b129c95429c32e646f1aecae047c097bc91009a1 | BLOCK | |
+| code | 2026-11-20 | c8c504d12e42ef88cddbcaf591527112cdf72bf6 | BLOCK | |
+| code | 2026-11-20 | e06ac9a3bd29bcce129218942cc626d2b815b264 | BLOCK | |
+| code | 2026-11-20 | d539ae917549704136130bba9f01c6e94a8f111f | BLOCK | |
+| code | 2026-11-22 | 00353d0212c0dcf95ecb2947f12f1cc77c40cb07 | PASS | |
+
+The formal review checked the committed CI evidence and confirmed that the reviewed runtime tree matches `5aaaca4`. The reviewer could not run Go commands in its session. Separately, on 2026-11-22 the focused Windows/amd64 regression command above was rerun with `CGO_ENABLED=0`, `-count=1`, and `-timeout 3m`: exit 0, both packages passed; plain output did not count skips.
+
+The `d539ae9` review used the `owner-judge` rubric with GPT-6.2 Sol at High reasoning. It confirmed that the reader-first write failure and the malformed TOML, wrong-type and invalid `log_level` diagnostics from the prior review were addressed. Remaining blockers: a competing normal stop can still suppress an already-published stdout failure (`internal/mcp/connection.go:165`); a late write acknowledgment can win over the five-second deadline (`internal/mcp/transport.go:432`); and oversized `config.toml` is given syntax/type guidance instead of the size-limit remedy (`cmd/whatsapp-mcp/commands.go:838`). The review also flagged missing committed native evidence, now recorded locally above. The oversized tool-result audit category remains nonblocking. No new tests were run in review, no historical intermittent failure was attributed to these findings, and no finding was parked.
+
+The code-mode review of `e06ac9a` followed the `owner-judge` rubric with GPT-6.2 Sol at High reasoning. It confirmed the lock and config permission remedies and the green CI rerun. **Blocking:** a terminal stdout write failure can be lost when reader closure is classified as a normal stop (`internal/mcp/transport.go:374`, `internal/mcp/connection.go:497`); the source confirms the ordering defect but does not establish that it caused the intermittent Linux failure. **Blocking:** non-permission `config.toml` errors are reported as invalid command-line arguments instead of actionable configuration failures (`cmd/whatsapp-mcp/commands.go:838`). The reviewer inspected committed source and both CI attempts without running new tests. No findings were parked.
+
+The code-mode review of `c8c504d` followed the `owner-judge` rubric with GPT-6.2 Sol at High reasoning. It confirmed the database and unsafe-parent remedies, mandatory tool-store drain reporting, and current native CI evidence. **Remaining blocker:** stdio still drops the path-specific permission remedy for a non-private lock file (`cmd/whatsapp-mcp/commands.go:806`) and non-private `config.toml` (`internal/config/file.go:34`). These refusals still fail closed. The oversized-result audit category remains nonblocking. The reviewer inspected source and CI evidence without running local tests. Nothing was parked.
+
+The code-mode review of `b129c95` followed the `owner-judge` rubric with GPT-6.2 Sol at High reasoning. It confirmed that the `c31b523` quiet-stop finding is resolved. Remaining blockers: native Linux/amd64 and macOS/arm64 verification for the changed reporter; an actionable, path-appropriate remedy when stdio refuses a non-private storage file or a data directory beneath an unsafe parent (`cmd/whatsapp-mcp/commands.go:853`, `internal/mcp/diagnostics.go:305`); and a mandatory `tool_store_not_quiescent` category when the store drain latch triggers unsuccessful shutdown (`cmd/whatsapp-mcp/commands.go:621`). The oversized-result audit mismatch remains nonblocking. The reviewer used committed source and recorded evidence and ran no runtime tests. Nothing was parked.
+
+Code review of `c31b523` was read-only against `origin/main` (merge base `08c54a9`). **Blocker:** production stdio drops the quiet-stop failure reason and counts in its mandatory reporting path (`cmd/whatsapp-mcp/quiet_output.go`, `internal/mcp/diagnostics.go`). Existing category tests bypass that reporter. Restore bounded diagnostic metadata from trusted categories and cover the production reporting path. **Nonblocking:** the oversized-result path reports `internal` rather than `resource_limit` in the mandatory audit (`internal/mcp/server.go`). The reviewer ran no tests or builds and could not read the pinned WhatsApp fork's module-cache source. No review findings have been accepted or parked.
+
+The review of `42827be` confirmed the revised dependency order is acyclic and the integrated obligations are unchanged. It found that the current native CI test output does not surface the named diagnostic cases, skips or child exit statuses required to close the foundation. It also noted that the design needs to preserve the configured ordinary log level after config loads without creating a second stderr pump. This was a read-only design review; no runtime or native test evidence was produced.
+
+The [design amendment](tasks.md#diagnostic-command-tests-and-native-evidence-t045t046) assigns the focused native CI step to T046 and the shared ordinary threshold to T016/T046. T045 also covers healthy stderr at finalization and retains the failed-delivery exit precedence. These are planned changes, not test results or a new verdict.
+
+A read-only pre-review of the draft atop `5b14118` also flagged loss of actionable refusal text, an ambiguous forced exit 1, and existing command tests dependent on ordinary stderr. The amendment now requires bounded actionable refusal records, test-only observation of the forced callback and timely acknowledgment after cleanup, and migration of existing assertions to observable owner readiness and cleanup without losing offline, empty-stdout or refusal checks. This pre-review was not a gate verdict; no runtime evidence was produced.
+
+The independent design review of `8594218` used GPT-6.2 Sol with High reasoning and the repository `owner-judge` rubric. It confirmed that the diagnostic amendments preserve the acyclic task order and the native and integrated evidence gates. Its high-severity finding is in `contracts/store-and-lifecycle.md` section 5 and T035: the WAL guard in `internal/store/ops.go` checks size after commit and `internal/store/tool_reader.go` requests cancellation, but another batch can commit before the tool snapshot actually returns. A held snapshot can therefore pin a WAL larger than the promised 128 MiB plus one batch. Existing tests do not establish the bound for that schedule. Under FR-017 and Principle V, a revised mechanism must account for writes until actual snapshot return without weakening ingest or releasing a lease early. This is a source-derived counterexample, not an observed runtime failure. The review ran no runtime tests and produced no platform evidence.
+
+The independent design review of `7d4336b` used GPT-6.2 Sol with High reasoning and the repository `owner-judge` rubric. It confirmed that the serialized handoff prevents the second writer from entering SQLite while the snapshot drains, including across outer transactions in one device lease. It also confirmed the fail-fast rule after a latch, retained accounting, and unchanged diagnostic/native gates. The only non-blocking note is to record WAL-index sidecar (`-shm`) allocation separately in T035: the 128 MiB marginal retention argument applies to `-wal`, and the 512 MiB arithmetic is not a guaranteed filesystem floor. The review ran no runtime tests, builds or CI and produced no platform evidence.
+
+Design reviews are recorded above. The required design review follows task generation; the required code review follows implementation and evidence. A planning conformance table is not either review.

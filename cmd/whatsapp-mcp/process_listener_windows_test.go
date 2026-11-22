@@ -5,14 +5,13 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestProcessUnpairedShellsHaveNoTCPListener(t *testing.T) {
 	for _, kind := range []string{"stdio", "serve"} {
 		t.Run(kind, func(t *testing.T) {
 			p := start(t, true, childEnv(), kind, "--data-dir", privateDir(t))
-			p.waitFor(t, kind+": connection owner running", 10*time.Second)
+			p.waitOwner(t)
 			out, err := exec.Command("netstat", "-ano", "-p", "tcp").Output()
 			if err != nil {
 				t.Fatalf("inspect TCP listeners: %v", err)

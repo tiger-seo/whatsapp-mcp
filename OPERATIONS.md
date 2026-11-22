@@ -123,7 +123,7 @@ Every other check below is simulated or local.
 | --- | --- |
 | `status` | Reports the local snapshot offline. It never connects, never contacts WhatsApp and creates no files. It prints four fields (`connected`, `logged_in`, `pairing_required`, `wa_version`); `connected` is always `false` offline, and `logged_in` means a saved identity exists locally, not that WhatsApp still accepts it. It fails with the holder's PID while another command owns the data directory, and with exit 1 and a warning when the store is marked unsafe or comes from an older schema. |
 | `pair` | Opens one pairing window, draws the current QR code in the terminal and waits. It exits 0 only when the identity was saved and the connection was confirmed. After a fresh link whose stop check passed it prints "linked. The saved session can be reused." and the marker is clear; if the stop check failed it prints "linked. Offline recovery is required before the next run" with the failed category. |
-| `stdio`, `serve` | Open the store and the owner. With a clean store and a saved identity they connect once at startup; with an unsafe store they exit 1 and tell you recovery is needed. At an orderly stop they print "stopped. The saved session can be reused." after a passed quiet-stop check, or "offline recovery required (<category>)" and exit 1 after a failed one. |
+| `stdio`, `serve` | Open the store and the owner. With a clean store and a saved identity they connect once at startup; with an unsafe store they exit 1 and tell you recovery is needed. After a passed quiet-stop check they can report "stopped. The saved session can be reused." (`stdio` may drop this ordinary message). A failed check exits 1 and reports "offline recovery required (<category>)" when stderr is writable. |
 
 ### Pairing
 
@@ -260,8 +260,8 @@ recovery as above; do not delete the database to get around that.
 
 ## Message ingest (feature 005)
 
-`stdio`, `serve` and the connection that follows a `pair` now store the messages the account receives. There are
-still no MCP tools, so nothing reads them yet. "Implemented" and "verified" mean what they mean above. **Verified on
+`stdio`, `serve` and the connection that follows a `pair` store the messages the account receives. Feature 006
+adds read-only `stdio` access as described below. "Implemented" and "verified" mean what they mean above. **Verified on
 a real account so far**: two `pair` and `serve` runs on one account and one phone on Windows (2026-11-14), which stored
 live and history messages and showed that history chats were named before the device's contact sync had stored the
 saved names; the fix for that (below) has been tested on the simulator and with fakes only. Everything else comes from
@@ -334,3 +334,56 @@ answer took about 7.1 s of the 10 s limit. The owner accepted both on 2026-11-14
   a real group-name lookup, a stop during a real history chunk, the cause of 7 duplicate writes absorbed by the
   upsert in the real run, native Linux and macOS runs, CI, and long-run behaviour. The race detector ran on WSL2
   (Linux under Windows), not on native Linux.
+
+## Local MCP reads (feature 006)
+
+Configure a trusted local MCP client to launch `whatsapp-mcp stdio` directly. Do not merge stderr into stdout:
+stdout is reserved for MCP protocol frames. The command takes the exclusive data-directory lock and refuses to
+start if another process holds it. A saved session can still connect at startup under the existing owner policy;
+the tools themselves read the local store and work while the account is disconnected.
+
+**Access and privacy:** launching `stdio` authorizes that client to read all stored chats and contacts. There is
+no per-chat restriction or per-read approval. Names, captions and messages are untrusted data, not instructions.
+A prompt-injected client can request unrelated conversations, and the client or its AI provider can retain
+results. Use a client and provider whose data handling you trust. There are no MCP login, QR, pairing, recovery,
+send or media download tools, no HTTP listener and no proxy. `pair` and offline `status` remain separate commands.
+
+| Tool | What it returns |
+| --- | --- |
+| `list_chats` | Stored chats filtered by literal name or JID substring, sorted by activity or name. Default page size: 30. |
+| `get_chat` | One exact stored chat JID, or `not_found`. Both chat tools accept `include_last_message: false` to skip latest-message detail while preserving last activity. |
+| `search_contacts` | Distinct people matching a literal substring of any locally stored name or the stored phone digits. Default page size: 50. |
+| `get_direct_chat_by_contact` | One exact direct chat. For mapped identities, the phone chat wins; if absent, the exact mapped LID chat is used. An unmapped LID matches only its own chat. No partial-number lookup. |
+| `get_contact_chats` | Distinct stored chats with the person's direct identities or messages from them, with each chat's actual latest message. Default page size: 20. |
+
+Search is case-insensitive and literal, including punctuation. For a phone substring in `search_contacts`, use
+digits as stored. The two contact lookup tools instead normalize supported formatted phone numbers, phone JIDs
+and LIDs through local mappings. Lists accept 1 to 200 rows; pages start at zero and cannot skip more than
+100,000 rows. Success returns structured data and an equivalent safe JSON text representation. An over-budget
+read returns `resource_limit`, not a partial page. Try fewer rows or omit latest detail where supported.
+
+**Admission and shutdown:** one tool is admitted through completion of its response write, with no waiting tool
+queue. `busy` means the tool credit, store capacity or WAL admission check refused the read; retry later. A WAL
+larger than 64 MiB can trigger a rate-limited recovery checkpoint; do not delete SQLite sidecars. A fresh
+free-space sample below 640 MiB, an unavailable sample or a refusing disk guard yields `unavailable`. Free space
+and retry. Ordinary writes retain their existing policy. A tool-held WAL crossing above 128 MiB cancels the read
+and fences the next writer until the snapshot returns. If the wait expires, writes fail rather than bypass the
+held snapshot. This is not a cap on ordinary WAL growth.
+
+The session caps input frames at 64 KiB, JSON depth at 16 and tokens at 4,096. There are four outstanding request
+slots, including the one tool. After 1,024 forwarded notifications, the next eligible notification ends the
+session. Output caps are 2 MiB structured JSON, 2 MiB safe JSON text and 8 MiB for the full response frame.
+Store and tool timers request cancellation at 5 s and 10 s respectively; these are not completion guarantees.
+Output waits at most 5 s, and EOF or the first stop signal starts normal drain. A tool lease is retained until
+its transaction and connection return; the store and lock are not released until actual tool and owner work drain.
+A store-control, device-storage or ingest failure leads to unsuccessful shutdown, even if EOF arrives first.
+
+Ordinary stderr logs can be dropped. Denials, failures and loss warnings are mandatory: overflow, a failed write
+or missing full-write acknowledgment within 5 s causes exit 1 after normal cleanup. A full stderr write is not
+proof that someone retained the record; there is no durable audit log. The existing explicit second-signal force
+exit remains available.
+
+**Verification:** automated suites, including native pipe and shutdown checks, ran with synthetic stores and
+fake owners on Windows/amd64, Linux/amd64 and macOS/arm64. Linux/arm64 and macOS/amd64 were cross-built, not
+verified natively. No real account was used for feature 006. See the
+[verification record](specs/006-mcp-stdio-tools/verification.md) for the exact coverage and limitations.

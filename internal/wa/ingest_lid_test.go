@@ -165,16 +165,57 @@ func TestIngestLIDNoteMappingMergesWithoutRestart(t *testing.T) {
 	}
 }
 
+type hintCommitStore struct {
+	ingestStore
+	armed, missing, committed chan struct{}
+	first                     sync.Once
+}
+
+func (s *hintCommitStore) PhoneForLID(ctx context.Context, lid string) (string, bool, error) {
+	phone, ok, err := s.ingestStore.PhoneForLID(ctx, lid)
+	select {
+	case <-s.armed:
+		if err == nil && !ok {
+			s.first.Do(func() {
+				close(s.missing)
+				<-s.committed
+			})
+		}
+	default:
+	}
+	return phone, ok, err
+}
+
 func TestIngestLIDHintRetriedUntilTheMappingIsVisible(t *testing.T) {
-	r := newLIDRig(t)
-	r.in.HandleMessage(lidMessage("V1", lidJID(), lidJID()))
-	// The library reports the mapping inside a transaction that has not committed yet.
+	s := &hintCommitStore{armed: make(chan struct{}), missing: make(chan struct{}), committed: make(chan struct{})}
+	r := newIngestRig(t, func(cfg *IngestConfig) { s.ingestStore = cfg.Store; cfg.store = s })
+	r.in.hintRetry = 20 * time.Millisecond
+	dev, barrier := savedDevice(t, r.st)
+	t.Cleanup(func() { _ = barrier.Retire(context.Background()) })
+	release := sync.OnceFunc(func() { close(s.committed) })
+	defer release()
+	if !r.in.HandleMessage(lidMessage("V1", lidJID(), lidJID())) {
+		t.Fatal("message not accepted")
+	}
+	// Hold the first missing result until the commit. No mapping observer is
+	// registered, so only a retry of this hint can trigger the merge.
+	close(s.armed)
 	r.in.NoteMapping(lidJID().String(), "", peerJID().String())
-	time.Sleep(3 * r.in.hintRetry)
-	r.mapLID(t, lidJID(), peerJID())
+	select {
+	case <-s.missing:
+	case <-time.After(10 * time.Second):
+		t.Fatal("hint never observed the missing mapping")
+	}
+	if err := dev.LIDs.PutLIDMapping(context.Background(), lidJID(), peerJID()); err != nil {
+		t.Fatal(err)
+	}
+	release()
 	waitCounter(t, "merged", func() uint64 { return r.in.Counters().Merged }, 1)
 	if c := r.in.Counters(); c.HintsDropped != 0 {
 		t.Fatalf("hint dropped although the mapping appeared within the attempts: %+v", c)
+	}
+	if got := getMessage(t, r.st, peerJID().String(), "V1"); got.SenderJID != peerJID().String() {
+		t.Fatalf("after the merge the message sender is %q", got.SenderJID)
 	}
 }
 
@@ -310,6 +351,25 @@ func TestIngestLIDRelookupUnderTheLock(t *testing.T) {
 	})
 }
 
+type flushDeadlineLookups struct {
+	ingestStore
+	flush bool
+	calls int
+	err   error
+}
+
+func (s *flushDeadlineLookups) PhoneForLID(ctx context.Context, lid string) (string, bool, error) {
+	if !s.flush {
+		return s.ingestStore.PhoneForLID(ctx, lid)
+	}
+	s.calls++
+	if s.calls == 1 {
+		<-ctx.Done()
+		s.err = ctx.Err()
+	}
+	return "", false, ctx.Err()
+}
+
 // A flush with many unmapped LIDs and a slow store re-looks them up under one deadline and writes the rest as LIDs.
 func TestIngestLIDRelookupOfAFlushHasOneDeadline(t *testing.T) {
 	var convs []*waHistorySync.Conversation
@@ -318,17 +378,16 @@ func TestIngestLIDRelookupOfAFlushHasOneDeadline(t *testing.T) {
 		convs = append(convs, conversation(lid, "", webText(fmt.Sprintf("D%03d", i), "x", histTime)))
 	}
 	h := newHistoryRig(t, historyOf(convs...))
-	slow := &slowLookups{ingestStore: h.in.st, block: true}
+	slow := &flushDeadlineLookups{ingestStore: h.in.st}
 	h.in.st = slow
 	h.in.lidLookup = 10 * time.Millisecond
+	h.in.beforeWriteLock = func() { slow.flush = true }
 	h.deliver(t, 1)
 	if n := messageCount(t, h.st); n != 250 {
 		t.Fatalf("%d stored, want all 250 under their LIDs", n)
 	}
-	// One lookup deadline per LID under the lock would hold it 250 times 10 ms, 2.5 s, before the write; the flush has
-	// one deadline. The write itself takes about 1.1 s under the race detector, so the limit sits between.
-	if held := time.Duration(h.in.maxLockHold.Load()); held > 1800*time.Millisecond {
-		t.Fatalf("the lock was held %v for one flush; the re-lookup has one deadline of %v", held, h.in.lidLookup)
+	if slow.calls != 1 || !errors.Is(slow.err, context.DeadlineExceeded) {
+		t.Fatalf("flush made %d lookups after the first expired with %v; want one shared deadline", slow.calls, slow.err)
 	}
 }
 

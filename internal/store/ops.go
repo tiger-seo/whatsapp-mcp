@@ -33,6 +33,7 @@ func (s *Store) report(op string, err error) error {
 // write runs fn in one transaction on the writer, under admission and the disk guard. fn's error rolls the
 // transaction back. A commit that fails after cancellation is indeterminate.
 func (s *Store) write(ctx context.Context, fn func(ctx context.Context, tx *sql.Tx) error) error {
+	defer s.gate.writerIntent()()
 	op := newOpID()
 	release, opCtx, err := s.gate.enter(ctx)
 	if err != nil {
@@ -83,21 +84,31 @@ func nullableBytes(b []byte) any {
 // reader busy.
 func (s *Store) read(ctx context.Context, name string, fn func(ctx context.Context, conn *sql.Conn) error) error {
 	op := newOpID()
-	release, opCtx, err := s.gate.enter(ctx)
-	if err != nil {
-		return s.report(op, err)
+	opCtx := ctx
+	if ctx.Value(toolReadKey{}) != s {
+		release, admitted, err := s.gate.enterRead(ctx)
+		if err != nil {
+			return s.report(op, err)
+		}
+		defer release()
+		opCtx = admitted
 	}
-	defer release()
 	conn, err := s.reader.Conn(opCtx)
 	if err != nil {
 		return s.report(op, err)
 	}
-	defer conn.Close()
-	if s.hooks.onRead != nil {
-		defer s.hooks.onRead(conn)()
+	err = func() error {
+		defer conn.Close()
+		if s.hooks.onRead != nil {
+			defer s.hooks.onRead(conn)()
+		}
+		if s.hooks.queryHold != nil {
+			s.hooks.queryHold(opCtx, name)
+		}
+		return fn(opCtx, conn)
+	}()
+	if err == nil {
+		err = opCtx.Err()
 	}
-	if s.hooks.queryHold != nil {
-		s.hooks.queryHold(opCtx, name)
-	}
-	return s.report(op, fn(opCtx, conn))
+	return s.report(op, err)
 }

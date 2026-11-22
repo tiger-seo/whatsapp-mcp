@@ -127,6 +127,51 @@ jobs:
           echo 'TMP=D:\wa-tmp' >> "$GITHUB_ENV"
       # The store's tests include concurrency and crash tests; the default 10 min is too tight for the slowest runner (Windows needs more than 15 min for the limit and memory tests).
       - run: go test -timeout 30m ./...
+      - name: Native stdio diagnostic shutdown evidence
+        if: ${{ !cancelled() && (runner.os == 'Linux' || runner.os == 'macOS') }}
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          echo "commit=$(git rev-parse HEAD) date=$(date -u +%FT%TZ) native=$(uname -sm) go=$(go env GOOS GOARCH | xargs)"
+          status=0
+          go test -count=1 -json -timeout 3m -run '^TestMCPDiagnosticShutdownNative$' ./cmd/whatsapp-mcp > "$RUNNER_TEMP/diagnostics.jsonl" || status=$?
+          echo "go_test_exit=$status"
+          jq -r 'select((.Test // "") | startswith("TestMCPDiagnosticShutdownNative")) | select(.Action == "output") | .Output' "$RUNNER_TEMP/diagnostics.jsonl"
+          jq -s 'reduce (.[] | select(.Test)) as $e ({pass: 0, fail: 0, skip: 0}; if has($e.Action) then .[$e.Action] += 1 else . end)' "$RUNNER_TEMP/diagnostics.jsonl"
+          for case in blocked_startup blocked_operation blocked_drain closed_stderr first_signal forced_second_signal; do
+            jq -es --arg name "TestMCPDiagnosticShutdownNative/$case" '
+              any(.[]; .Test == $name and .Action == "pass") and
+              any(.[]; .Test == $name and .Action == "output" and (.Output | contains("child_exit=1 expected_exit=1"))) and
+              (all(.[]; .Test != $name or (.Action != "skip" and .Action != "fail")))
+            ' "$RUNNER_TEMP/diagnostics.jsonl" >/dev/null || { echo "::error::missing passing native evidence for $case"; exit 1; }
+          done
+          jq -es 'any(.[]; .Test == "TestMCPDiagnosticShutdownNative/forced_second_signal" and .Action == "output" and (.Output | contains("forced_callback=true")))' "$RUNNER_TEMP/diagnostics.jsonl" >/dev/null
+          exit "$status"
+      - name: Native integrated MCP pipe evidence
+        if: ${{ !cancelled() && (runner.os == 'Linux' || runner.os == 'macOS') }}
+        shell: bash
+        run: |
+          echo "commit=$(git rev-parse HEAD) date=$(date -u +%FT%TZ) native=$(uname -sm) go=$(go env GOOS GOARCH | xargs)"
+          results="$RUNNER_TEMP/mcp-pipes.jsonl"
+          status=0
+          go test -count=2 -json -timeout 8m -run '^Test(MCPPipe(Native|Unix)|MCPHarnessHeldOwnerAndCooperativeStreams|MCPStdioIntegratedDrain)$' ./cmd/whatsapp-mcp > "$results" || status=$?
+          echo "go_test_exit=$status"
+          jq -r 'select(.Action == "output") | .Output' "$results"
+          jq -s 'reduce (.[] | select(.Test)) as $e ({pass: 0, fail: 0, skip: 0}; if has($e.Action) then .[$e.Action] += 1 else . end)' "$results"
+          for case in Native/{first_signal,partial_stdin_eof,partial_stdin_timeout,slow_stdout,blocked_stdout,all_blocked_stdout,closed_stdout,client_cancel,stderr_blocked_startup,stderr_blocked_operation,stderr_blocked_drain,stderr_blocked_overflow,stderr_closed} Unix/{stderr_closed_startup,stderr_closed_ordinary,device_fault_eof,forced_second_signal}; do
+            jq -es --arg name "TestMCPPipe$case" '
+              (map(select(.Test == $name and .Action == "pass")) | length == 2) and
+              (map(select(.Test == $name and .Action == "output" and (.Output | test("child_exit=[01] expected_exit=[01] normal_cleanup=true")))) | length == 2)
+            ' "$results" >/dev/null || { echo "::error::missing repeated native evidence for $case"; exit 1; }
+          done
+          jq -es '
+            all(.[]; .Action != "skip" and .Action != "fail") and
+            (map(select(.Test == "TestMCPPipeUnix/forced_second_signal" and .Action == "output" and (.Output | contains("forced_callback=true")))) | length == 2) and
+            (map(select(.Test == "TestMCPHarnessHeldOwnerAndCooperativeStreams" and .Action == "pass")) | length == 2) and
+            (map(select(.Test == "TestMCPStdioIntegratedDrain" and .Action == "pass")) | length == 2)
+          ' "$results" >/dev/null
+          exit "$status"
       # Which unsafe-run, recovery and terminal tests ran or skipped on this OS: the plain run above prints only
       # package results. The summary is the evidence that the platform gates were exercised, not just compiled.
       - name: unsafe-run platform tests (verbose summary)

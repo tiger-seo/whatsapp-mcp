@@ -80,7 +80,14 @@ func TestShellIngestFailureStopsTheCommand(t *testing.T) {
 				t.Error("the owner was not stopped through the normal stop")
 			}
 			errText := r.stderr.String()
-			if strings.Count(errText, storageFailedMessage+"\n") != 1 {
+			message := storageFailedMessage + "\n"
+			if kind == "stdio" {
+				message = "reason=storage_failure"
+				if !strings.Contains(errText, "event=terminal_fault") || !strings.Contains(errText, "messages may be missing") {
+					t.Errorf("missing terminal category or recovery guidance: %s", errText)
+				}
+			}
+			if strings.Count(errText, message) != 1 {
 				t.Errorf("stderr does not carry the storage message exactly once:\n%s", errText)
 			}
 			if out := r.stdout.String(); out != "" {

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/tiger-seo/whatsapp-mcp/internal/private"
+	wastore "go.mau.fi/whatsmeow/store"
+	"go.mau.fi/whatsmeow/types"
 )
 
 // The seeded database of the benchmark and the plan test: 100,000 messages across 1,000 chats (900 direct, 100
@@ -87,10 +89,17 @@ func buildSeed() (root, dir string, err error) {
 		contacts = append(contacts, contactSeed{jid: phoneJID(fmt.Sprintf("49153%07d", i)), full: fmt.Sprintf("Contact %04d", i)})
 	}
 	seedContacts(tb, dev, contacts...)
+	mappings := make([]wastore.LIDMapping, 0, seedContactCount+1)
 	for i := 0; i < seedContactCount; i++ {
-		seedLIDMapping(tb, dev, fmt.Sprintf("7%011d", i), fmt.Sprintf("49153%07d", i))
+		mappings = append(mappings, wastore.LIDMapping{
+			LID: types.NewJID(fmt.Sprintf("7%011d", i), types.HiddenUserServer),
+			PN:  types.NewJID(fmt.Sprintf("49153%07d", i), types.DefaultUserServer),
+		})
 	}
-	seedLIDMapping(tb, dev, bigLID, bigPhone)
+	mappings = append(mappings, wastore.LIDMapping{LID: types.NewJID(bigLID, types.HiddenUserServer), PN: types.NewJID(bigPhone, types.DefaultUserServer)})
+	if err := dev.LIDs.PutManyLIDMappings(context.Background(), mappings); err != nil {
+		return root, dir, fmt.Errorf("seed LID mappings: %w", err)
+	}
 	seedContacts(tb, dev, contactSeed{jid: phoneJID(bigPhone), full: "Big Contact"})
 	if tb.failed != "" {
 		return root, dir, fmt.Errorf("%s", tb.failed)
@@ -279,13 +288,59 @@ func TestPlanProblemsRejectsBadPlans(t *testing.T) {
 	}
 }
 
+// boundedChatPlan removes only the two plan operations required by the bounded
+// aggregate query, and only when its SQL contains both independent limits.
+func boundedChatPlan(lines []string, query string) []string {
+	q := strings.Join(strings.Fields(query), " ")
+	ceiling := "(SELECT count(*) FROM (SELECT jid FROM chats LIMIT 100201)) ELSE 0 END"
+	page := (strings.Contains(q, "CASE WHEN count(*) < ?2 THEN "+ceiling) && strings.HasSuffix(q, " LIMIT ?2 OFFSET ?3)")) ||
+		(strings.Contains(q, "CASE WHEN count(*) < ?5 THEN "+ceiling) && strings.HasSuffix(q, " LIMIT ?5 OFFSET ?6)"))
+	if !page || !strings.Contains(q, " LIMIT 100200)") || !strings.Contains(q, "json_group_array(") {
+		return lines
+	}
+	var filtered []string
+	var countScan, aggregateSort bool
+	for _, line := range lines {
+		if line == "SCAN chats USING COVERING INDEX sqlite_autoindex_chats_1" && !countScan {
+			countScan = true
+			continue
+		}
+		if line == "USE TEMP B-TREE FOR json_group_array(ORDER BY)" && !aggregateSort {
+			aggregateSort = true
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	return filtered
+}
+
+func TestBoundedChatPlanKeepsUnsafeOperations(t *testing.T) {
+	lines := []string{"SCAN chats USING COVERING INDEX sqlite_autoindex_chats_1", "USE TEMP B-TREE FOR json_group_array(ORDER BY)", "USE TEMP B-TREE FOR ORDER BY", "SCAN chats"}
+	query := "SELECT json_group_array(x) CASE WHEN count(*) < ?2 THEN (SELECT count(*) FROM (SELECT jid FROM chats LIMIT 100201)) ELSE 0 END FROM (SELECT jid FROM chats LIMIT 100200) LIMIT ?2 OFFSET ?3)"
+	if got := boundedChatPlan(lines, query); len(got) != 2 || len(planProblems(got, false)) != 2 {
+		t.Fatalf("unsafe operations not retained: %v", got)
+	}
+	for _, duplicate := range lines[:2] {
+		got := boundedChatPlan(append(append([]string{}, lines[:2]...), duplicate), query)
+		if len(planProblems(got, false)) == 0 {
+			t.Errorf("duplicate operation was accepted: %s", duplicate)
+		}
+	}
+	for _, bad := range []string{strings.Replace(query, "LIMIT 100201", "", 1), strings.Replace(query, "LIMIT 100200", "", 1), strings.Replace(query, "LIMIT ?2 OFFSET ?3", "", 1)} {
+		if got := boundedChatPlan(lines, bad); len(got) != len(lines) {
+			t.Fatalf("incomplete bounds accepted: %s", bad)
+		}
+	}
+}
+
 // planCase is one operation of TestQueryPlans: what it runs, what its plans must contain, and what they must not.
 type planCase struct {
-	name      string
-	run       func(ctx context.Context, st *Store) error
-	want      []string
-	notWant   []string
-	allowTemp bool
+	name        string
+	run         func(ctx context.Context, st *Store) error
+	want        []string
+	notWant     []string
+	allowTemp   bool
+	boundedChat bool
 }
 
 // TestQueryPlans holds the expected plan of every chat, contact and message query on the seeded database: a search on a named index for
@@ -308,24 +363,24 @@ func TestQueryPlans(t *testing.T) {
 		return func(ctx context.Context, st *Store) error { _, err := st.ListMessages(ctx, f, c, p); return err }
 	}
 	for _, tc := range []planCase{
-		{name: "ListChats activity", want: []string{"SCAN chats USING INDEX chats_last_activity", latest},
+		{name: "ListChats activity", boundedChat: true, want: []string{"SCAN chats USING INDEX chats_last_activity", latest},
 			run: func(ctx context.Context, st *Store) error {
 				_, err := st.ListChats(ctx, "4915200", ByLastActivity, true, page(10, 0))
 				return err
 			}},
-		{name: "ListChats name", want: []string{"SCAN chats USING INDEX chats_name"},
+		{name: "ListChats name", boundedChat: true, want: []string{"SCAN chats USING INDEX chats_name"},
 			run: func(ctx context.Context, st *Store) error {
 				_, err := st.ListChats(ctx, "", ByName, false, page(10, 0))
 				return err
 			}},
 		{name: "GetChat", want: []string{chatByKey, latest},
-			run: func(ctx context.Context, st *Store) error { _, err := st.GetChat(ctx, unmapped); return err }},
+			run: func(ctx context.Context, st *Store) error { _, err := st.GetChat(ctx, unmapped, true); return err }},
 		{name: "DirectChat", want: []string{chatByKey, "whatsmeow_lid_map_2 (pn=?)"},
 			run: func(ctx context.Context, st *Store) error {
 				_, err := st.DirectChat(ctx, "+49 152 0000005")
 				return err
 			}},
-		{name: "ContactChats by phone",
+		{name: "ContactChats by phone", boundedChat: true,
 			want: []string{"SCAN chats USING COVERING INDEX chats_last_activity",
 				"SEARCH messages USING COVERING INDEX messages_chat_sender_phone (chat_jid=? AND sender_phone=?)",
 				"SEARCH messages USING COVERING INDEX messages_chat_sender_jid (chat_jid=? AND sender_jid=?)"},
@@ -333,7 +388,7 @@ func TestQueryPlans(t *testing.T) {
 				_, err := st.ContactChats(ctx, bigPhone, page(10, 0))
 				return err
 			}},
-		{name: "ContactChats by LID", want: []string{"SCAN chats USING COVERING INDEX chats_last_activity", "whatsmeow_lid_map_1 (lid=?)"},
+		{name: "ContactChats by LID", boundedChat: true, want: []string{"SCAN chats USING COVERING INDEX chats_last_activity", "whatsmeow_lid_map_1 (lid=?)"},
 			run: func(ctx context.Context, st *Store) error {
 				_, err := st.ContactChats(ctx, lidJID(bigLID), page(10, 0))
 				return err
@@ -412,7 +467,11 @@ func TestQueryPlans(t *testing.T) {
 			var all []string
 			for _, q := range rec.queries {
 				lines := planOf(t, st, q)
-				for _, p := range planProblems(lines, tc.allowTemp) {
+				checked := lines
+				if tc.boundedChat {
+					checked = boundedChatPlan(lines, q.sql)
+				}
+				for _, p := range planProblems(checked, tc.allowTemp) {
 					t.Errorf("%.80s...: %s", strings.Join(strings.Fields(q.sql), " "), p)
 				}
 				all = append(all, lines...)
@@ -445,7 +504,7 @@ func BenchmarkQueries(b *testing.B) {
 		{"ListChats/activity", func() error { _, err := st.ListChats(ctx, "", ByLastActivity, true, page(50, 0)); return err }},
 		{"ListChats/name", func() error { _, err := st.ListChats(ctx, "", ByName, true, page(50, 0)); return err }},
 		{"ListChats/search", func() error { _, err := st.ListChats(ctx, "4915200", ByLastActivity, true, page(50, 0)); return err }},
-		{"GetChat", func() error { _, err := st.GetChat(ctx, unmapped); return err }},
+		{"GetChat", func() error { _, err := st.GetChat(ctx, unmapped, true); return err }},
 		{"DirectChat", func() error { _, err := st.DirectChat(ctx, unmapped); return err }},
 		{"ContactChats/phone", func() error { _, err := st.ContactChats(ctx, bigPhone, page(50, 0)); return err }},
 		{"ContactChats/lid", func() error { _, err := st.ContactChats(ctx, lidJID(bigLID), page(50, 0)); return err }},

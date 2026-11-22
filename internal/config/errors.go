@@ -38,6 +38,9 @@ func (e *SettingError) Error() string {
 // secretText stands for a secret value wherever one would be shown.
 const secretText = "(secret)"
 
+// ErrFileTooLarge identifies a config.toml that exceeds MaxFileSize.
+var ErrFileTooLarge = errors.New("is larger than 1 MiB")
+
 // FileError is a problem with config.toml itself: syntax, an unknown or forbidden key, a wrong type, or a
 // file that cannot be read. Line and Column are 0 when not known.
 type FileError struct {
@@ -46,7 +49,10 @@ type FileError struct {
 	Column int
 	Key    string
 	Reason string
+	cause  error
 }
+
+func (e *FileError) Unwrap() error { return e.cause }
 
 func (e *FileError) Error() string {
 	switch {
