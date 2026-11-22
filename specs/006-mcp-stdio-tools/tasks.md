@@ -10,6 +10,8 @@
 
 ## Current State
 
+**2026-11-21 delivery checkpoint:** [Native CI passed for `5aaaca4`](verification.md#output-deadline-and-config-size-follow-up-2026-11-20-utc), including both focused Unix pipe checks. T042 remains open: commit the updated evidence with authorization, then obtain and record the renewed owner code review.
+
 **2026-11-20 fifth review follow-up:** Stdio retains published stdout failures through normal guard shutdown, rejects late output acknowledgments, and reports the 1 MiB config limit. The [full Windows suite and local checks](verification.md#output-deadline-and-config-size-follow-up-2026-11-20-utc) passed. T042 remains open pending native CI and renewed owner review.
 
 **2026-11-20 fifth code review:** CI passed for `d539ae9`, but [owner review](verification.md#owner-reviews) returned `BLOCK` on a normal stop masking a published stdout failure, acceptance of a late output acknowledgment, and misleading guidance for oversized `config.toml`. Current native evidence is recorded locally. T042 remains open; no finding was parked.

@@ -41,7 +41,18 @@ Stdio checks the framed output failure after the SDK join even when normal guard
 | `go build -o /dev/null ./cmd/whatsapp-mcp` | Exit 0 for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64. |
 | `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...` | Exit 0; no vulnerabilities found. |
 
-Current native CI and renewed owner review remain pending for these changes. No historical intermittent failure was attributed to either output finding.
+Native CI passed for these changes on 2026-11-20 UTC ([push run 44802121398](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/44802121398), commit `5aaaca48442cc9bbfdbefaf26c510f8de6f8fd8e`). Job results and logs were checked on 2026-11-21 UTC with `gh run view 44802121398 --json headSha,event,createdAt,conclusion,jobs` and `gh run view 44802121398 --log`.
+
+| CI gate (`CGO_ENABLED=0`) | Result |
+| --- | --- |
+| `go test -timeout 30m ./...` | Exit 0 on Windows, Linux/amd64 and macOS/arm64; 10 successful package results on each runner (some cached). Full-suite output does not report named-test skip counts. |
+| Native stdio diagnostic shutdown evidence | Linux/amd64 and macOS/arm64: direct test exit 0 on each, 7 pass events (six required subtests and their parent), 0 failures, 0 skips. The workflow checked child exit status and the forced-path observation. |
+| Native integrated MCP pipe evidence | Linux/amd64 and macOS/arm64: direct test exit 0 on each, 60 pass events across two repetitions, 0 failures, 0 skips. The workflow checked repeated required cases, child exit and normal cleanup evidence, and cooperative and integrated drain tests. |
+| `check` | Passed gofmt, vet, module verification, SQLite/libc consistency, vulnerability scan, data-directory isolation check and all five cross-builds. |
+
+The two focused Unix-only steps were skipped as configured on Windows; the Windows full suite passed. The optional heavy-store job did not run. No historical intermittent failure was attributed to either output finding.
+
+On 2026-11-22, `owner-judge` returned a scoped code PASS for `d539ae9..5aaaca4` and relevant callers. It confirmed that a published stdout failure survives normal stop, a late acknowledgment cannot turn a timeout into success, and the oversized-config refusal names the 1 MiB limit. No new blocker was found. The reviewer noted two non-blocking limits: stdin EOF may interrupt a pending reply and still exit 0, an outcome the contract does not specify; and the acknowledgment regression checks timestamps rather than racing a real pipe write at the deadline. The reviewer relied on GitHub CI job results and did not rerun local tests. This is not a gate-clearing review row: the CI evidence is not yet committed, and T042 remains open.
 
 ### Stdout Failure and Config Diagnostics Follow-up (2026-11-20 UTC)
 
