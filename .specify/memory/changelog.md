@@ -2,6 +2,20 @@
 
 ## Merged Features Log
 
+### Message Ingest — archived 2026-11-22
+**Branch:** 005-message-ingest
+**Spec:** [specs/005-message-ingest/spec.md](../archive/005-message-ingest/spec.md)
+
+**What was added:**
+- Store supported live messages and supplied history, preserving captions and media metadata without downloading media.
+- Normalize and reconcile LID identities and resolve chat names without a network lookup per message.
+- Report incomplete history and receive overload; stop the connected command on message-store failure without weakening shutdown order.
+
+**New Components:**
+- Generation-owned ingest adapter and bounded history, naming and LID workers in `internal/wa`; store validation and read helpers; terminal failure wiring in connected commands.
+
+**Tasks Completed:** 56/57 tasks
+
 ### Reusable Session After a Proven Quiet Stop — archived 2026-11-22
 **Branch:** 004-shutdown-drain
 **Spec:** [specs/004-shutdown-drain/spec.md](../archive/004-shutdown-drain/spec.md)

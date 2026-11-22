@@ -6,7 +6,7 @@
   006–007 MCP read tools.
 - **Owner:** Maintainer `tiger-seo`.
 - **Review trigger:** a new store reader or admission-policy change, or an `ingest_failed` with error class `busy`.
-- **Source:** `specs/005-message-ingest/research.md` R9.
+- **Source:** `.specify/archive/005-message-ingest/research.md` R9.
 
 ## Problem
 

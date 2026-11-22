@@ -30,8 +30,8 @@ feature security decisions. `docs/roadmap.md` orders the features. The storage s
 ### `specs/NNN-*/`: feature specs
 Every feature so far: 001 binary skeleton, 002 SQLite storage, 003 connection, pairing and status (all merged), 004
 shutdown drain (pull request #11). Each has `spec.md`, `plan.md`, `tasks.md`, contracts and a `verification.md` with
-the evidence. The binary skeleton, storage, connection/pairing/status and shutdown-drain baselines are consolidated in
-`.specify/memory/spec.md` and `.specify/memory/plan.md`; the original feature artifacts for 001–004 are in
+the evidence. The binary skeleton, storage, connection/pairing/status, shutdown-drain and message-ingest baselines are consolidated in
+`.specify/memory/spec.md` and `.specify/memory/plan.md`; the original feature artifacts for 001–005 are in
 `.specify/archive/`.
 
 ### `.specify/memory/constitution.md`: principles
@@ -115,6 +115,8 @@ push and pull request.
 
 ## Active Technologies
 
+- Feature 005 baseline: Go 1.27 with `go1.27.4`, CGO-free builds, and the owner-approved whatsmeow fork at `bedcf01`. The fork implements receive limits and disables phone requests on another account's behalf in this configuration. No schema migration or new dependency. [Source: .specify/archive/005-message-ingest/plan.md -> "Language/Version"] [Source: .specify/archive/005-message-ingest/plan.md -> "Primary Dependencies"] [Source: .specify/archive/005-message-ingest/plan.md -> "Storage"]
+
 - Feature 004 historical baseline: Go 1.27.0 (`go1.27.3`, CGO disabled); the owner moved whatsmeow to upstream `v0.0.0-20261109152745-f1b798561919` to fix the socket read-loop leak. No new module, fork or `replace` was added by this feature. This is not current pin guidance. [Source: .specify/archive/004-shutdown-drain/plan.md -> "Language/Version"] [Source: .specify/archive/004-shutdown-drain/plan.md -> "Primary Dependencies"]
 
 - Binary-skeleton baseline: Go 1.27.0 with the `go1.27.3` toolchain and `CGO_ENABLED=0`; pure-Go
@@ -128,6 +130,8 @@ push and pull request.
   [Source: .specify/archive/003-whatsapp-pairing-status/plan.md -> "Primary Dependencies"] [Source: .specify/archive/003-whatsapp-pairing-status/verification.md -> "Setup T002"]
 
 ## Project Structure
+
+- Ingest lives beside the session in `internal/wa`: common extraction, a single bounded history worker, a name cache and lookup worker, and LID normalization and reconciliation. `internal/store` owns validation, byte accounting and read helpers; the CLI handles the owner's terminal failure signal. [Source: .specify/archive/005-message-ingest/plan.md -> "Source Code (repository root)"]
 
 - In the quiet-stop path, `internal/wa/fence.go` isolates each generation's network, `quiet.go` observes bounded library work, and the owner coordinates retirement and fresh-client handover. `internal/store` owns the barrier's in-memory refusal counts; the CLI reports the outcome. No schema migration. [Source: .specify/archive/004-shutdown-drain/plan.md -> "Source Code (repository root)"] [Source: .specify/archive/004-shutdown-drain/plan.md -> "Storage"]
 
@@ -143,6 +147,7 @@ push and pull request.
 
 ## Recent Changes
 
+- [specs/005-message-ingest](.specify/archive/005-message-ingest/spec.md): Archived live and history message persistence, atomic LID reconciliation, bounded naming work and explicit failure reporting.
 - [specs/004-shutdown-drain](.specify/archive/004-shutdown-drain/spec.md): Archived proven quiet-stop reuse, the fresh-client post-pair handover and stderr failure diagnostics. A failed check still requires offline recovery.
 - [specs/003-whatsapp-pairing-status](.specify/archive/003-whatsapp-pairing-status/plan.md): Historical pairing, offline status, guarded persistence and fail-closed recovery baseline; consult its verification for evidence and limitations.
 - [specs/002-sqlite-storage](.specify/archive/002-sqlite-storage/spec.md): Archived the SQLite lifecycle, migrations, query contracts and storage safeguards.
@@ -162,6 +167,16 @@ the user unlinking the device on the phone, then deleting the directory. Record 
 `verification.md`; a step not run is "not verified". Automated tests use `internal/wasim` only.
 
 ## Known Issues & Gotchas
+
+### Live Acknowledgement Does Not Guarantee Replay
+**Issue:** A terminal ingest failure can leave the record incomplete; a history notification may already be acknowledged.
+**Root Cause:** Live handler success controls acknowledgement, while history arrives through a separate asynchronous download; the service does not promise replay.
+**Prevention Rule:** Leave failed live writes unacknowledged, report incomplete history explicitly, and stop on message-store failure without implying replay or moving shutdown steps. [Source: .specify/archive/005-message-ingest/research.md -> R3] [Source: .specify/archive/005-message-ingest/research.md -> R4] [Source: .specify/archive/005-message-ingest/research.md -> R9]
+
+### Late Name Offers Can Recreate Merged Chats
+**Issue:** A stale name update can recreate a LID chat after it was merged away.
+**Root Cause:** A generic chat update can create a missing row.
+**Prevention Rule:** Ingest name offers use `ChatUpdate.ExistingOnly`. The late-contact reread is driven by ingest activity for chats seen in that generation, not a timer or global sweep; the real-account run did not observe the timed reread. [Source: .specify/archive/005-message-ingest/data-model.md -> "New store helpers (read only, no schema change)"] [Source: .specify/archive/005-message-ingest/verification.md -> "Third real-account run (T056), 2026-11-14: the late contact re-read was not observed"]
 
 ### Feature 004 Historical: Lost Post-Pair Restart Request
 **Issue:** On the feature 004 pin, a server close simultaneous with the post-pair restart request could leave the link incomplete.
@@ -233,7 +248,7 @@ guard's `write` flag correctly: a write marked as a read escapes the check.
 **Cause:** the fork's receive bounds and their approved limits are tied to the exact revision; the quiet check's
 allow-list entries record the version they were reviewed for (`quiet_test.go` compares them with `go.mod`); new upstream reconnect paths must stay behind
 `EnableAutoReconnect = false`; `appstate_stop_test.go` matches function names in a goroutine dump.
-**Rule:** ask the owner first, check the Fork Acceptance Contract in `specs/005-message-ingest/plan.md`, read the diff for reconnect and storage changes, and
+**Rule:** ask the owner first, check the Fork Acceptance Contract in `.specify/archive/005-message-ingest/plan.md`, read the diff for reconnect and storage changes, and
 rerun the full gates and the pass-rate run.
 
 ### ⚠️ WSL2 Runs Need Three Workarounds

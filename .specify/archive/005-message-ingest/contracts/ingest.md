@@ -3,7 +3,7 @@
 Internal contract between the session adapter (`internal/wa/session.go`), a new ingest component
 (`internal/wa/ingest.go` and helpers), the connection owner (`internal/wa/owner.go`), the store (`internal/store`)
 and the connected commands (`cmd/whatsapp-mcp`). It adds to
-[feature 004's quiet-stop contract](../../../.specify/archive/004-shutdown-drain/contracts/quiet-stop.md) and changes only its event-count
+[feature 004's quiet-stop contract](../../004-shutdown-drain/contracts/quiet-stop.md) and changes only its event-count
 rule (below). Decisions and their reasons are in [research.md](../research.md); state and bounds in
 [data-model.md](../data-model.md).
 

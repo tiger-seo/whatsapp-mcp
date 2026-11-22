@@ -1,7 +1,7 @@
 # Backlog: upstream receive-resource bounds for feature 003
 
 - **Created:** 2026-11-02
-- **Status:** Closed 2026-11-13. The fork revision `tiger-seo/whatsmeow@9209108` enforces the bounds and is pinned; E003-RX-01 is retired (owner decision, `specs/005-message-ingest/research.md` R1, R2).
+- **Status:** Closed 2026-11-13. The fork revision `tiger-seo/whatsmeow@9209108` enforces the bounds and is pinned; E003-RX-01 is retired (owner decision, `.specify/archive/005-message-ingest/research.md` R1, R2).
 - **Affected feature:** `.specify/archive/003-whatsapp-pairing-status` and later features expanding its receive workload.
 - **Owner:** Maintainer `tiger-seo`, explicitly confirmed by the user.
 - **Expiry:** 2026-12-02 at the start of the UTC date; no automatic renewal.
@@ -50,7 +50,7 @@ Principle V; `docs/security-review.md` F09). Both defects measured above now hav
 full handler queue closes the connection and leaves a record instead of starting a goroutine per node. The same
 branch bounds the per-message retry counters and the expanded size of a history sync, which another account could
 grow. Evidence and limits of that evidence
-are in `specs/005-message-ingest/verification.md`, section "Rebuilt fork branch".
+are in `.specify/archive/005-message-ingest/verification.md`, section "Rebuilt fork branch".
 
 ## Closed 2026-11-13
 

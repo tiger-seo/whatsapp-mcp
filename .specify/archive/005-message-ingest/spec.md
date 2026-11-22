@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-10
 
-**Status**: Draft
+**Status**: Completed
 
 **Input**: Feature 005 in `docs/roadmap.md`: store live messages and history sync, normalize LIDs, merge LID chats at startup, and resolve names without fetching group information for every message.
 

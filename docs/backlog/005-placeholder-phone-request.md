@@ -6,7 +6,7 @@
 - **Owner:** Maintainer `tiger-seo`.
 - **Review trigger:** the send-approval decision (security review F01), a real run where the `unavailable` count in
   `ingest_stopped` is high, or before the first release.
-- **Source:** `specs/005-message-ingest/spec.md` (clarification 2026-11-13), `research.md` R5, plan contract item 9.
+- **Source:** `.specify/archive/005-message-ingest/spec.md` (clarification 2026-11-13), `research.md` R5, plan contract item 9.
 
 ## Problem
 

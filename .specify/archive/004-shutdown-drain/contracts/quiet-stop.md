@@ -120,7 +120,7 @@ either order is reversed (spec SC-004).
 - **Event count** (step 2): sees owner-relevant events only. A remote `Disconnected` after retirement, such as the
   server closing after the 515, is expected and is not counted; the library's `Disconnect` emits none. Receipts,
   presence and similar events carry no owner state and are not counted. Message events are revised by feature 005:
-  see [its ingest contract](../../../../specs/005-message-ingest/contracts/ingest.md), "Revised event-count rule".
+  see [its ingest contract](../../005-message-ingest/contracts/ingest.md), "Revised event-count rule".
 - **Observation** (step 10): sees library goroutines still running.
 
 ## Stop bound

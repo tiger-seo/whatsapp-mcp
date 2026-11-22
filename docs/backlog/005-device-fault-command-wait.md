@@ -6,7 +6,7 @@
 - **Owner:** Maintainer `tiger-seo`.
 - **Review trigger:** the next feature that changes the connected commands' lifecycle, or a real run that stays up
   disconnected after a storage fault.
-- **Source:** `specs/005-message-ingest/research.md` R9 and the appendix ("Lifecycle And Failure").
+- **Source:** `.specify/archive/005-message-ingest/research.md` R9 and the appendix ("Lifecycle And Failure").
 
 ## Problem
 

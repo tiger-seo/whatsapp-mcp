@@ -6,7 +6,7 @@
 - **Owner:** Maintainer `tiger-seo`.
 - **Review trigger:** a real-account `pair` whose initial history is mostly reported as incomplete, or before the first
   release.
-- **Source:** `specs/005-message-ingest/spec.md` (clarification 2026-11-13), `research.md` R4.
+- **Source:** `.specify/archive/005-message-ingest/spec.md` (clarification 2026-11-13), `research.md` R4.
 
 ## Problem
 

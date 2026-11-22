@@ -4,6 +4,8 @@
 > **Revision**: 2026-11-22 — Archived specs/003-whatsapp-pairing-status to record the pairing, offline status, version selection, guarded device writes and safe recovery baseline.
 > **Revision**: 2026-11-22 — Archived specs/004-shutdown-drain to define quiet-stop reuse, fresh-client pairing handover and their evidence; retired three confirmed entries from the blanket recovery baseline.
 > **Revision**: 2026-11-22 — Reconciled the earlier marker and reconnect clauses with FR-110 through FR-113; retained the recovery and durability safeguards and the historical feature 003 artifacts.
+> **Revision**: 2026-11-22 — Archived specs/005-message-ingest: live and history ingest, LID reconciliation, name resolution, and bounded failure handling.
+> **Revision**: 2026-11-22 — Aligned the quiet-stop event count in FR-109 with FR-138: dropped ingest messages are reported separately and do not fail the check.
 
 ## Configuration Decisions
 
@@ -347,12 +349,24 @@ Feature 004 hands the store live messages and history-sync batches, which arrive
 repeat. Whatever the order, the stored chats show their real latest activity and the best name known, and each
 message is stored once.
 
+An account owner receives or sends supported messages while the service is connected and can rely on their content and identity being available for later use. [Source: .specify/archive/005-message-ingest/spec.md -> User Story 1]
+
+After linking a device, the owner wants the history supplied by WhatsApp to be retained alongside new messages, without old history making a chat appear less recent. [Source: .specify/archive/005-message-ingest/spec.md -> User Story 2]
+
 **Why this priority**: §6 #10 (time going backwards) and §6 #9's effect on names break chat lists and the "last
 message" shown to the user. S3, S4, D18.
+
+Keep Live Messages (specs/005-message-ingest): Live messages are the basic ongoing record.
+
+Recover Available History (specs/005-message-ingest): History makes a fresh installation useful and must coexist with live delivery.
 
 **Independent Test**: Store a fixed set of chats and messages in several different orders, including duplicates, and
 check that the resulting chats and messages are identical every time. Re-stores of one `(chat_jid, id)` with
 different content are checked separately: the copy written last is kept.
+
+Keep Live Messages: Deliver synthetic live events to a connected test session and inspect stored records, without a real account.
+
+Recover Available History: Feed synthetic history conversations and live messages in varied orders and compare the resulting records.
 
 **Acceptance Scenarios**:
 
@@ -381,6 +395,16 @@ different content are checked separately: the copy written last is kept.
    the sender is kept as the user's full JID `491511234567@s.whatsapp.net`, and its normalised phone number as
    `491511234567`. **Given** a sender that is an unresolved LID, **Then** the full LID JID is kept and the phone
    number is empty.
+
+10. **Given** a valid text message, **When** it is received or sent by the account, **Then** its chat, message ID, sender, time, direction and text are stored.
+11. **Given** an image, video, audio or document message, **When** it is ingested, **Then** its type and available download metadata are stored; image, video and document captions are kept separately from text.
+12. **Given** the same chat and message ID delivered twice, **When** both copies are stored, **Then** one message remains and the existing store's replacement and non-empty media preservation rules apply.
+13. **Given** a message without supported text or recognized media, **When** it arrives, **Then** it is ignored without creating a message.
+
+14. **Given** a history sync containing supported messages, **When** it is processed, **Then** each valid message retains its own time, sender, direction, text, caption and available media metadata under the correct chat.
+15. **Given** a newer live message already stored, **When** older history is processed, **Then** the chat's last activity remains the newer time.
+16. **Given** history larger than the store's batch limits, **When** it is processed, **Then** it is divided into bounded batches; a failed batch is reported and no partial batch is claimed as saved.
+17. **Given** a history conversation with no usable message timestamp, **When** it is processed, **Then** no fabricated message time is stored; invalid messages are reported or skipped without preventing independent valid messages from being processed.
 
 ---
 
@@ -459,11 +483,17 @@ At startup, and whenever a new LID-to-phone mapping arrives, feature 004 asks th
 phone number. Afterwards there is one chat per person, holding all their messages, and every message they sent in
 any chat carries their phone JID.
 
+An owner sees a person's direct chat and group messages consistently associated with their phone identity when WhatsApp supplies a mapping, while unresolved identities remain usable. [Source: .specify/archive/005-message-ingest/spec.md -> User Story 3]
+
 **Why this priority**: P2 keeps the startup merge (§3.5). The store provides the operation; deciding which chats to
 merge is 004's job.
 
+Unify Contact Identities (specs/005-message-ingest argued P1): Split identities hide messages and misidentify senders.
+
 **Independent Test**: Seed a LID chat and a phone-number chat with overlapping and distinct messages, merge, and check
 the result; run the merge again and check nothing changes.
+
+Unify Contact Identities: Seed synthetic LID and phone identities and overlapping messages; run startup reconciliation and ingest events with and without mappings.
 
 **Acceptance Scenarios**:
 
@@ -482,6 +512,12 @@ the result; run the merge again and check nothing changes.
 6. **Given** a merge that fails part-way, **Then** every affected chat and message is exactly as before it.
 7. **Given** a merge already done, **When** it is requested again, **Then** nothing changes and no error is
    reported.
+
+8. **Given** a mapped LID on a chat or sender, **When** a message is ingested, **Then** the mapped phone JID is used and the sender's phone number is retained.
+9. **Given** an unmapped LID, **When** its message is ingested, **Then** the LID is retained and its sender phone number is empty, rather than guessed.
+10. **Given** a mapped LID chat and a phone chat with overlapping IDs, **When** startup reconciliation runs, **Then** the store's atomic merge retains the phone chat's duplicate, moves other messages, applies the existing name and latest-time rules, and rewrites that sender in all chats; repeating it changes nothing.
+11. **Given** an unmapped LID or a failed mapping or merge, **When** reconciliation runs, **Then** existing data is not deleted; the outcome is reported safely and a later startup can retry.
+12. **Given** messages stored under a LID, **When** its phone mapping is detected during a running session, **Then** the same atomic merge is attempted without waiting for restart.
 
 ---
 
@@ -675,6 +711,24 @@ As an operator, when a stop does not pass the check, I can see the reason in pla
 
 ---
 
+### User Story 21 - Recognize Chats Without Repeated Lookups (Priority: P2)
+
+An owner sees useful chat names without each group message triggering another group-information request.
+
+**Why this priority**: Stable names improve recognition and reduce unnecessary network work.
+
+**Independent Test**: Supply stored names, synthetic contact and history names, and a counted group-information provider while ingesting repeated messages.
+
+**Acceptance Scenarios**:
+
+1. **Given** a stored non-empty chat name, **When** a message arrives, **Then** it is consulted first and a worse fallback never replaces it.
+2. **Given** a group lacking a stored name, **When** multiple messages need its name, **Then** available history names are used before a group-information lookup and successful lookup results are cached rather than fetched per message.
+3. **Given** unavailable contact or group information, **When** a name is needed, **Then** the existing fallback and name-quality rules apply and the message is not discarded solely for lack of a name.
+
+[Source: .specify/archive/005-message-ingest/spec.md -> User Story 4]
+
+---
+
 ### Edge Cases
 
 - **`version` with a broken environment:** it reads no configuration, touches no data directory and takes no
@@ -801,6 +855,17 @@ As an operator, when a stop does not pass the check, I can see the reason in pla
 - The program's own event handlers or future tool code still hold the retired client. Their calls go through the same generation block and are refused and counted, so they cannot start new library work unseen. [Source: .specify/archive/004-shutdown-drain/spec.md -> "The program's own event handlers or future tool code still hold the retired client"]
 - A dependency version change. The allow-list and the check must be revalidated against the new version before release. [Source: .specify/archive/004-shutdown-drain/spec.md -> "A dependency version change"]
 - `stdio` cannot restart itself while a client holds its standard input and output, so the check runs inside the process. A process exit alone is not proof. [Source: .specify/archive/004-shutdown-drain/spec.md -> "`stdio` cannot restart itself while a client holds its standard input and output, so the check runs inside the process"]
+
+- History and live deliveries can overlap, arrive out of order or contain identical IDs in different chats; identity is the pair of chat and message ID. [Source: .specify/archive/005-message-ingest/spec.md -> "History and live deliveries can overlap, arrive out of order or contain identical IDs in different chats; identity is the pair of chat and message ID."]
+- Invalid identifiers, absent timestamps, malformed fields and unsupported message types do not create invalid message records; independent valid records remain eligible for processing. [Source: .specify/archive/005-message-ingest/spec.md -> "Invalid identifiers, absent timestamps, malformed fields and unsupported message types do not create invalid message records; independent valid records remain eligible for processing."]
+- A group-history participant, an own message, and a direct-message sender must each be attributed to the actual sender when supplied; unresolved identity is not invented. [Source: .specify/archive/005-message-ingest/spec.md -> "A group-history participant, an own message, and a direct-message sender must each be attributed to the actual sender when supplied; unresolved identity is not invented."]
+- Mapping lookup timeout or failure retains the original identity; a failure is not mistaken for proof that a mapping does not exist. [Source: .specify/archive/005-message-ingest/spec.md -> "Mapping lookup timeout or failure retains the original identity; a failure is not mistaken for proof that a mapping does not exist."]
+- A LID whose mapping later points to a different phone number keeps the data already merged under the earlier phone; later messages follow the new mapping and the change is logged. [Source: .specify/archive/005-message-ingest/spec.md -> "A LID whose mapping later points to a different phone number keeps the data already merged under the earlier phone; later messages follow the new mapping and the change is logged."]
+- History that arrives while `pair` is stopping, or after it stops, is reported as incomplete and is not recovered. [Source: .specify/archive/005-message-ingest/spec.md -> "History that arrives while `pair` is stopping, or after it stops, is reported as incomplete and is not recovered."]
+- An "unavailable" placeholder is counted and reported; its message is not stored and is not requested from the phone. [Source: .specify/archive/005-message-ingest/spec.md -> "placeholder is counted and reported"]
+- An individual store operation can fail due to cancellation, limits or low disk; stop ingest and the connected command safely and report the incomplete record, while retaining committed earlier batches. The operator fixes the problem and restarts under existing session-safety rules. [Source: .specify/archive/005-message-ingest/spec.md -> "An individual store operation can fail due to cancellation, limits or low disk; stop ingest and the connected command safely and report the incomplete record, while retaining committed earlier batches"]
+- Receive overload closes the affected connection and is reported with a warning that local history may have a gap; retry or replay is not guaranteed. [Source: .specify/archive/005-message-ingest/spec.md -> "Receive overload closes the affected connection and is reported with a warning that local history may have a gap; retry or replay is not guaranteed."]
+- Shutdown during ingest cannot allow writes after retirement or falsely establish a quiet stop; pending work is accounted for under feature 004's existing rules. [Source: .specify/archive/005-message-ingest/spec.md -> "Shutdown during ingest cannot allow writes after retirement or falsely establish a quiet stop; pending work is accounted for under feature 004's existing rules."]
 
 ## Requirements
 
@@ -983,9 +1048,11 @@ As an operator, when a stop does not pass the check, I can see the reason in pla
 - **FR-048**: A message MUST be identified by `(chat_jid, id)`. Storing a message whose `(chat_jid, id)` exists MUST [Source: .specify/archive/002-sqlite-storage/spec.md -> FR-015]
   replace its stored fields with the new copy's, except that an empty media metadata field (URL, direct path, media
   key, file hash, encrypted file hash, file length, MIME type, original file name) MUST NOT overwrite a stored
-  non-empty one; storing never creates a second copy.
+   non-empty one; storing never creates a second copy.
+  Live and history duplicates MUST follow feature 002's composite identity, last-written replacement and preservation of non-empty media metadata; IDs shared by different chats MUST remain distinct. [Source: .specify/archive/005-message-ingest/spec.md -> FR-004]
 - **FR-049**: Storing a message MUST create its chat if it does not exist and move the chat's last activity time [Source: .specify/archive/002-sqlite-storage/spec.md -> FR-016]
-  forward to the message's time if that is later, in the same atomic step.
+   forward to the message's time if that is later, in the same atomic step.
+  Chat creation and last activity MUST follow the existing atomic store rules; processing older messages MUST NOT move last activity backward (S4). [Source: .specify/archive/005-message-ingest/spec.md -> FR-005]
 - **FR-050**: The store MUST offer a chat update (name, name quality, the time the name was seen, last activity [Source: .specify/archive/002-sqlite-storage/spec.md -> FR-017]
   time) for chats known without a
   message, such as history-sync conversations. The last activity time MUST only ever move forward, and an absent time
@@ -1145,7 +1212,7 @@ As an operator, when a stop does not pass the check, I can see the reason in pla
 
 - **FR-108**: Stopping a generation MUST happen in this order: block that generation's network traffic (socket and HTTP), then block its storage access, then observe the client library's remaining work. Storage MUST NOT be blocked while the generation's network can still receive, because a refused write during decryption can make the library acknowledge and lose a message. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-001]
 
-- **FR-109**: A generation passes the quiet-stop check only if, by the owner-approved deadline (see Assumptions), (a) none of the client library's work is running, except work named exactly in a reviewed allow-list, (b) no dial was refused on the generation's fenced network clients after the network block (this proves isolation of the retired client; it cannot see a library send after the library's own disconnect, which the observation covers). A write on a connection that the block already closed is refused with nothing sent and counted, but does not fail the check, because TLS and HTTP/2 teardown write close messages by design, (c) no guarded storage call of the generation failed after retirement began because of a refusal, a context error, a stale lease or another guard error; a read refused only because the storage block has retired is counted separately and does not fail the check, because it changes nothing and the network is already closed when that block retires, (d) no call from the program's own code to the session was refused after retirement began, (e) no event that the session would have forwarded to the owner was dropped after retirement, other than `Disconnected`, and (f) the observation is complete. The check also fails when the whole stop has passed its bound (see FR-096). Every other outcome, including an error, a cut-off observation or the deadline, fails. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-002]
+- **FR-109**: A generation passes the quiet-stop check only if, by the owner-approved deadline (see Assumptions), (a) none of the client library's work is running, except work named exactly in a reviewed allow-list, (b) no dial was refused on the generation's fenced network clients after the network block (this proves isolation of the retired client; it cannot see a library send after the library's own disconnect, which the observation covers). A write on a connection that the block already closed is refused with nothing sent and counted, but does not fail the check, because TLS and HTTP/2 teardown write close messages by design, (c) no guarded storage call of the generation failed after retirement began because of a refusal, a context error, a stale lease or another guard error; a read refused only because the storage block has retired is counted separately and does not fail the check, because it changes nothing and the network is already closed when that block retires, (d) no call from the program's own code to the session was refused after retirement began, (e) no event that the session would have forwarded to the owner was dropped after retirement, except `Disconnected` and message events covered by FR-138, and (f) the observation is complete. The check also fails when the whole stop has passed its bound (see FR-096). Every other outcome, including an error, a cut-off observation or the deadline, fails. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-002] [Source: .specify/archive/005-message-ingest/contracts/ingest.md -> "Revised event-count rule"]
 
 - **FR-110**: After a production connection attempt, the marker MAY be cleared at orderly shutdown only when every generation of the run passed the check and all existing safe-clear prerequisites hold: storage drained, any latched logout or client deletion durably cleaned up, no unresolved pairing attempt, and low-disk admission granted. A pairing attempt is unresolved unless it ended in a confirmed connection with a durable identity: a QR timeout, a cancellation, or a pairing success without a confirmed follow-up connection all count as unresolved, because the phone may list a half-linked device that only the operator can check. Otherwise the marker MUST stay unsafe and the next start requires offline recovery, as today. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-003]
 
@@ -1166,6 +1233,34 @@ As an operator, when a stop does not pass the check, I can see the reason in pla
 - **FR-118**: Offline recovery, `status` and the marker's storage format stay as they are. A clean marker after a passed stop MUST look exactly like a clean marker after a run without a production connection. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-012]
 
 - **FR-119**: The specification's temporary fail-closed limitation (§8.11, 2026-11-04) and the post-pair reconnect approval (§8.11, 2026-11-06) MUST be updated to the 2026-11-07 decision before implementation starts. Feature 003's spec, contracts and `verification.md` stay as the historical record; `OPERATIONS.md` and `AGENTS.md` MUST be updated to describe a reusable session after a passed check, and to say that offline recovery is still needed after a failed one. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-013]
+
+#### Message ingest
+
+- **FR-126**: The system MUST ingest supported live messages and history supplied by WhatsApp, including account-originated messages, without requiring a separate history request (P3, §3.4). [Source: .specify/archive/005-message-ingest/spec.md -> FR-001]
+
+- **FR-127**: Each stored message MUST retain its chat identity, message ID, full sender JID without a device component, normalized phone number when known, timestamp, direction, text, separate caption, media type and available download metadata, including URL, direct path, key, hashes, length, MIME type and original filename (S3, P3, D18). [Source: .specify/archive/005-message-ingest/spec.md -> FR-002]
+
+- **FR-128**: Text includes ordinary and extended text; supported media are image, video, audio and document. Image, video and document captions MUST be stored separately from text. A message with neither supported text nor recognized media MUST NOT be stored (§3.4, D18). [Source: .specify/archive/005-message-ingest/spec.md -> FR-003]
+
+- **FR-129**: The system MUST resolve chat and sender LIDs to phone identities when the mapping is known; on no mapping or lookup failure it MUST retain the LID and MUST NOT invent a phone number. Mapping lookups MUST have a two-second maximum wait (§3.5, P2). [Source: .specify/archive/005-message-ingest/spec.md -> FR-006]
+
+- **FR-130**: At startup, before live ingest can race the reconciliation, the system MUST reconcile mapped LID chats using feature 002's atomic, idempotent merge, including sender rewrites across chats, phone-copy precedence on duplicate IDs and its name-quality rules. It MUST also attempt that merge when a new mapping is detected during a running session. Unmapped or failed items remain intact and are reported; repeat startup retries them. Mappings the startup pass did not reach within its time budget are continued by the running session (P2). [Source: .specify/archive/005-message-ingest/spec.md -> FR-007]
+
+- **FR-131**: The system MUST consult a stored name first, use available history names for groups, and cache group-information results rather than fetch them for each message. It MUST apply feature 002's saved, real and fallback name ranking, observation time and tie-breaking rules (M7, S4). [Source: .specify/archive/005-message-ingest/spec.md -> FR-008]
+
+- **FR-132**: When no better name is available, group names fall back to `Group <id>`; direct names use the available saved contact name, then self-chosen contact name, sender name or JID user part, consistent with feature 002's quality ordering. Failed name lookup MUST NOT by itself prevent storing a valid message (§3.4). [Source: .specify/archive/005-message-ingest/spec.md -> FR-009]
+
+- **FR-133**: History processing MUST submit batches within the existing store limits of 1,000 messages and 16 MiB of aggregate field bytes, and MUST NOT buffer unbounded application-owned work. On a storage failure affecting a live message or history batch, ingest MUST stop, report the failure and incomplete record, and stop the connected command safely. The operator fixes the problem and restarts under existing session-safety rules; previously committed messages remain intact and MUST NOT be represented as a completely successful sync. [Source: .specify/archive/005-message-ingest/spec.md -> FR-010]
+
+- **FR-134**: A valid message's sender MUST reflect its supplied sender or history participant, or the account identity for an own message. An absent or invalid required sender, chat, ID or time MUST NOT be replaced with a fabricated value merely to make a record valid. [Source: .specify/archive/005-message-ingest/spec.md -> FR-011]
+
+- **FR-135**: Stored live messages MUST be made available to the later event-delivery feature with their normalized identity, text, caption and media information; history MUST NOT be emitted as a live event. Webhook delivery itself is outside this feature. [Source: .specify/archive/005-message-ingest/spec.md -> FR-012]
+
+- **FR-136**: Ingest MUST participate in the existing generation and shutdown safety rules: stop admitting work at retirement, account for admitted work, and preserve the network-block, storage-barrier and quiet-check ordering. An incomplete or uncertain stop MUST NOT clear the unsafe marker. [Source: .specify/archive/005-message-ingest/spec.md -> FR-013]
+
+- **FR-137**: Automated synthetic-event tests MUST cover live and history, captions and media metadata, out-of-order and duplicate delivery, group and own senders, mapping failures, merge collisions, name caching, bounded batches, failure and shutdown interleavings. Real-account acceptance requires separate permission for each pairing, connection and receiving step; review the roadmap's shutdown follow-up before that test. [Source: .specify/archive/005-message-ingest/spec.md -> FR-014]
+
+- **FR-138**: A message event dropped after the generation retire bit is counted separately as `DroppedMessages`, left unacknowledged and reported as a possible gap. It does not count as a dropped owner-relevant event for the quiet-stop check; all other parts of the owner event rule still apply. [Source: .specify/archive/005-message-ingest/contracts/ingest.md -> "Revised event-count rule"]
 
 ### Key Entities
 
@@ -1425,6 +1520,15 @@ outside [2000-01-01, 2100-01-01), is a validation error.
 
 `last_message_time = max(last_message_time, offered)`; `NULL` offered never changes it.
 
+Ingest field sources (no schema change): [Source: .specify/archive/005-message-ingest/spec.md -> "**Chat**: A direct or group conversation"] [Source: .specify/archive/005-message-ingest/data-model.md -> "Chat (`store.ChatUpdate`)"]
+
+| Field | Source | Rule |
+| --- | --- | --- |
+| `JID` | normalised chat JID | |
+| `Name`, `NameQuality`, `NameTime` | R12 order: history name, stored name, contact table, push name, group lookup, fallback | feature 002 quality, time and tie-break rule; never downgraded |
+| `LastActivity` | set by `StoreMessages` from message times | only moves forward (S4) |
+
+
 #### Message
 
 identified by chat JID and ID; carries the sender (full JID and phone number), time, from-me flag, text,
@@ -1528,6 +1632,29 @@ Validation happens before any SQL runs. The store rejects:
 Text, caption and names may contain any valid UTF-8, control characters included. They are stored unchanged and
 escaped only when they appear in diagnostics.
 
+Ingest field sources and eligibility (no schema change): [Source: .specify/archive/005-message-ingest/spec.md -> "**Message**: A chat-scoped ID"] [Source: .specify/archive/005-message-ingest/data-model.md -> "Message (`store.Message`)"]
+
+| Field | Source, live (`events.Message`) and history (`ParseWebMessage`) | Rule |
+| --- | --- | --- |
+| `ChatJID` | `Info.Chat`, normalised (R7) | phone, group or LID JID; no device part; never invented |
+| `ID` | `Info.ID` | non-empty, at most 256 bytes; identity is `(ChatJID, ID)` |
+| `SenderJID` | own message: the account's phone JID; group: `Info.Sender` (history: participant); direct: `Info.Sender`, normalised | device part dropped; an absent or invalid sender rejects the message |
+| `Time` | `Info.Timestamp` | 2000-01-01 to 2100-01-01 UTC; zero or outside rejects the message |
+| `FromMe` | `Info.IsFromMe` | |
+| `Text` | `Conversation`, else `ExtendedTextMessage.Text` | at most 256 KiB, valid UTF-8 |
+| `Caption` | image, video or document caption | at most 256 KiB; never copied into `Text` |
+| `MediaType` | `image`, `video`, `audio`, `document`, or empty | audio has no caption |
+| `Media` | URL, direct path, media key, file SHA-256, encrypted SHA-256, length, MIME type, document file name | store limits; 32-byte keys and hashes |
+
+`SenderPhone` is derived by the store from a phone `SenderJID`; it stays empty for an unmapped LID.
+
+A message is **eligible** when its chat is a user, group or LID JID, it has text or a recognised media type, it is
+not an edit (`IsEdit`), its raw content is not a bare `ProtocolMessage`, and, in history, `ParseWebMessage` kept the
+ID of `webMsg.Key.ID`. Every other message, including status broadcasts and newsletters, is ignored without a
+write. An eligible message that fails `store.ValidateMessage` is **rejected**: skipped,
+counted, never repaired.
+
+
 #### Media metadata
 
 what is needed to download a message's media later: URL, direct path, key, hashes, length, MIME
@@ -1537,6 +1664,8 @@ type and original file name. [Source: .specify/archive/002-sqlite-storage/spec.m
 
 a person as known to the device store (names and JID, with the LID-to-phone map). Read by the store,
 written only by whatsmeow. [Source: .specify/archive/002-sqlite-storage/spec.md -> "Contact"]
+
+The device-owned `whatsmeow_lid_map` links LID and phone user parts. Ingest reads it but never writes it; the library owns updates. Existing merges are not undone on reassignment. [Source: .specify/archive/005-message-ingest/spec.md -> "**Identity mapping**: An association"] [Source: .specify/archive/005-message-ingest/data-model.md -> "Identity mapping (`whatsmeow_lid_map`, device-owned, read only here)"]
 
 #### Device Session
 
@@ -1572,7 +1701,7 @@ One client instance and its connection: an owner `genState` plus its `Session`.
 | `accountWork` | a production Connect was attempted on this client | set before `ConnectContext`; when false, no check is needed |
 | `fence` | the generation's network block | one per generation; never shared with another generation |
 | `barrier` | the store's device barrier | unchanged; gains a refusal count |
-| `droppedEvents` | owner-relevant events dropped after retirement, except `Disconnected` | counted from the moment the retire bit is set |
+| `droppedEvents` | owner-relevant events dropped after retirement, except `Disconnected` and message events covered by FR-138 | counted from the moment the retire bit is set; FR-138 messages go to `DroppedMessages` instead |
 | `lateCalls` | calls from the program's own code to the session after the retire bit is set, except the retirement sequence's own Disconnect | counted from the same moment |
 | `work` | the program's own work: the pairing window's QR channel, the repair pass; never a Connect context | a child of the owner context; cancelled by the stop signal and at the start of retirement |
 | `lib` | the library's `BackgroundEventCtx` and the parent of the attempt context its handlers run with | created as `context.WithCancel(context.WithoutCancel(o.ctx))`; cancelled only after the fence and the barrier (invariants I8); never by the stop signal, `work` or a watchdog once Connect has returned |
@@ -1724,7 +1853,8 @@ stale lease or another guard error stays in `Refused()`. Whether a call is a rea
 | `NetworkRefused` | uint64 | refused dials |
 | `StorageRefused` | uint64 | the barrier's count (refusals, context errors, stale leases, guard errors) |
 | `CallsRefused` | uint64 | late calls to the session (see Generation) |
-| `EventsDropped` | uint64 | dropped owner-relevant events (see Generation) |
+| `EventsDropped` | uint64 | dropped owner-relevant events counted by `droppedEvents`; excludes `Disconnected` and FR-138 message events |
+| `DroppedMessages` | uint64 | FR-138 message events dropped after retirement; reported as a possible gap without failing the quiet-stop check [Source: .specify/archive/005-message-ingest/contracts/ingest.md -> "Revised event-count rule"] |
 | `Duration` | duration | from the start of retirement to the decision |
 
 When several conditions fail, `Reason` names the first in this order: `observation_incomplete`,
@@ -1746,6 +1876,29 @@ function names, argument values, keys or account identifiers.
 The list starts empty (research R5).
 
 [Source: .specify/archive/004-shutdown-drain/data-model.md -> "Allow-list entry"] [Source: .specify/archive/004-shutdown-drain/spec.md -> "Allow-list"]
+
+#### History sync
+
+WhatsApp-supplied conversations and past messages, distinct from live delivery. One worker per generation downloads and processes bounded chunks; history is not emitted as a live event. [Source: .specify/archive/005-message-ingest/spec.md -> "**History sync**: WhatsApp-supplied conversations and past messages"] [Source: .specify/archive/005-message-ingest/contracts/ingest.md -> "History worker"]
+
+#### Per-generation ingest state
+
+| State | Bound | On overflow |
+| --- | --- | --- |
+| History queue | 8 notifications | the notification is reported as incomplete history; no disconnect |
+| History worker | 1 goroutine; one decoded history at a time (≤ 128 MiB expanded, fork limit) | – |
+| History flush | 250 messages or 4 MiB of field bytes, ingest lock released between flushes | the batch is cut early |
+| Name cache | 4,096 chats, least recently used | the oldest entry is forgotten; the next miss reads the store again |
+| Contact re-read queue | 4,096 chats (the name cache's size), each queued once; at most 3 re-reads per chat, 60 s, 5 min and 30 min after the previous read; at most 8 chats re-read per live message or history flush; no goroutine | a chat is dropped, not queued, when the queue is full; its name stays until the next start |
+| Group lookup set | 64 distinct groups; 1 worker; 10 s per lookup | the request is dropped and counted; the fallback name stays |
+| Failed-lookup cache | 1,024 groups, entries expire after 10 min | the oldest entry is forgotten; that group may be asked again sooner |
+| LID hint set | 1,024 LIDs; 1 worker; 5 attempts 1 s apart | the hint is dropped and counted; startup reconciles it |
+| Reconcile cursor | one LID: where an unfinished startup pass stopped; the worker pages on from it, 200 per page, between hints | – |
+| Ingest lock | one per generation | – (serialises message writes, history batches and merges) |
+| Counters | `stored`, `ignored`, `rejected`, `unavailable`, `droppedMessages`, `historyIncomplete`, `lookupsDropped`, `hintsDropped`, `merged`, `mergeFailed` | `uint64`, logged at stop and on terminal failure |
+| Re-lookup under the ingest lock | one 2 s deadline per message write or history flush, at most 250 distinct LIDs | the remaining LIDs are written as LIDs; startup merges them |
+
+[Source: .specify/archive/005-message-ingest/data-model.md -> "Per-generation ingest state (in memory)"]
 
 ## Storage Data Flow
 
@@ -1821,6 +1974,19 @@ then ClearRunGuard, which still enforces low-disk admission
 
 `upstream_drain_unproven` no longer sets `unsafeStop` on its own. A failed check does, for that generation. [Source: .specify/archive/004-shutdown-drain/data-model.md -> "Run outcome (owner)"]
 
+### Ingest state transitions
+
+```text
+running ──(message-store error)──────────────▶ failed  (terminal: no acks, workers stop, owner signalled)
+running ──(retire bit, step 2)───────────────▶ retiring (no acks, drops counted, workers stop at checkpoints)
+failed  ──(retire bit)───────────────────────▶ retiring
+retiring ──(workers and callbacks joined)────▶ stopped
+```
+
+`failed` and `retiring` never return to `running`. A new generation starts in `running` with empty state.
+
+[Source: .specify/archive/005-message-ingest/data-model.md -> "Ingest state transitions (one generation)"]
+
 ## Security
 
 The threat model is the [security review](../../docs/security-review.md) (F01–F16). This section takes up the
@@ -1852,6 +2018,8 @@ sidecars, temporary files and backups, which carry the same data.
 Assets are device credentials and identities, shared storage and its sidecars, temporary pairing material, accurate status, protocol stdout, and exclusive ownership until the last device write finishes. Boundaries are owner terminal to pairing control; WhatsApp/network responses to lifecycle and version handling; upstream diagnostics to local logs/terminal; and the connection owner to private shared storage. Neither a retrieved message nor a diagnostic string grants authorization. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Assets are device credentials and identities"]
 
 Assets are the Signal sessions, pre-keys and app-state keys in the device store, the integrity of the server's message queue, the run marker, and the real account's standing with WhatsApp. Boundaries are the client library's background work and the program's storage and network, the old generation and the new one, and the stop diagnostic and the operator's terminal. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Assets and Trust Boundaries"]
+
+**Assets and boundaries**: Messages, captions, names, phone/LID associations and media decryption metadata cross from untrusted WhatsApp senders into private local storage and later consumers. Stored content is data, not instructions. The session and its credentials remain protected by the existing private-storage and shutdown controls. [Source: .specify/archive/005-message-ingest/spec.md -> "Assets and boundaries"]
 
 ### Findings taken up or deferred
 
@@ -1918,6 +2086,22 @@ after config loading or lock acquisition does not retroactively protect earlier 
 | F14 - incident response | A logout latch still needs durable cleanup before the marker clears (FR-110).  [Source: .specify/archive/004-shutdown-drain/spec.md -> "F14 - incident response"] |
 | F15 - supply chain | No fork, no `replace` and no new dependency (FR-125). The pin moved once, to upstream `f1b7985`, by owner decision with an E003-RX-01 reassessment; the 20 upstream commits were read for reconnect and storage changes, and the new automatic-reconnect paths stay off. The allow-list is revalidated on any version change (FR-117); it is empty.  [Source: .specify/archive/004-shutdown-drain/spec.md -> "F15 - supply chain"] |
 | Others | Not touched by this feature; dispositions in feature 003 stand.  [Source: .specify/archive/004-shutdown-drain/spec.md -> "Others"] |
+
+#### Ingest finding dispositions
+
+- **F03, F05, F13**: Preserve feature 002's private storage, safe paths, atomic writes and recovery guarantees. Media is not downloaded or opened here; download path containment is feature 009. [Source: .specify/archive/005-message-ingest/spec.md -> "**F03, F05, F13**"]
+
+- **F09**: Enforce actual application-owned field, byte, batch, concurrency, wait and disk limits, including for history, mapping and cached names; reject excess safely, without unlimited queues or silent success. Planning must identify measurable limits and failure behavior before implementation. Device-store limits remain mandatory. E003-RX-01 is limited to its explicitly approved upstream receive paths and does not automatically cover 005. [Source: .specify/archive/005-message-ingest/spec.md -> "**F09**"]
+
+- **F10**: Validate untrusted identities, timestamps and field sizes before storage; preserve valid content as data and safely encode untrusted names in diagnostics. A rejected record causes no partial message write. [Source: .specify/archive/005-message-ingest/spec.md -> "**F10**"]
+
+- **F11**: Message bodies and captions MUST NOT appear above debug level; credentials, media keys and QR material MUST NOT appear at any log level. Failure diagnostics MUST avoid unnecessary personal data and safely encode control characters. Broader audit policy is deferred to feature 012. [Source: .specify/archive/005-message-ingest/spec.md -> "**F11**"]
+
+- **F12**: Extend operator-facing privacy and retention guidance to identify stored message content, media metadata and LID-phone linkage, indefinite growth and the limits of deletion and backup protection; downstream export belongs to features 006-007 and 011. [Source: .specify/archive/005-message-ingest/spec.md -> "**F12**"]
+
+- **F01**: Ingest never interprets stored text as instructions or authorizes a send, pairing or other account action. Read/send authorization policy is a separate owner decision for the affected tool features. [Source: .specify/archive/005-message-ingest/spec.md -> "**F01**"]
+
+- **F02, F04, F06-F08, F14-F16**: Remote transport and secret lifecycle belong to feature 010; media processing to 008-009; webhook destination and delivery to 011; incident response, release provenance and deployment assurance to 012. Existing controls and dependency checks remain in force. [Source: .specify/archive/005-message-ingest/spec.md -> "**F02, F04, F06-F08, F14-F16**"]
 
 ### Security requirements
 
@@ -2139,6 +2323,10 @@ The feature's later `verification.md` must record synthetic test evidence, suppo
 
 `verification.md` records the simulator results, the measured pass rate, the platforms covered and any permitted real-account results. Anything not run is reported as not verified. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Abuse Cases and Verification"]
 
+#### Ingest abuse cases and evidence
+
+Synthetic tests cover oversized text, captions, names, metadata and history; malformed JIDs, timestamps and control characters; cache and concurrent-event pressure; mapping and storage failures; disk exhaustion; malicious message instructions; and callbacks racing retirement. Rejected inputs must not write a partial message or trigger a send, pairing, webhook or other external side effect. Platform-specific claims require platform-specific evidence. [Source: .specify/archive/005-message-ingest/spec.md -> "Abuse cases"]
+
 ## Success Criteria
 
 ### Measurable Outcomes
@@ -2165,7 +2353,8 @@ The feature's later `verification.md` must record synthetic test evidence, suppo
 - **SC-010**: Storing the same set of chats and messages in at least 20 different random orders, with duplicates [Source: .specify/archive/002-sqlite-storage/spec.md -> SC-003]
   of identical content, produces identical chats (names and last activity times) and identical messages every
   time. The one exception is a message re-stored under the same `(chat_jid, id)` with different content: there the
-  copy written last is kept (FR-048), and a separate test checks that rule.
+   copy written last is kept (FR-048), and a separate test checks that rule.
+  For all tested arrival orders of distinct messages, chat last activity equals the newest stored message time; duplicate copies follow the stated replacement rule. [Source: .specify/archive/005-message-ingest/spec.md -> SC-003]
 - **SC-011**: On a database of 100,000 messages across 1,000 chats, every query in FR-054–FR-066 returns within 200 ms. [Source: .specify/archive/002-sqlite-storage/spec.md -> SC-004]
   This is measured by a Go benchmark over a seeded database of that size, run on the maintainer's machine. The
   results and the machine (CPU, memory, disk, OS) are recorded in the feature's `verification.md`. It is not a
@@ -2192,7 +2381,7 @@ The feature's later `verification.md` must record synthetic test evidence, suppo
   diagnostics at every supported log level contain zero QR payloads or session credentials; stdio stdout contains
   zero human-readable pairing or log output. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-006]
   The "Storage" section of
-  `OPERATIONS.md` covers FR-080/FR-082/FR-083 and identifies the owner of encryption, backups, retention and recovery objectives.
+   `OPERATIONS.md` covers FR-080/FR-082/FR-083 and identifies the owner of encryption, backups, retention and recovery objectives.
 
 - **SC-020**: Scripted logout and unresolved timeout deny a new same-process attempt after production Connect; offline recovery and separately approved pairing preserve conversation records.
   [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-002]
@@ -2228,6 +2417,16 @@ The feature's later `verification.md` must record synthetic test evidence, suppo
 - **SC-033**: Captured diagnostics at every log level contain zero raw observation data, keys, QR payloads or full account identifiers. [Source: .specify/archive/004-shutdown-drain/spec.md -> SC-006]
 
 - **SC-034**: With separate permission for each step, one real-account run of `pair`, a normal stop, and a restart with the saved session (`stdio`, or the `session-check -action connect` helper) without recovery is recorded with redacted results, or recorded as not verified if not performed. This closes feature 003's open gap "a real reuse of a clean saved session". The observed pass or fail of each check is recorded. [Source: .specify/archive/004-shutdown-drain/spec.md -> SC-007]
+
+- **SC-035**: In synthetic acceptance cases, 100% of valid supported live and history messages are represented with the expected chat, sender, time and direction, subject to explicitly reported storage failures. [Source: .specify/archive/005-message-ingest/spec.md -> SC-001]
+
+- **SC-036**: In the acceptance corpus, 100% of image, video and document captions and supplied media metadata survive ingest separately from message text. [Source: .specify/archive/005-message-ingest/spec.md -> SC-002]
+
+- **SC-037**: All tested mapped LID merges preserve nonduplicate messages and the phone-side duplicate, and a second merge produces no further change. [Source: .specify/archive/005-message-ingest/spec.md -> SC-004]
+
+- **SC-038**: In a repeated-message test for a group with a successfully resolved name, one initial lookup is sufficient and no lookup is made per subsequent message while that name remains available. [Source: .specify/archive/005-message-ingest/spec.md -> SC-005]
+
+- **SC-039**: The synthetic security and shutdown cases show no invalid partial batch, unauthorized account action, secret disclosure or falsely reusable session. [Source: .specify/archive/005-message-ingest/spec.md -> SC-006]
 
 ## Assumptions
 
@@ -2314,6 +2513,17 @@ The feature's later `verification.md` must record synthetic test evidence, suppo
 
 - **AS-030**: Feature 003's recovery prompt wording is tracked separately in `docs/backlog/003-offline-recovery-prompt-usability.md` and is not changed here. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Feature 003's recovery prompt wording is tracked separately in `docs/backlog/003-offline-recovery-prompt-usability.md`"]
 
+- **AS-031**: WhatsApp determines the history it supplies; this feature does not promise complete account history or automatic replay after a failed batch. [Source: .specify/archive/005-message-ingest/spec.md -> "WhatsApp determines the history it supplies; this feature does"]
+
+- **AS-032**: The initial history after linking is delivered while `pair` runs; what `pair` has not stored when it stops is lost and reported. [Source: .specify/archive/005-message-ingest/spec.md -> "The initial history after linking is delivered while `pair`"]
+  This is a planning assumption, not a delivery guarantee: in a recorded real-account run, no history arrived during `pair`; history arrived on the next `serve` connection. An already-received chunk interrupted at stop is reported incomplete and is not fetched again. [Source: .specify/archive/005-message-ingest/verification.md -> "History after `pair`"]
+
+- **AS-033**: Existing feature 002 storage limits, name precedence and merge decisions apply; the implementation plan must specify bounded ingest admission, cache lifetime, failure reporting and recovery without weakening those limits. [Source: .specify/archive/005-message-ingest/spec.md -> "Existing feature 002 storage limits, name precedence and merge"]
+
+- **AS-034**: Existing feature 004 connection and quiet-stop restrictions remain in force. The receive-resource exception E003-RX-01 was retired on 2026-11-13, when the owner-approved fork that enforces those bounds was pinned (plan, Fork Acceptance Contract). [Source: .specify/archive/005-message-ingest/spec.md -> "Existing feature 004 connection and quiet-stop restrictions remain in"]
+
+- **AS-035**: The feature spec does not authorize real-account acceptance; each step needs separate permission and recorded evidence. [Source: .specify/archive/005-message-ingest/spec.md -> "Acceptance against a real account is not authorized by"]
+
 ## Scope and References
 
 This feature covers `docs/roadmap.md` 003 and `docs/specification.md` section 8: A3 (`pair` and `status`), A5 (testable connection boundary), P4 (pairing/status state), P5 (version refresh and 405 recovery), M9 (recoverable QR pairing), the WhatsApp log bridge and shutdown portions of M10, and D11 (QR only). Sections 3.4 and 3.6 define preserved events, retry timings and pairing semantics; section 6 defect 16 is explicitly corrected. A2/D14, G1 and constitution Principles I-X remain constraints. Decisions D1-D18 are not reopened. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "This feature covers `docs/roadmap.md` 003 and `docs/specification.md`"]
@@ -2327,3 +2537,5 @@ This feature covers stage 1 of the roadmap follow-up "WhatsApp logout and shutdo
 Included: the per-generation network block and refusal count, the storage refusal count, the quiet-stop check and its allow-list, clearing the marker after a passed stop, the fresh-client post-pair reconnect, removal of the code-level switch, stop diagnostics, and simulator tests and measurements. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Included: the per-generation network block and refusal count, the"]
 
 Excluded: the 405 budget, startup retries, ordinary reconnect, other 515 reconnects and same-process re-pair (stage 2, a later feature, after the pass rate is known, with a rate limit and a reassessed E003-RX-01); a whatsmeow fork or any other dependency change (option B, a separate owner decision; the 2026-11-09 pin move to upstream `f1b7985` is the one change made); the upstream proposal in the whatsmeow Matrix room (option C, a separate outward-facing step by the owner); replacing the observation with a process exit (an untested idea); message ingest (feature 005); the recovery prompt wording. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Excluded: the 405 budget, startup retries, ordinary reconnect, other"]
+
+Scope of message ingest: live and history persistence, LID normalization and reconciliation, and name acquisition. No sending, new message types, new reconnect policy or old-deployment import; webhook delivery, media download and MCP tools remain separate. [Source: .specify/archive/005-message-ingest/spec.md -> "Sources and scope"]

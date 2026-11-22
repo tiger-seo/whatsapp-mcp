@@ -265,7 +265,7 @@ adds read-only `stdio` access as described below. "Implemented" and "verified" m
 a real account so far**: two `pair` and `serve` runs on one account and one phone on Windows (2026-11-14), which stored
 live and history messages and showed that history chats were named before the device's contact sync had stored the
 saved names; the fix for that (below) has been tested on the simulator and with fakes only. Everything else comes from
-the simulator, fakes and a temporary store (`specs/005-message-ingest/verification.md`). No CI run is claimed.
+the simulator, fakes and a temporary store (`.specify/archive/005-message-ingest/verification.md`). No CI run is claimed.
 
 ### What is stored
 

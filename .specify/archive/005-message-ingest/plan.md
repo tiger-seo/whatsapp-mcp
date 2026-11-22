@@ -2,7 +2,7 @@
 
 **Branch**: `005-message-ingest` | **Date**: 2026-11-13 | **Spec**: [spec.md](spec.md)
 
-**Input**: Feature specification from `specs/005-message-ingest/spec.md`
+**Input**: Feature specification from `.specify/archive/005-message-ingest/spec.md`
 
 **Status**: Phase 0 and Phase 1 complete; tasks generated and the cross-artifact analysis of 2026-11-13 applied. The
 first design review (`61a63f4`) returned BLOCK, the second (`1b1d91f`) CONCERNS and the third (`84dfa32`) PASS with
@@ -159,7 +159,7 @@ accepted and recorded in the spec's clarifications; an opt-in request is in the 
 ### Documentation (this feature)
 
 ```text
-specs/005-message-ingest/
+.specify/archive/005-message-ingest/
 ├── spec.md
 ├── plan.md              # this file
 ├── research.md          # Phase 0: R1–R15, and the earlier investigation as an appendix
