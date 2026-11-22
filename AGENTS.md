@@ -30,7 +30,8 @@ feature security decisions. `docs/roadmap.md` orders the features. The storage s
 ### `specs/NNN-*/`: feature specs
 Every feature so far: 001 binary skeleton, 002 SQLite storage, 003 connection, pairing and status (all merged), 004
 shutdown drain (pull request #11). Each has `spec.md`, `plan.md`, `tasks.md`, contracts and a `verification.md` with
-the evidence and the Owner reviews table. Nothing is archived yet (`.specify/archive/` does not exist).
+the evidence. The binary-skeleton baseline is consolidated in `.specify/memory/spec.md` and
+`.specify/memory/plan.md`; its original feature artifacts are in `.specify/archive/001-binary-skeleton/`.
 
 ### `.specify/memory/constitution.md`: principles
 Read it before planning or implementing. It sets the review workflow below.
@@ -92,6 +93,7 @@ exit code read from the command itself (a pipe through `tail` or `grep` hides a 
 gofmt -l .                                              # must print nothing
 go vet ./...
 go mod verify
+go build ./cmd/whatsapp-mcp                             # CGO-free local CLI build
 go test ./... -count=1 -timeout 30m                     # store tests write several GB to TEMP
 for t in windows/amd64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do GOOS=${t%/*} GOARCH=${t#*/} go build -o /dev/null ./cmd/whatsapp-mcp; done
 go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
@@ -110,6 +112,22 @@ On demand only (each guarded by an environment variable):
 CI (`.github/workflows/ci.yml`) runs gofmt, vet, the five builds and `go test` on Linux, Windows and macOS for every
 push and pull request.
 
+## Active Technologies
+
+- Binary-skeleton baseline: Go 1.27.0 with the `go1.27.3` toolchain and `CGO_ENABLED=0`; pure-Go
+  `gofrs/flock` and `pelletier/go-toml/v2`. These are archival baseline versions, not current pin guidance.
+  [Source: .specify/archive/001-binary-skeleton/plan.md -> "Primary Dependencies"] [Source: .specify/archive/001-binary-skeleton/verification.md -> "Toolchain"]
+
+## Project Structure
+
+- The CLI owns startup and signal wiring. `internal/config` owns the settings registry and directory
+  resolution, `internal/lock` owns exclusive access, and `internal/buildinfo` owns build metadata.
+  [Source: .specify/archive/001-binary-skeleton/plan.md -> "Structure Decision"]
+
+## Recent Changes
+
+- [specs/001-binary-skeleton](.specify/archive/001-binary-skeleton/spec.md): Archived the CLI, configuration, locking, shutdown, privacy and CI baseline.
+
 ## File Operations
 
 The repository stores LF. A script that edits files on Windows must read with `newline=''` and write with
@@ -124,6 +142,18 @@ the user unlinking the device on the phone, then deleting the directory. Record 
 `verification.md`; a step not run is "not verified". Automated tests use `internal/wasim` only.
 
 ## Known Issues & Gotchas
+
+### Keep the Lock PID Outside the Windows Locked Byte
+**Issue:** A contending process cannot read a PID stored at byte 0 on Windows.
+**Root Cause:** The byte-range lock at offset 0 is mandatory; Unix locking is advisory.
+**Prevention Rule:** Keep the PID at offset 1, and truncate without deleting the file while still holding the lock.
+[Source: .specify/archive/001-binary-skeleton/research.md -> R6]
+
+### Validate TOML After Decoding
+**Issue:** Validation in `encoding.TextUnmarshaler` did not reliably reject wrong values or retain their positions.
+**Root Cause:** The parser can send textual representations of non-string values without position information.
+**Prevention Rule:** Decode to a map, validate using the registry, and index source lines in a separate parser pass.
+[Source: .specify/archive/001-binary-skeleton/research.md -> R2]
 
 ### ⚠️ The Quiet-Stop Check Sees Every Goroutine in the Process
 **Symptom:** a simulator test fails with `work_running` although its own client stopped cleanly.

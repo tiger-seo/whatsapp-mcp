@@ -5,7 +5,7 @@ description: "Task list for the binary skeleton (CLI, configuration, logging, lo
 
 # Tasks: Binary skeleton (CLI, configuration, logging, lock, CI)
 
-**Input**: Design documents from `specs/001-binary-skeleton/`
+**Input**: Design documents from `.specify/archive/001-binary-skeleton/`
 
 **Prerequisites**: [plan.md](plan.md), [spec.md](spec.md), [research.md](research.md), [data-model.md](data-model.md),
 [contracts/](contracts/), [quickstart.md](quickstart.md)
@@ -212,7 +212,7 @@ check that `check` fails and names it (quickstart §6).
 - [X] T040 [P] Update `README.md`: replace only the line `**Status:** in development; no code yet.` with a status line saying the binary skeleton exists and only `version` works (the README is rewritten in feature 011)
 - [X] T041 [P] Update the "Current state" section of `AGENTS.md`: the code now exists (`cmd/whatsapp-mcp`, `internal/config`, `internal/lock`, `internal/buildinfo`, `.github/workflows/ci.yml`); feature 001 is done once verified; settings come from the registry in `internal/config/setting.go` (a new setting is one descriptor plus one `Config` field)
 - [X] T042 Run every scenario of [quickstart.md](quickstart.md) §1–§5 with the real binary on this machine (Windows, Git Bash), including the manual Ctrl+C check on `serve` and the working-directory check, which only creates the real `%AppData%\whatsapp-mcp` directory. Remove that directory afterwards if it did not exist before (check first and note it)
-- [X] T043 Create `specs/001-binary-skeleton/verification.md` recording, with commands, date (2026-10-27 or the actual day) and counts: `gofmt`/`go vet` results, `go test ./...` package and test counts, the five cross-builds, each quickstart scenario's result, and the CI run URL with the job results from T038
+- [X] T043 Create `.specify/archive/001-binary-skeleton/verification.md` recording, with commands, date (2026-10-27 or the actual day) and counts: `gofmt`/`go vet` results, `go test ./...` package and test counts, the five cross-builds, each quickstart scenario's result, and the CI run URL with the job results from T038
 - [X] T044 Check line endings and leftovers: `git ls-files --eol` shows no `w/crlf` for any tracked file (rewrite with LF if so); `gofmt -l .` is empty; no requirement IDs (`FR-`, `SC-`, `US`, `R1`…, `D14`…) in any `.go` comment (`grep -rnE '(FR|SC)-[0-9]|\bUS[0-9]|\bD1[0-9]?\b' --include=*.go .`)
 
 ---
