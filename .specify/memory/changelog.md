@@ -2,6 +2,21 @@
 
 ## Merged Features Log
 
+### MCP Over Stdio: Chat and Contact Tools — archived 2026-11-22
+**Branch:** `006-mcp-stdio-tools`
+**Spec:** [specs/006-mcp-stdio-tools/spec.md](../archive/006-mcp-stdio-tools/spec.md)
+
+**What was added:**
+- Browse stored chats and find contacts and their conversations through five bounded local MCP read tools. Login and pairing tools remain deferred.
+
+**New Components:**
+- `internal/mcp` with SDK registration, public results, guarded stdio and bounded diagnostics; a store-owned read facade and command lifecycle wiring.
+
+**Superseded:**
+- RETIRED: SC-005 (from .specify/archive/001-binary-skeleton/spec.md -> SC-005) → replaced by SC-046. Reason: Working stdio MCP emits protocol bytes; stdout must carry zero nonprotocol output.
+
+**Tasks Completed:** 46/46 tasks
+
 ### Message Ingest — archived 2026-11-22
 **Branch:** 005-message-ingest
 **Spec:** [specs/005-message-ingest/spec.md](../archive/005-message-ingest/spec.md)

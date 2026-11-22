@@ -6,6 +6,8 @@
 > **Revision**: 2026-11-22 — Reconciled the earlier marker and reconnect clauses with FR-110 through FR-113; retained the recovery and durability safeguards and the historical feature 003 artifacts.
 > **Revision**: 2026-11-22 — Archived specs/005-message-ingest: live and history ingest, LID reconciliation, name resolution, and bounded failure handling.
 > **Revision**: 2026-11-22 — Aligned the quiet-stop event count in FR-109 with FR-138: dropped ingest messages are reported separately and do not fail the check.
+> **Revision**: 2026-11-22 — Archived specs/006-mcp-stdio-tools: five local read tools, bounded transport and store isolation, and protocol-only stdout replacing the skeleton's zero-byte criterion.
+> **Revision**: 2026-11-22 — Clarified Story 5 and FR-095 so the earlier empty-stdout and no-tools baselines are not mistaken for current stdio requirements.
 
 ## Configuration Decisions
 
@@ -227,7 +229,9 @@ mode nothing but protocol traffic ever reaches stdout.
 path. A stray byte on stdout breaks the MCP client (Principle IV).
 
 **Independent Test**: Start `serve`, send each stop signal, check the exit code and that the lock is free
-afterwards; run `stdio` with debug logging and check that stdout stays empty.
+afterwards. Run `stdio` with a local MCP client and debug logging; check that the client can initialize,
+that stdout contains only MCP protocol traffic, and that logs go to stderr. Empty stdout was expected
+for the feature 001 skeleton, which did not yet serve MCP.
 
 **Acceptance Scenarios**:
 
@@ -237,8 +241,9 @@ afterwards; run `stdio` with debug logging and check that stdout stays empty.
    with a non-zero code.
 3. **Given** `stdio` started by an MCP client, **When** the client closes the process's stdin, **Then** the
    process shuts down the same way and exits 0.
-4. **Given** `stdio` at log level `debug`, **When** it starts, runs and shuts down, **Then** stdout receives no
-   bytes, and every log line is on stderr.
+4. **Given** `stdio` at log level `debug`, **When** it starts, exchanges MCP messages and shuts down,
+   **Then** stdout contains only MCP protocol traffic, and every log line is on stderr. See SC-046.
+   [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> SC-007]
 5. **Given** any command at any level, **When** it logs, **Then** each line carries a timestamp, a level and a
    message with structured key-value attributes, and lines below the configured level are not written.
 
@@ -729,6 +734,54 @@ An owner sees useful chat names without each group message triggering another gr
 
 ---
 
+### User Story 22 - Browse Stored Conversations (Priority: P1)
+
+[Source: .specify/archive/006-mcp-stdio-tools/spec.md -> User Story 1]
+
+As the account owner using a local assistant, I can discover, search and inspect my stored chats without running a separate daemon or confusing an absent conversation with a broken service.
+
+**Why this priority**: Browsing conversations is the first useful read capability and establishes the common calling and result conventions.
+
+**Independent Test**: Start a local client with synthetic conversations and a fake WhatsApp connection, discover the two chat tools and browse multiple pages, including chats with no messages. Exact five-tool discovery is the cross-story feature acceptance below, not a prerequisite for the US1 development checkpoint.
+
+**Acceptance Scenarios**:
+
+1. **Given** an unlocked, valid data directory at the US1 development checkpoint, **When** the client starts `whatsapp-mcp stdio` and initializes MCP, **Then** it discovers `list_chats` and `get_chat` with their required inputs and real defaults; stdout contains protocol traffic only. This two-tool checkpoint is not a complete feature 006.
+2. **Given** 35 stored chats, **When** `list_chats` is called without optional inputs, **Then** it returns the first 30 in most-recent-activity order; page 1 returns the remaining five with no duplicates for unchanged data.
+3. **Given** matching chat names and JIDs, **When** a query and `sort_by: "name"` are supplied, **Then** only matching chats are returned in name order; equal sort values have a stable tie-breaker.
+4. **Given** a chat with a known latest message, **When** it is listed or fetched with `include_last_message` true and then false, **Then** the latest-message detail appears only in the former, while the chat's identity and last-activity time remain correct.
+5. **Given** an unknown `chat_jid`, **When** `get_chat` is called, **Then** it returns a clear not-found tool error; an empty search instead returns a successful empty list.
+6. **Given** another process holds the data directory, **When** stdio starts, **Then** it fails with the existing lock-holder diagnostic without opening a second account owner or silently proxying.
+7. **Given** the owner launched the local stdio service, **When** its client reads any stored chat or searches contacts through the exposed tools, **Then** no per-chat allow-list or per-read approval is required; this read permission does not grant pairing or sending permission.
+
+---
+
+### User Story 23 - Find a Contact and Their Conversations (Priority: P1)
+
+[Source: .specify/archive/006-mcp-stdio-tools/spec.md -> User Story 2]
+
+As the account owner, I can find someone by their saved or advertised name or phone number and inspect their direct chat and group conversations without partial-number mistakes or repeated chats.
+
+**Why this priority**: Reliable identity matching prevents showing the wrong person's conversation and fixes several historical lookup defects.
+
+**Independent Test**: Seed contacts with distinct full, push, first and business names, mapped and unmapped LIDs, similar phone numbers, and repeated messages in shared groups. Call the three contact tools without any live lookup.
+
+**Acceptance Scenarios**:
+
+1. **Given** contacts whose full name, push name, first name, business name or phone number matches a query, **When** `search_contacts` is called, **Then** each matching contact appears once and groups do not appear as contacts.
+2. **Given** a phone number with supported formatting and its equivalent phone JID and mapped LID, **When** each is supplied to `get_direct_chat_by_contact` or `get_contact_chats`, **Then** each resolves to the same person and equivalent stored results.
+3. **Given** two contacts with overlapping phone digits, **When** the complete number of one is requested, **Then** only its exact direct chat matches; a substring cannot select the other contact.
+4. **Given** a contact has many messages in a group and a newer last message from another participant, **When** `get_contact_chats` is called, **Then** that group appears once with its actual latest message, not an arbitrary message from the contact.
+5. **Given** an unmapped LID with a stored direct chat, **When** that LID is requested, **Then** the existing LID identity can be matched without inventing a phone number or making a network request.
+6. **Given** no matching contact chats, **When** `get_contact_chats` is called, **Then** it returns a successful empty list; a missing direct chat is a not-found tool error.
+
+### Cross-Story Feature Acceptance
+
+1. **Given** both stories are implemented, **When** the client initializes MCP and discovers tools, **Then** it discovers exactly the five tools in FR-140 with their true defaults and input/output schemas; neither deferred login tool is registered or callable, and stdout contains protocol traffic only.
+2. **Given** a mapped phone/LID pair and only its LID direct-chat row, **When** either equivalent identity is supplied to the singular contact-chat tool, **Then** it returns that exact mapped LID chat. If both direct rows exist, the phone row wins; plural results preserve both distinct stored chat identities.
+
+[Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Cross-Story Feature Acceptance"]
+
 ### Edge Cases
 
 - **`version` with a broken environment:** it reads no configuration, touches no data directory and takes no
@@ -866,6 +919,17 @@ An owner sees useful chat names without each group message triggering another gr
 - An individual store operation can fail due to cancellation, limits or low disk; stop ingest and the connected command safely and report the incomplete record, while retaining committed earlier batches. The operator fixes the problem and restarts under existing session-safety rules. [Source: .specify/archive/005-message-ingest/spec.md -> "An individual store operation can fail due to cancellation, limits or low disk; stop ingest and the connected command safely and report the incomplete record, while retaining committed earlier batches"]
 - Receive overload closes the affected connection and is reported with a warning that local history may have a gap; retry or replay is not guaranteed. [Source: .specify/archive/005-message-ingest/spec.md -> "Receive overload closes the affected connection and is reported with a warning that local history may have a gap; retry or replay is not guaranteed."]
 - Shutdown during ingest cannot allow writes after retirement or falsely establish a quiet stop; pending work is accounted for under feature 004's existing rules. [Source: .specify/archive/005-message-ingest/spec.md -> "Shutdown during ingest cannot allow writes after retirement or falsely establish a quiet stop; pending work is accounted for under feature 004's existing rules."]
+
+- Missing required arguments, wrong types, unknown fields, empty required strings, unsupported JID domains and invalid sort values fail clearly, without account or conversation mutations. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Missing required arguments"]
+- Omission takes a default; `limit: 0` is invalid and explicit `include_last_message: false` remains false. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Omitted defaults differ from explicitly invalid zero values"]
+- Accept limits 1 through 200 and zero-based nonnegative integer pages; reject invalid limits, overflow and offsets over 100,000 before querying. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Limits of 1 and 200 succeed"]
+- Literal query punctuation, Unicode or terminal controls must not corrupt matching, inject a query or execute commands or terminal controls in rendered output. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "A query containing"]
+- Missing activity or latest detail remains absent or null as applicable; never invent dates or messages. Empty lists are arrays, not null. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Missing last activity and missing latest message"]
+- Preserve distinct mapped phone and LID chats before merging and return each stored chat only once. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Mapped phone and LID chat rows may coexist"]
+- Tied latest timestamps select a deterministic real message; captions remain separate from message text. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Tied latest-message timestamps"]
+- Cancellation, EOF, slow readers and request floods must not leave unbounded work or release the lock before account and store work quiesce. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Cancellation, end-of-input, slow output consumers and request floods"]
+- Deferred login/QR calls fail as unknown tools without initiating pairing or revealing QR material. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Calls to deferred login-status or pairing-QR tools"]
+- Store busy, limit and closed errors are failures, not empty success; a terminal device-storage fault ends stdio rather than leaving it waiting. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Store busy, resource-limit and closed errors"]
 
 ## Requirements
 
@@ -1084,8 +1148,10 @@ An owner sees useful chat names without each group message triggering another gr
 - **FR-058**: Every list query MUST take a page size and an offset, MUST return results in a deterministic order with [Source: .specify/archive/002-sqlite-storage/spec.md -> FR-025]
   ties broken by a unique key, and MUST reject a non-positive page size, a negative offset, overflow or a request
   above FR-076 bounds. A direct store caller MUST NOT bypass those bounds.
+  MCP list tools MUST accept limits 1–200 and zero-based integer pages; reject negative pages, nonintegers, overflow and offsets above 100,000. Empty results are successful empty lists. Do not truncate a successful page to meet a byte limit. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-009]
 - **FR-059**: List chats: filter by a text contained in the name or the JID; sort by last activity (newest first) or [Source: .specify/archive/002-sqlite-storage/spec.md -> FR-026]
   by name (ascending); optionally include each chat's latest message by time.
+  `list_chats` accepts optional `query`, `limit` (30), `page` (0), `include_last_message` (true) and `sort_by` (`last_active` or `name`). Match the stored chat name or JID by case-insensitive literal substring. Sort missing activity or unnamed chats last in their respective orders; break ties by ascending JID. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-004]
 - **FR-060**: Get chat: by JID, with its latest message; "not found" if absent. [Source: .specify/archive/002-sqlite-storage/spec.md -> FR-027]
 - **FR-061**: Search contacts: match the text against full name, push name, first name, business name and phone [Source: .specify/archive/002-sqlite-storage/spec.md -> FR-028]
   number of the device store's contacts, excluding groups. A contact known by LID is reported with its phone number
@@ -1094,11 +1160,14 @@ An owner sees useful chat names without each group message triggering another gr
   both, the result carries the phone-number JID and phone number, and the phone-number entry's first non-empty name
   in the order full, first, push, business; if that entry has none, the LID entry's name in the same order. A LID
   without a mapped phone number is reported with its LID JID and an empty phone number.
+  MCP `search_contacts` requires a nonempty `query`, with literal case-insensitive substring matching and stable pagination for unchanged data (`limit` 50, `page` 0 by default). The public result has `jid`, `name` and a known `phone_number` or null; it does not change the store representation. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-006] [Source: .specify/archive/006-mcp-stdio-tools/data-model.md -> "Contact"]
 - **FR-062**: Direct chat by contact: the contact is resolved by FR-068. The result is the direct chat whose phone [Source: .specify/archive/002-sqlite-storage/spec.md -> FR-029]
   number equals the contact's number exactly, else the contact's `@lid` chat if it still exists, or "not found".
+  `get_direct_chat_by_contact` requires `sender_phone_number` (formatted phone number, phone JID or LID). Apply the same exact phone-first, mapped-LID-second precedence for equivalent inputs, even if only the LID row exists. Unmapped LIDs match their own exact chat. Never match a partial phone number or group; absence is a not-found tool error. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-007]
 - **FR-063**: Contact chats: the contact is resolved by FR-068. The result is the contact's direct chats (the [Source: .specify/archive/002-sqlite-storage/spec.md -> FR-030]
   phone-number chat and the `@lid` chat, while both exist before a merge) plus every group in which the contact
   sent a message under either identity, each once, newest activity first, each with its real latest message.
+  MCP `get_contact_chats` requires `jid` (accepting the same three contact forms), defaults to `limit` 20 and `page` 0, and includes **any** stored chat with a message from the person, not just groups, in addition to the person's exact direct chats. Return each actual chat once, newest activity first, ascending JID for ties, with the latest message regardless of sender. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-008] [Source: .specify/archive/006-mcp-stdio-tools/contracts/store-and-lifecycle.md -> "Contact membership"]
 - **FR-064**: List messages: filter by strictly-after time, strictly-before time, chat JID, sender and search text, [Source: .specify/archive/002-sqlite-storage/spec.md -> FR-031]
   all optional and combined; newest first. The sender is a contact resolved by FR-068 and matches messages sent
   under either identity. The search text matches the text or the caption.
@@ -1184,8 +1253,10 @@ An owner sees useful chat names without each group message triggering another gr
 - **FR-094**: The connection boundary MUST support offline substitutes for lifecycle, pairing, status and events, and the send, upload, download, contact-lookup and group-info capabilities required by later features. This feature MUST NOT enable message sending, downloading, ingest or MCP tools merely to establish that boundary.
   [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-012]
 
-- **FR-095**: The `stdio` and `serve` shells start the embedded owner when the marker permits, use a clean saved session or remain unpaired, and remain running until cancellation. The approved startup budget is at most three retries, five cancellable seconds apart, only where FR-099 permits demonstrated-safe same-active-generation retries; otherwise remain disconnected with an actionable limitation diagnostic and saved identity intact. It MUST NOT bypass 405, logout or shutdown. No automatic QR, tools or listener are exposed here.
+- **FR-095**: The `stdio` and `serve` shells start the embedded owner when the marker permits, use a clean saved session or remain unpaired, and remain running until cancellation. The approved startup budget is at most three retries, five cancellable seconds apart, only where FR-099 permits demonstrated-safe same-active-generation retries; otherwise remain disconnected with an actionable limitation diagnostic and saved identity intact. It MUST NOT bypass 405, logout or shutdown. Neither shell exposes an automatic pairing QR or a network listener.
   [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-013]
+  Neither shell exposed tools in feature 003. Since feature 006, `stdio` exposes the five local read tools in FR-140; `serve` still has no MCP endpoint.
+  [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-002]
 
 - **FR-096**: Shutdown MUST stop version refresh, pairing, reconnect work, event handling and all client-originated device writes before closing shared storage, then release the lock. It MUST not report clean shutdown or release ownership while those writes can still occur.
   [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-014]
@@ -1261,6 +1332,23 @@ An owner sees useful chat names without each group message triggering another gr
 - **FR-137**: Automated synthetic-event tests MUST cover live and history, captions and media metadata, out-of-order and duplicate delivery, group and own senders, mapping failures, merge collisions, name caching, bounded batches, failure and shutdown interleavings. Real-account acceptance requires separate permission for each pairing, connection and receiving step; review the roadmap's shutdown follow-up before that test. [Source: .specify/archive/005-message-ingest/spec.md -> FR-014]
 
 - **FR-138**: A message event dropped after the generation retire bit is counted separately as `DroppedMessages`, left unacknowledged and reported as a possible gap. It does not count as a dropped owner-relevant event for the quiet-stop check; all other parts of the owner event rule still apply. [Source: .specify/archive/005-message-ingest/contracts/ingest.md -> "Revised event-count rule"]
+
+#### Local MCP over stdio
+
+- **FR-139**: `whatsapp-mcp stdio` MUST serve an embedded MCP session under the existing exclusive owner, configuration, private store and connection lifecycle. A held lock is a clear failure; no implicit proxy, HTTP listener or second owner. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-001]
+- **FR-140**: The stdio read suite exposes exactly `list_chats`, `get_chat`, `search_contacts`, `get_direct_chat_by_contact` and `get_contact_chats` with their preserved purposes. Login-status and pairing QR are deferred; message, send and media tools are later work. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-002]
+- **FR-141**: Advertised schemas MUST use snake_case, declare required fields, real defaults, ranges and enums. Handlers independently default omitted values and validate supplied values; preserve explicit false and reject unknown fields with actionable invalid-input errors. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-003]
+- **FR-142**: `get_chat` requires `chat_jid` and defaults `include_last_message` to true. Fetch that exact stored chat, including groups and unresolved LIDs, or return a not-found tool error. Disabling latest detail MUST preserve last-activity metadata. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-005]
+- **FR-143**: Chat results carry `jid`, `name`, group identity, nullable last activity and optional latest detail. Latest detail carries composite `chat_jid`/`id`, sender identity and name, timestamp, own-message flag, text, caption and media type, with no media keys or credentials. Timestamps MUST use RFC 3339; the five tools take no timestamp filter. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-010]
+- **FR-144**: Successful tool results MUST include authoritative structured content and an equivalent, safely rendered text value without double encoding. No compact `format: "text"` mode. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-011]
+- **FR-145**: Invalid arguments, absent singular objects and bounded-operation failures MUST produce clear tool errors, not opaque internal errors or empty successes. Malformed protocol requests may use a protocol error. Identify the field or unavailable capability without disclosing raw queries, storage errors, credentials or unnecessary paths. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-012]
+- **FR-146**: Do not register `get_login_status`; keep offline CLI `status` unchanged. Live status is deferred to `docs/backlog/006-mcp-login-tools.md`. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-013]
+- **FR-147**: Do not register `get_pairing_qr`; terminal `pair` remains the pairing path. No stdio pairing opt-in, automatic pairing or tool-controlled window; recovery and reconnect gates remain unchanged. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-014]
+- **FR-148**: Chat/contact reads use local data and mappings, preserve stored-name precedence and never fetch WhatsApp contacts or group info. Serve those reads offline when the store and read policy permit; inherit existing startup account behavior. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-015]
+- **FR-149**: Owner launch authorizes local reads of all stored chats and contacts without per-chat restrictions or per-read approval. Neither launch, tool inputs nor returned content authorizes pairing, recovery or sending. Configurable restrictions are deferred for research; the owner decision is recorded in specification §8.11. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-016]
+- **FR-150**: Tool pressure MUST NOT exhaust shared store admission or stop ingest by flooding it. Bound actual input/output bytes, field sizes, concurrency, queued work and duration; propagate cancellation and reject overload explicitly. Planning must set concrete ceilings and a testable admission policy before implementation. No unbounded default or inherited receive exception. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-017]
+- **FR-151**: On EOF, disconnect or stop signal, stop admission and cancel and drain requests before releasing account, fence, store and lock resources in the existing order. Terminal device-store or ingest failure MUST enter normal unsuccessful shutdown, never remain waiting or claim quiet stop or clear the marker without proof. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-018]
+- **FR-152**: Through the official SDK in-memory transport, test all five tools for success and rejection using a seeded temporary store and fake owner, with no real account or account network. Prove the two deferred tools are absent and fail without account work. Also cover initialization, protocol-only stdout, lock refusal, cancellation, EOF and terminal faults at command level. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-019]
 
 ### Key Entities
 
@@ -1482,6 +1570,8 @@ a numbered, embedded schema change, applied once and in order. [Source: .specify
 
 #### Chat
 
+The public MCP `Chat` represents a stored direct, group or unresolved-LID conversation with full `jid`, possibly empty `name`, `is_group`, and a UTC RFC 3339 `last_message_time` or null. `latest_message` is omitted if not requested and null if requested but absent. Contact-chat tools always request it. Distinct phone and LID rows remain distinct until merged; the singular direct tool prefers the phone row. This projection does not change persistence. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Chat"] [Source: .specify/archive/006-mcp-stdio-tools/data-model.md -> "Chat"]
+
 a conversation identified by its full JID (direct or group), with a name, the quality of that name (saved, real or fallback), the time
 the name was seen, and the time of its newest stored message. [Source: .specify/archive/002-sqlite-storage/spec.md -> "Chat"]
 
@@ -1530,6 +1620,8 @@ Ingest field sources (no schema change): [Source: .specify/archive/005-message-i
 
 
 #### Message
+
+The MCP latest-message projection uses `id`, `chat_jid`, `chat_name`, `sender` (full normalized JID), `sender_name` (local resolution/fallback), `timestamp` (UTC RFC 3339 with available fractional precision), `is_from_me`, `content`, `caption` and `media_type` (empty, image, video, audio or document). Text and caption are separate and may be empty. Latest is the actual row for that chat ordered by timestamp descending, then ID descending. This projection excludes `MediaMeta`, download URLs, keys, hashes, device state and raw internal structs; authoritative values survive safe text escaping. [Source: .specify/archive/006-mcp-stdio-tools/data-model.md -> "Message"]
 
 identified by chat JID and ID; carries the sender (full JID and phone number), time, from-me flag, text,
 caption, media type and media metadata. Belongs to exactly one chat. [Source: .specify/archive/002-sqlite-storage/spec.md -> "Message"]
@@ -1661,6 +1753,8 @@ what is needed to download a message's media later: URL, direct path, key, hashe
 type and original file name. [Source: .specify/archive/002-sqlite-storage/spec.md -> "Media metadata"]
 
 #### Contact
+
+The MCP contact projection has a canonical person `jid` (mapped phone or unresolved LID), `phone_number` (normalized digits or null), and `name`. Exclude group and unsupported-domain rows; group aliases before matching/paging and allow every name field on either alias to match. Choose full, first, push, business name, then identity fallback within an entry; prefer a mapped phone entry's chosen name over its LID alias. A mapping does not authorize an account action. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Contact"] [Source: .specify/archive/006-mcp-stdio-tools/data-model.md -> "Contact"]
 
 a person as known to the device store (names and JID, with the LID-to-phone map). Read by the store,
 written only by whatsmeow. [Source: .specify/archive/002-sqlite-storage/spec.md -> "Contact"]
@@ -1900,6 +1994,34 @@ WhatsApp-supplied conversations and past messages, distinct from live delivery. 
 
 [Source: .specify/archive/005-message-ingest/data-model.md -> "Per-generation ingest state (in memory)"]
 
+#### Chat Page
+
+Bounded, stably ordered chat or contact page: `chats: Chat[]` or `contacts: Contact[]`, effective integer `limit` and `page`, and returned `count` equal to array length. Empty arrays are `[]`; no total-match count. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Chat Page"] [Source: .specify/archive/006-mcp-stdio-tools/data-model.md -> "Result Envelopes"]
+
+#### Tool Result
+
+Authoritative public data and faithful safe text, no QR or device credentials. Success has `source: "local_store"` and `untrusted_data: true`, plus a page or `chat: Chat`. Errors use `isError: true` with `error: {code, message, field?}` and no partial success. No unknown output properties. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Tool Result"] [Source: .specify/archive/006-mcp-stdio-tools/data-model.md -> "Result Envelopes"] [Source: .specify/archive/006-mcp-stdio-tools/data-model.md -> "All success roots are objects"]
+
+#### MCP Session
+
+New, initializing, active, stopping, stopped. Initialize once; no reattachment or pump replacement. Unsafe storage/run-marker startup does not initialize. Account disconnect without logout does not erase stored data or block already-permitted local reads. [Source: .specify/archive/006-mcp-stdio-tools/data-model.md -> "Session"]
+
+#### MCP Request
+
+Frame check, credit admission, SDK dispatch, handler, pending response, written. A tool holds credit through response completion. Excess work fails without dispatch/store admission. On cancellation or transport failure retain accounting through actual handler completion and output disposal. [Source: .specify/archive/006-mcp-stdio-tools/data-model.md -> "Request"]
+
+#### Tool Store Snapshot
+
+No waiting state: admit only with no ordinary waiter, a free slot and reader, WAL at most 64 MiB and at least 640 MiB free. Cancel at 5 s or earlier on ordinary waiters, reader contention, WAL guard or caller cancellation. Hold accounting and admit no replacement until active SQLite work really returns its connection; latch unsuccessful shutdown if cancellation persists through the 5 s admission-wait bound. [Source: .specify/archive/006-mcp-stdio-tools/data-model.md -> "Store Snapshot"]
+
+#### Stdio Pump Lifetime
+
+One input frame and one output frame in two protocol pumps and one stderr pump. Ordinary diagnostics use a 16 × 4 KiB discardable queue; mandatory diagnostics use 16 × 1 KiB, a 5 s complete-write acknowledgment deadline and at most 128 fixed count/time cells. No retained raw query, name, body or client key. Overflow/failure/late acknowledgment latches unsuccessful shutdown independently of EOF and marker proof. Pumps hold bytes and completion channels only; lifecycle tracks mandatory acknowledgment on one earliest-deadline timer. A blocked inherited OS stream may remain until process exit after real work drains; cooperative test streams can join. [Source: .specify/archive/006-mcp-stdio-tools/data-model.md -> "Pump Lifetime"]
+
+#### MCP Input Validation
+
+Arguments are JSON objects; explicit null, unknown/duplicate keys, type coercion and fractions/exponents not safely representable as integers are rejected. `query` is capped at 1,024 UTF-8 bytes; require a non-whitespace character for contact search but preserve supplied text. Chat query defaults to empty; apply Unicode NFC/case folding with literal matching and search phone digits without treating search text as an identity. Contact identities accept 1–20 digits, supported formatting, phone JIDs and LID JIDs, up to 256 UTF-8 bytes; strip supported contact device suffixes and reject groups or unsupported domains. Exact chat JIDs also have a 256-byte limit and reject device-specific addresses. `page` accepts 0–100,000 only, subject to checked `page * limit` and a 100,000 offset ceiling. Keep store limits: IDs/JIDs 256 bytes, names 1 KiB, content and caption 256 KiB each, 32 MiB aggregate. Check device-origin names before scanning/folding; reject invalid legacy fields instead of truncating. [Source: .specify/archive/006-mcp-stdio-tools/data-model.md -> "All arguments are JSON objects"] [Source: .specify/archive/006-mcp-stdio-tools/data-model.md -> "`query`:"] [Source: .specify/archive/006-mcp-stdio-tools/data-model.md -> "Contact identity inputs accept"] [Source: .specify/archive/006-mcp-stdio-tools/data-model.md -> "`chat_jid`:"] [Source: .specify/archive/006-mcp-stdio-tools/data-model.md -> "`limit`:"] [Source: .specify/archive/006-mcp-stdio-tools/data-model.md -> "Store field ceilings remain binding"]
+
 ## Storage Data Flow
 
 [Source: .specify/archive/002-sqlite-storage/data-model.md -> "Derived values"]
@@ -1987,6 +2109,8 @@ retiring ──(workers and callbacks joined)────▶ stopped
 
 [Source: .specify/archive/005-message-ingest/data-model.md -> "Ingest state transitions (one generation)"]
 
+The local stdio data path checks frames and request credit before SDK dispatch, uses the read-only store and local aliases in one snapshot, then preflights and writes the structured result plus safe JSON text. Release credit after actual output completion; on failure stop the session and join actual tool and account work before closing storage and releasing the lock. [Source: .specify/archive/006-mcp-stdio-tools/data-model.md -> "Request"] [Source: .specify/archive/006-mcp-stdio-tools/contracts/tools.md -> "Every success/error tool result"] [Source: .specify/archive/006-mcp-stdio-tools/contracts/store-and-lifecycle.md -> "Drain actual handlers and SDK session"]
+
 ## Security
 
 The threat model is the [security review](../../docs/security-review.md) (F01–F16). This section takes up the
@@ -1995,6 +2119,8 @@ feature. These are requirements, not claims of implemented controls or confirmed
 unchanged.
 
 ### Assets and trust boundaries
+
+Local MCP handles stored chats, names, phone/LID mappings and previews. The boundaries are client to invocation, stored WhatsApp-authored content to assistant output, tool work to shared store/ingest resources, and diagnostics to protocol streams. Keep credentials and pairing material outside tool disclosure. Even a trusted client may be prompt-injected. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Assets are stored conversations"]
 
 [Source: .specify/archive/002-sqlite-storage/spec.md -> "Assets and trust boundaries"]
 
@@ -2103,7 +2229,34 @@ after config loading or lock acquisition does not retroactively protect earlier 
 
 - **F02, F04, F06-F08, F14-F16**: Remote transport and secret lifecycle belong to feature 010; media processing to 008-009; webhook destination and delivery to 011; incident response, release provenance and deployment assurance to 012. Existing controls and dependency checks remain in force. [Source: .specify/archive/005-message-ingest/spec.md -> "**F02, F04, F06-F08, F14-F16**"]
 
+#### Local stdio finding dispositions
+
+| Finding | Treatment and remaining scope |
+| --- | --- |
+| F01 | Owner decision of 2026-11-17 allows all local chat/contact reads without per-read prompts; prompt-injection risk remains. Configurable read restrictions and MCP login/QR are deferred; send authorization belongs to 008, transport parity to 010. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "F01 - authorization/consent"] |
+| F02 | No remote listener/proxy; protection belongs to 010. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "F02 - remote confidentiality"] |
+| F03 | Inherit private storage; at-rest/backup encryption and downstream custody remain operator responsibilities; guidance in 012. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "F03 - private storage"] |
+| F04 | No credential/QR disclosure; MCP QR lifecycle deferred; HTTP/HMAC secrets in 010/011. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "F04 - secret lifecycle"] |
+| F05/F06 | No outbound file/media operations; inherit directory checks. Send/conversion in 008, download/cache in 009. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "F05/F06 - paths and media"] |
+| F07/F08 | No webhook; destination, replay and delivery controls in 011. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "F07/F08 - webhooks"] |
+| F09 | Bound stdio, query and output work and protect ingest admission; review concrete bounds before implementation. No inherited receive exception; later message/media/HTTP bounds belong to 007–010. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "F09 - resource exhaustion"] |
+| F10 | Validate schema/handler parity, normalization, filtering, pagination and rendering. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "F10 - validation"] |
+| F11 | Redact payloads/QR and report bounded outcomes; durable audit collection, retention and review in 012. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "F11 - logs/audit"] |
+| F12 | Client/provider receives selected data and linkage; owner must understand recipient retention. No new persistence; full inventory in 012. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "F12 - retention/privacy"] |
+| F13 | Preserve storage and drain controls; no tool restoration. Rehearsal and guidance in 012. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "F13 - recovery/backups"] |
+| F14 | No automatic unlink, credential deletion or recovery. Keep fail-closed diagnostics; runbook in 012 and credential rotation in 010/011. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "F14 - incident response"] |
+| F15 | Exact dependency/integrity/vulnerability gates now; release signing, provenance and identity in 012. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "F15 - supply chain"] |
+| F16 | Local single-owner profile, synthetic evidence with platform limits; deployment and regulated assurance decisions in 012. No compliance claim. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "F16 - assurance/ownership"] |
+
 ### Security requirements
+
+- **FR-153**: Enforce owner-approved local read scope before disclosure. No tool argument, stored content or client approval claim authorizes pair, recovery or send. No restricted-read profile; prompt-injection disclosure risk remains. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> SEC-001]
+- **FR-154**: Expose no QR retrieval or pairing-window control; exclude pairing material and device credentials from tool output, logs, errors and evidence. Keep terminal pairing safeguards. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> SEC-002]
+- **FR-155**: Treat all returned names, identities, captions and text as untrusted data with clear provenance. Escape controls safely in text/diagnostics without changing authoritative values. Exclude decryption metadata and device-store secrets; never log successful payloads or QR results. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> SEC-003]
+- **FR-156**: Validate lengths, types, identity domains, literal queries, sort choices and pagination before expensive work. Reject malformed, deep and oversized input. Bound actual input, processing, query results, serialization and emitted bytes; repeated calls and slow output cannot create unbounded work. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> SEC-004]
+- **FR-157**: Preserve private storage on Unix and Windows and the safe shutdown/recovery gates. Tool errors cannot initiate repair, deletion, marker clearing, new account generations, result-file writes or automatic recovery. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> SEC-005]
+- **FR-158**: Mandatorily report denied/failed requests, terminal faults, incomplete history and receive loss with bounded secret-free tool/component, time, outcome and category. Failed admission or acknowledgment by deadline latches failure and ends stdio unsuccessfully through normal cleanup; never claim delivery. Successful-read/debug events are best effort without queries, names, numbers or bodies. Keep diagnostics on stderr and existing debug-only body restrictions; no new body logging. Durable audit retention is release work, not proved by OS acknowledgment. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> SEC-006]
+- **FR-159**: Retain exact dependency versions, module integrity, reachable-vulnerability checks and five CGO-free builds; the SDK does not authorize a whatsmeow bump. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> SEC-007]
 
 - **FR-073**: Filesystem checks MUST protect the actual objects opened/created, not only a pathname checked earlier. [Source: .specify/archive/002-sqlite-storage/spec.md -> FR-040]
   The data-directory path and database/sidecar/temp entries MUST resist replacement by unrelated identities;
@@ -2327,6 +2480,15 @@ The feature's later `verification.md` must record synthetic test evidence, suppo
 
 Synthetic tests cover oversized text, captions, names, metadata and history; malformed JIDs, timestamps and control characters; cache and concurrent-event pressure; mapping and storage failures; disk exhaustion; malicious message instructions; and callbacks racing retirement. Rejected inputs must not write a partial message or trigger a send, pairing, webhook or other external side effect. Platform-specific claims require platform-specific evidence. [Source: .specify/archive/005-message-ingest/spec.md -> "Abuse cases"]
 
+#### Local stdio abuse cases and evidence
+
+- Reject oversized/deep or ill-typed JSON, unknown fields, query-like text, malformed identities and overflow pagination within bounds, without account or conversation changes. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Submit oversized/deep JSON"]
+- Flood reads during ingest, cancel queued/active calls and stall the reader; measure limits, continued ingest and actual drain. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Flood chat/contact reads"]
+- Use synthetic names/previews with terminal controls, fake approvals and secrets; prove safe rendering, provenance, no account action and no diagnostic leakage. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Seed names and previews"]
+- Call deferred login/QR tools and submit fake approval claims; prove unknown-tool failure without disclosure or side effects. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Attempt to invoke deferred login/QR tools"]
+- Trigger device/ingest faults and disconnect/EOF during calls; prove failure exit, ordered drain, no early store close/unlock and no invalid marker clear. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Trigger device-storage/ingest terminal faults"]
+- Capture streams during initialization, tool success/failure, lock refusal and shutdown across log levels. Record commands, dates, counts, exits, measured bounds and platform limits in verification; mark unrun controls as not verified. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Capture stdout/stderr"] [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "The later `verification.md` must record"]
+
 ## Success Criteria
 
 ### Measurable Outcomes
@@ -2340,7 +2502,6 @@ Synthetic tests cover oversized text, captions, names, metadata and history; mal
   first instance's PID; after the first instance is force-killed, a new instance starts at the first attempt.
 - **SC-004**: After a stop signal, a long-running command exits 0 within 10 seconds and the data directory can be [Source: .specify/archive/001-binary-skeleton/spec.md -> SC-004]
   locked again at once.
-- **SC-005**: A `stdio` run at debug level, from start to shutdown, writes 0 bytes to stdout. [Source: .specify/archive/001-binary-skeleton/spec.md -> SC-005]
 - **SC-006**: Runs from at least 2 different working directories without an override use the same data directory. [Source: .specify/archive/001-binary-skeleton/spec.md -> SC-006]
 - **SC-007**: CI is green on the feature's pull request for formatting, static checks, tests on 3 operating [Source: .specify/archive/001-binary-skeleton/spec.md -> SC-007]
   systems and builds for all 5 targets; a deliberately unformatted file makes it fail.
@@ -2427,6 +2588,14 @@ Synthetic tests cover oversized text, captions, names, metadata and history; mal
 - **SC-038**: In a repeated-message test for a group with a successfully resolved name, one initial lookup is sufficient and no lookup is made per subsequent message while that name remains available. [Source: .specify/archive/005-message-ingest/spec.md -> SC-005]
 
 - **SC-039**: The synthetic security and shutdown cases show no invalid partial batch, unauthorized account action, secret disclosure or falsely reusable session. [Source: .specify/archive/005-message-ingest/spec.md -> SC-006]
+
+- **SC-040**: Discover all five capabilities and complete scripted chat browsing and contact lookup in one local client session with synthetic data and no separate service. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> SC-001]
+- **SC-041**: Stable paging without gaps or repeats across 235 unchanged seeded chats at default and maximum sizes; invalid size/page boundaries produce actionable errors. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> SC-002]
+- **SC-042**: Every seeded full, push, first and business name and phone search finds the expected person; aliases are equivalent and partial numbers never choose the wrong person. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> SC-003]
+- **SC-043**: Repeated group participation produces one result per chat, tied times select a real latest message, timestamps are standardized date-times and empty collections are consistent. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> SC-004]
+- **SC-044**: Zero login/pairing tools discovered; attempts to call either deferred tool fail with no QR disclosure and no account action. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> SC-005]
+- **SC-045**: Flood, cancellation and slow-output tests remain within documented byte/work ceilings; no admission-pressure ingest stops and no live tool work after completed shutdown. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> SC-006]
+- **SC-046**: At every supported log level, tool output and diagnostics disclose no credentials or QR material; stdout contains zero nonprotocol output. Every rejected abuse case leaves conversation and account state unchanged. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> SC-007]
 
 ## Assumptions
 
@@ -2524,6 +2693,14 @@ Synthetic tests cover oversized text, captions, names, metadata and history; mal
 
 - **AS-035**: The feature spec does not authorize real-account acceptance; each step needs separate permission and recorded evidence. [Source: .specify/archive/005-message-ingest/spec.md -> "Acceptance against a real account is not authorized by"]
 
+- **AS-036**: Reuse 002–005 storage, contact normalization, fakeable owner, ingest and quiet-stop safety; no WhatsApp pin, storage budget or reconnect permission change. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Features 002-005 provide"]
+- **AS-037**: The account owner launches a trusted local client under the owner's OS identity, not a multi-user or remote profile. Launch grants all stored chat/contact reads, not pairing or sending. A prompt-injected client could read unrelated chats; configurable restrictions require research and a separate decision. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Target users are account owners"]
+- **AS-038**: Retain list defaults of 30 chats, 20 contact chats and 50 contacts; contact search gains explicit pagination. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Current list defaults are retained"]
+- **AS-039**: Latest-message inclusion defaults true and honors explicit false. Missing dates or messages remain null or absent, not fabricated. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Optional latest-message inclusion defaults to true"]
+- **AS-040**: No compact text format; faithful text alongside structure is mandatory. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "The roadmap's optional compact text format is omitted"]
+- **AS-041**: Verify outcomes with synthetic data only; specifications and automated acceptance do not authorize real-account actions. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Outcome verification uses synthetic data only"]
+- **AS-042**: Review concrete transport/resource ceilings before implementation; do not infer numeric approval. Existing store ceilings and the 200-item cap remain binding. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Concrete new transport/resource ceilings"]
+
 ## Scope and References
 
 This feature covers `docs/roadmap.md` 003 and `docs/specification.md` section 8: A3 (`pair` and `status`), A5 (testable connection boundary), P4 (pairing/status state), P5 (version refresh and 405 recovery), M9 (recoverable QR pairing), the WhatsApp log bridge and shutdown portions of M10, and D11 (QR only). Sections 3.4 and 3.6 define preserved events, retry timings and pairing semantics; section 6 defect 16 is explicitly corrected. A2/D14, G1 and constitution Principles I-X remain constraints. Decisions D1-D18 are not reopened. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "This feature covers `docs/roadmap.md` 003 and `docs/specification.md`"]
@@ -2539,3 +2716,7 @@ Included: the per-generation network block and refusal count, the storage refusa
 Excluded: the 405 budget, startup retries, ordinary reconnect, other 515 reconnects and same-process re-pair (stage 2, a later feature, after the pass rate is known, with a rate limit and a reassessed E003-RX-01); a whatsmeow fork or any other dependency change (option B, a separate owner decision; the 2026-11-09 pin move to upstream `f1b7985` is the one change made); the upstream proposal in the whatsmeow Matrix room (option C, a separate outward-facing step by the owner); replacing the observation with a process exit (an untested idea); message ingest (feature 005); the recovery prompt wording. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Excluded: the 405 budget, startup retries, ordinary reconnect, other"]
 
 Scope of message ingest: live and history persistence, LID normalization and reconciliation, and name acquisition. No sending, new message types, new reconnect policy or old-deployment import; webhook delivery, media download and MCP tools remain separate. [Source: .specify/archive/005-message-ingest/spec.md -> "Sources and scope"]
+
+Local stdio covers the five P1 chat/contact tools, M4–M7, S6, D1, D9, D15 and §4.4, including schema, query and identity defects from §6 items 2, 3, 6, 7, 8 and 13. A5, M10, Q3 and constitution I–X still apply. Use the official SDK and in-memory verification. Wire stdio terminal device-fault handling and reassess ingest pressure without retrying busy ingest writes. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "This feature covers"] [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Included: local stdio protocol service"]
+
+Excluded: MCP login status/QR and pairing-window controls; message search/context/last-interaction (007), sends/approval (008), media download/cache (009), HTTP/bearer/proxy/`stdio --connect` (010), webhooks (011), and release assurance (012). The `serve` terminal-fault follow-up is separate. No phone-code pairing, same-process re-pair, new reconnect/recovery authority, multiple accounts, migration/import or REST. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> "Excluded: `get_login_status`"]

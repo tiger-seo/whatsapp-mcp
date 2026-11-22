@@ -30,8 +30,8 @@ feature security decisions. `docs/roadmap.md` orders the features. The storage s
 ### `specs/NNN-*/`: feature specs
 Every feature so far: 001 binary skeleton, 002 SQLite storage, 003 connection, pairing and status (all merged), 004
 shutdown drain (pull request #11). Each has `spec.md`, `plan.md`, `tasks.md`, contracts and a `verification.md` with
-the evidence. The binary skeleton, storage, connection/pairing/status, shutdown-drain and message-ingest baselines are consolidated in
-`.specify/memory/spec.md` and `.specify/memory/plan.md`; the original feature artifacts for 001–005 are in
+the evidence. The binary skeleton, storage, connection/pairing/status, shutdown-drain, message-ingest and MCP stdio baselines are consolidated in
+`.specify/memory/spec.md` and `.specify/memory/plan.md`; the original feature artifacts for 001–006 are in
 `.specify/archive/`.
 
 ### `.specify/memory/constitution.md`: principles
@@ -80,7 +80,7 @@ Three real-account runs (2026-11-14, cleaned up) are in `verification.md`; the l
 observed on a real account. Feature 006 implements five local read-only MCP tools in `stdio`, using a store-owned
 read facade and the existing owner/lock lifecycle. Owner launch allows all stored chat and contact reads; it does
 not grant account actions. Its native pipe evidence covers Windows/amd64, Linux/amd64 and macOS/arm64 with no real
-account. Delivery and owner review are tracked in [feature 006 tasks](specs/006-mcp-stdio-tools/tasks.md#current-state).
+account. Delivery and owner review are recorded in the archived [feature 006 tasks](.specify/archive/006-mcp-stdio-tools/tasks.md#current-state).
 Since 2026-11-13 `go.mod` replaces whatsmeow with the owner's fork `github.com/tiger-seo/whatsmeow` at `bedcf01`
 (branch `receive-bounds`), which enforces the receive bounds, sends nothing to the user's phone on another account's
 behalf, and carries the lost-515 fix proposed upstream as tulir/whatsmeow#1337; E003-RX-01 is retired.
@@ -113,7 +113,11 @@ On demand only (each guarded by an environment variable):
 CI (`.github/workflows/ci.yml`) runs gofmt, vet, the five builds and `go test` on Linux, Windows and macOS for every
 push and pull request.
 
+For local MCP regression coverage, run `go test ./internal/mcp ./cmd/whatsapp-mcp` with `CGO_ENABLED=0` and synthetic fixtures. The native pipe checks require native runners, not cross-builds. [Source: .specify/archive/006-mcp-stdio-tools/plan.md -> "Testing"] [Source: .specify/archive/006-mcp-stdio-tools/verification.md -> "Output Deadline and Config Size Follow-up (2026-11-20 UTC)"]
+
 ## Active Technologies
+
+- Stdio: official `github.com/modelcontextprotocol/go-sdk v1.8.0`, Go 1.27.0 with `go1.27.4`, CGO disabled, and inherited `modernc.org/sqlite v1.62.0`. No WhatsApp fork or libsignal pin change. [Source: .specify/archive/006-mcp-stdio-tools/plan.md -> "Primary Dependencies"] [Source: .specify/archive/006-mcp-stdio-tools/plan.md -> "Language/Version"] [Source: .specify/archive/006-mcp-stdio-tools/plan.md -> "Storage"]
 
 - Feature 005 baseline: Go 1.27 with `go1.27.4`, CGO-free builds, and the owner-approved whatsmeow fork at `bedcf01`. The fork implements receive limits and disables phone requests on another account's behalf in this configuration. No schema migration or new dependency. [Source: .specify/archive/005-message-ingest/plan.md -> "Language/Version"] [Source: .specify/archive/005-message-ingest/plan.md -> "Primary Dependencies"] [Source: .specify/archive/005-message-ingest/plan.md -> "Storage"]
 
@@ -131,6 +135,8 @@ push and pull request.
 
 ## Project Structure
 
+- `internal/mcp` owns the SDK guard, schemas, public DTOs, stdio framing and diagnostic pumps. `internal/store` owns the narrow read facade, admission and WAL guard; `cmd/whatsapp-mcp` owns lifecycle and native pipe tests. Never pass the account owner to a tool. [Source: .specify/archive/006-mcp-stdio-tools/plan.md -> "Structure Decision"] [Source: .specify/archive/006-mcp-stdio-tools/plan.md -> "Source Code (repository root)"]
+
 - Ingest lives beside the session in `internal/wa`: common extraction, a single bounded history worker, a name cache and lookup worker, and LID normalization and reconciliation. `internal/store` owns validation, byte accounting and read helpers; the CLI handles the owner's terminal failure signal. [Source: .specify/archive/005-message-ingest/plan.md -> "Source Code (repository root)"]
 
 - In the quiet-stop path, `internal/wa/fence.go` isolates each generation's network, `quiet.go` observes bounded library work, and the owner coordinates retirement and fresh-client handover. `internal/store` owns the barrier's in-memory refusal counts; the CLI reports the outcome. No schema migration. [Source: .specify/archive/004-shutdown-drain/plan.md -> "Source Code (repository root)"] [Source: .specify/archive/004-shutdown-drain/plan.md -> "Storage"]
@@ -147,6 +153,7 @@ push and pull request.
 
 ## Recent Changes
 
+- [specs/006-mcp-stdio-tools](.specify/archive/006-mcp-stdio-tools/spec.md): Five bounded local chat/contact read tools over MCP stdio; no login, QR, send or HTTP capability added.
 - [specs/005-message-ingest](.specify/archive/005-message-ingest/spec.md): Archived live and history message persistence, atomic LID reconciliation, bounded naming work and explicit failure reporting.
 - [specs/004-shutdown-drain](.specify/archive/004-shutdown-drain/spec.md): Archived proven quiet-stop reuse, the fresh-client post-pair handover and stderr failure diagnostics. A failed check still requires offline recovery.
 - [specs/003-whatsapp-pairing-status](.specify/archive/003-whatsapp-pairing-status/plan.md): Historical pairing, offline status, guarded persistence and fail-closed recovery baseline; consult its verification for evidence and limitations.
@@ -167,6 +174,21 @@ the user unlinking the device on the phone, then deleting the directory. Record 
 `verification.md`; a step not run is "not verified". Automated tests use `internal/wasim` only.
 
 ## Known Issues & Gotchas
+
+### SDK Middleware Is Too Late for Admission
+**Issue:** Limiting work only in tool handlers does not bound queued requests.
+**Root Cause:** The pinned SDK can dispatch or queue before receiving middleware.
+**Prevention Rule:** Guard request credits before SDK dispatch, including in the wrapped in-memory transport; hold tool credit through actual response completion. [Source: .specify/archive/006-mcp-stdio-tools/research.md -> R2]
+
+### Cancelling I/O Is Not the Same as Draining Work
+**Issue:** Blocked inherited streams can outlive cancellation; late SQLite iteration can retain its snapshot.
+**Root Cause:** Inherited handles are not uniformly interruptible, and the pinned SQLite driver does not install first-step cancellation controls for later `Next` calls.
+**Prevention Rule:** Keep fixed byte-only pumps with interruptible connection waits; use first-step reads, retain store accounting through actual return, and never release the lock early. [Source: .specify/archive/006-mcp-stdio-tools/research.md -> R3] [Source: .specify/archive/006-mcp-stdio-tools/research.md -> R6]
+
+### Row Limits Do Not Bound Encoded Output
+**Issue:** A valid row count can still yield a response over budget.
+**Root Cause:** The SDK response includes both structured content and escaped text; envelopes and escaping consume additional bytes.
+**Prevention Rule:** Precharge both encodings and check actual final bytes. Return a bounded error, never a truncated successful page. [Source: .specify/archive/006-mcp-stdio-tools/research.md -> R4]
 
 ### Live Acknowledgement Does Not Guarantee Replay
 **Issue:** A terminal ingest failure can leave the record incomplete; a history notification may already be acknowledged.

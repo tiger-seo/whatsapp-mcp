@@ -20,5 +20,5 @@ terminal signal for ingest failures; using it for device faults too would change
 
 `stdio` observes the latched device-storage fault, stops through normal drain, and exits 1 even if the fault races
 EOF or occurs during owner drain. Marker ownership stays unchanged. See the
-[command and native evidence](../../specs/006-mcp-stdio-tools/verification.md#t037t038-unix-pipe-follow-up-2026-11-20-utc).
+[command and native evidence](../../.specify/archive/006-mcp-stdio-tools/verification.md#t037t038-unix-pipe-follow-up-2026-11-20-utc).
 The owner's ingest-terminal signal and `serve` behavior are unchanged. Changing `serve` needs separate scope and tests.

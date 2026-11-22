@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-17
 
-**Status**: Draft
+**Status**: Completed
 
 **Input**: User description: "006 MCP over stdio: chat, contact and login tools" from `docs/roadmap.md`. Roadmap specify input: "Serve MCP over stdio with the official go-sdk. Provide the chat, contact, login-status and pairing-QR tools, with corrected schemas and structured output."
 

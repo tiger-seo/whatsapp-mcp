@@ -386,4 +386,4 @@ exit remains available.
 **Verification:** automated suites, including native pipe and shutdown checks, ran with synthetic stores and
 fake owners on Windows/amd64, Linux/amd64 and macOS/arm64. Linux/arm64 and macOS/amd64 were cross-built, not
 verified natively. No real account was used for feature 006. See the
-[verification record](specs/006-mcp-stdio-tools/verification.md) for the exact coverage and limitations.
+[verification record](.specify/archive/006-mcp-stdio-tools/verification.md) for the exact coverage and limitations.
