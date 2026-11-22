@@ -8,7 +8,7 @@ replace go.mau.fi/whatsmeow => github.com/tiger-seo/whatsmeow v0.0.0-20261113124
 
 require (
 	github.com/coder/websocket v1.8.15
-	github.com/gofrs/flock v0.13.1
+	github.com/gofrs/flock v0.13.2
 	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/pelletier/go-toml/v2 v2.4.3
