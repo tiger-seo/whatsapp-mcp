@@ -10,6 +10,12 @@
 
 **Source requirements**: [Project specification](../../docs/specification.md) S3, S6, P1, M4–M7, M10, Q3, D9, D18 and the local read-access decision in §8.11; preserved behaviour from §3.11 and §4.4; defects avoided from §6 #6, #13 and #14. The archived 002 and 006 specifications govern existing search and local read limits.
 
+## Clarifications
+
+### Session 2026-11-22
+
+- Q: What should message search return if it hits its work limit before it can verify the requested page? → A: Return a limit error with no results or continuation and suggest narrower filters.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Find messages in stored history (Priority: P1)
@@ -27,6 +33,7 @@ As an account owner, I want my local assistant to find matching messages and cap
 3. **Given** matching messages with neighbours in the same chat, **When** I request context with unequal counts or zero on one side, **Then** each side honours its own count, in chronological order, even when neighbours do not match the search.
 4. **Given** a seeded page of 50 maximum-size matches and five maximum-size neighbours on each side of each match, **When** I enable context and leave page size and context counts at defaults, **Then** I get a successful, nonempty result within the existing limits, see which context was reduced, and can continue at the first unreturned match without skipping it. Repeat with content whose escaped representation is unusually large.
 5. **Given** a valid disconnected local session, **When** I supply a malformed argument, an above-cap size or an unsupported page offset, **Then** I get a tool error that names the problem, not an empty successful result.
+6. **Given** a search that can verify some matches but not the requested page within its work limit, **When** I run it with or without context, **Then** I get a limit error suggesting narrower filters, with no matches or continuation returned.
 
 ### User Story 2 - Read around a specific message (Priority: P2)
 
@@ -78,6 +85,7 @@ As an account owner, I want to find the most recent stored interaction with a co
 - **FR-009**: The tools MUST respect the existing 2,000 context rows and 32 MiB result-data ceilings per call, as well as the tighter local reply limits of 2 MiB per representation and 8 MiB for the whole reply. `list_messages` with default sizes and context enabled MUST succeed with a nonempty result whenever its requested page has valid matches and ordinary local read conditions permit it, including when valid maximum-size data makes a full reply too large. Prefer a contiguous newest-first prefix of matches over keeping extra neighbours. If fewer neighbours fit, keep the closest ones on each side, keep their order, and explicitly identify each reduced side. Do not label genuinely missing neighbours as reduced.
 - **FR-010**: Whenever the budget shortens the base page of a listing with context, the result MUST say it was shortened and provide explicit next `page` and `limit` values that resume at the first unreturned match with the same filters and context options. A continuation may use `limit: 1` and the absolute match offset as `page`; for such a one-match page, the next ordinary page is `page + 1`. If the next offset is outside the supported range, state that the caller must narrow the search instead. No shortened page with matches may return zero anchors. If even the first valid match cannot fit in full in a listing with context enabled (including a one-match continuation), return that anchor with explicitly marked, shortened text/caption as necessary, preserving its identity and other fields; matching still uses the full stored values. Never silently shorten text or caption or change stored data. A listing without context MUST return a complete page or an actionable size error. Exact lookup and last-interaction calls MUST return the complete selected message or an actionable size error; exact context MAY shorten only neighbours with the same visibly reduced-side semantics.
 - **FR-011**: Each new tool MUST have an offline acceptance case through the existing in-memory client/server test path, including schema defaults and every argument, the duplicate-ID and no-result cases, and the maximum-size default-context page. Existing chat/contact tool behaviour and all five supported build targets MUST remain intact. No acceptance step requires a real WhatsApp account.
+- **FR-012**: If `list_messages` reaches a search-work limit before verifying the base page's membership, order or end, it MUST return a limit error suggesting narrower filters, with no matches or continuation. This applies whether or not context is requested. The successful shortening rule in FR-009–FR-010 applies to a verified base page whose reply would exceed a result budget, not to an unfinished search.
 
 ### Key Entities *(include if feature involves data)*
 
