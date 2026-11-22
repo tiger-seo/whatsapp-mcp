@@ -117,21 +117,9 @@ For local MCP regression coverage, run `go test ./internal/mcp ./cmd/whatsapp-mc
 
 ## Active Technologies
 
-- Stdio: official `github.com/modelcontextprotocol/go-sdk v1.8.0`, Go 1.27.0 with `go1.27.4`, CGO disabled, and inherited `modernc.org/sqlite v1.62.0`. No WhatsApp fork or libsignal pin change. [Source: .specify/archive/006-mcp-stdio-tools/plan.md -> "Primary Dependencies"] [Source: .specify/archive/006-mcp-stdio-tools/plan.md -> "Language/Version"] [Source: .specify/archive/006-mcp-stdio-tools/plan.md -> "Storage"]
-
-- Feature 005 baseline: Go 1.27 with `go1.27.4`, CGO-free builds, and the owner-approved whatsmeow fork at `bedcf01`. The fork implements receive limits and disables phone requests on another account's behalf in this configuration. No schema migration or new dependency. [Source: .specify/archive/005-message-ingest/plan.md -> "Language/Version"] [Source: .specify/archive/005-message-ingest/plan.md -> "Primary Dependencies"] [Source: .specify/archive/005-message-ingest/plan.md -> "Storage"]
-
-- Feature 004 historical baseline: Go 1.27.0 (`go1.27.3`, CGO disabled); the owner moved whatsmeow to upstream `v0.0.0-20261109152745-f1b798561919` to fix the socket read-loop leak. No new module, fork or `replace` was added by this feature. This is not current pin guidance. [Source: .specify/archive/004-shutdown-drain/plan.md -> "Language/Version"] [Source: .specify/archive/004-shutdown-drain/plan.md -> "Primary Dependencies"]
-
-- Binary-skeleton baseline: Go 1.27.0 with the `go1.27.3` toolchain and `CGO_ENABLED=0`; pure-Go
-  `gofrs/flock` and `pelletier/go-toml/v2`. These are archival baseline versions, not current pin guidance.
-  [Source: .specify/archive/001-binary-skeleton/plan.md -> "Primary Dependencies"] [Source: .specify/archive/001-binary-skeleton/verification.md -> "Toolchain"]
-- Storage baseline: pure-Go `modernc.org/sqlite` v1.61.0 with matching `modernc.org/libc` v1.79.0, the pinned
-  whatsmeow SQL store, and `golang.org/x/text` for case folding and NFC. These versions are historical.
-  [Source: .specify/archive/002-sqlite-storage/plan.md -> "Primary Dependencies"] [Source: .specify/archive/002-sqlite-storage/verification.md -> "Dependencies and govulncheck"]
-- Feature 003 historical baseline: `rsc.io/qr` v0.2.0 root encoder, pure Go; do not import its C-backed
-  `libqrencode` subpackage. Its original whatsmeow pin and temporary receive exception are historical, not current pin guidance.
-  [Source: .specify/archive/003-whatsapp-pairing-status/plan.md -> "Primary Dependencies"] [Source: .specify/archive/003-whatsapp-pairing-status/verification.md -> "Setup T002"]
+- One Go binary with `CGO_ENABLED=0`. See [go.mod](go.mod) for the toolchain and exact dependency pins.
+- Core dependencies: the owner-approved whatsmeow fork for WhatsApp, `modernc.org/sqlite` for storage, and the official `github.com/modelcontextprotocol/go-sdk` for MCP.
+- Use the pure-Go `rsc.io/qr` root package, not its C-backed `libqrencode` subpackage.
 
 ## Project Structure
 
