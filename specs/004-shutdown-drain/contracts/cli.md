@@ -1,6 +1,6 @@
 # Contract: Command Behaviour After a Quiet-Stop Check
 
-This contract changes feature 003's `specs/003-whatsapp-pairing-status/contracts/cli.md` only where it is listed
+This contract changes feature 003's `.specify/archive/003-whatsapp-pairing-status/contracts/cli.md` only where it is listed
 below. Everything else stays as it is: configuration, lock and private-storage rules, exit categories (0 success,
 1 operational failure, 2 usage or configuration), offline recovery, `status` and the stop-signal rules. All logs go to
 stderr, and `stdio` stdout stays protocol-only.

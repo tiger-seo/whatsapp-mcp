@@ -5,7 +5,7 @@ approval, simulator results, pass-rate run, platform evidence, real-account jour
 
 ## E003-RX-01 (implementation start)
 
-Facts collected 2026-11-07T21:53Z from `specs/003-whatsapp-pairing-status/verification.md`:
+Facts collected 2026-11-07T21:53Z from `.specify/archive/003-whatsapp-pairing-status/verification.md`:
 
 - Exception: E003-RX-01, F09 limited to upstream receive expansion; approved by `tiger-seo` on 2026-11-02 for
   feature 003's private, local, single-owner deployment.

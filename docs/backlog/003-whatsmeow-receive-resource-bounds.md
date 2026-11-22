@@ -2,11 +2,11 @@
 
 - **Created:** 2026-11-02
 - **Status:** Closed 2026-11-13. The fork revision `tiger-seo/whatsmeow@9209108` enforces the bounds and is pinned; E003-RX-01 is retired (owner decision, `specs/005-message-ingest/research.md` R1, R2).
-- **Affected feature:** `specs/003-whatsapp-pairing-status` and later features expanding its receive workload.
+- **Affected feature:** `.specify/archive/003-whatsapp-pairing-status` and later features expanding its receive workload.
 - **Owner:** Maintainer `tiger-seo`, explicitly confirmed by the user.
 - **Expiry:** 2026-12-02 at the start of the UTC date; no automatic renewal.
 - **Earlier review:** Before first public release/broader deployment; promptly on a relevant upstream fix or resource incident.
-- **Source:** `docs/security-review.md` F09; feature research R12-R17; canonical scope/controls/evidence in `specs/003-whatsapp-pairing-status/verification.md`.
+- **Source:** `docs/security-review.md` F09; feature research R12-R17; canonical scope/controls/evidence in `.specify/archive/003-whatsapp-pairing-status/verification.md`.
 
 ## Evidence
 

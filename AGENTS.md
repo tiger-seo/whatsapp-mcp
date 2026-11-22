@@ -30,8 +30,9 @@ feature security decisions. `docs/roadmap.md` orders the features. The storage s
 ### `specs/NNN-*/`: feature specs
 Every feature so far: 001 binary skeleton, 002 SQLite storage, 003 connection, pairing and status (all merged), 004
 shutdown drain (pull request #11). Each has `spec.md`, `plan.md`, `tasks.md`, contracts and a `verification.md` with
-the evidence. The binary-skeleton and storage baselines are consolidated in `.specify/memory/spec.md` and
-`.specify/memory/plan.md`; the original feature artifacts are in `.specify/archive/001-binary-skeleton/` and `.specify/archive/002-sqlite-storage/`.
+the evidence. The binary skeleton, storage, and connection/pairing/status baselines are consolidated in
+`.specify/memory/spec.md` and `.specify/memory/plan.md`; the original feature artifacts for 001–003 are in
+`.specify/archive/`.
 
 ### `.specify/memory/constitution.md`: principles
 Read it before planning or implementing. It sets the review workflow below.
@@ -120,6 +121,9 @@ push and pull request.
 - Storage baseline: pure-Go `modernc.org/sqlite` v1.61.0 with matching `modernc.org/libc` v1.79.0, the pinned
   whatsmeow SQL store, and `golang.org/x/text` for case folding and NFC. These versions are historical.
   [Source: .specify/archive/002-sqlite-storage/plan.md -> "Primary Dependencies"] [Source: .specify/archive/002-sqlite-storage/verification.md -> "Dependencies and govulncheck"]
+- Feature 003 historical baseline: `rsc.io/qr` v0.2.0 root encoder, pure Go; do not import its C-backed
+  `libqrencode` subpackage. Its original whatsmeow pin and temporary receive exception are historical, not current pin guidance.
+  [Source: .specify/archive/003-whatsapp-pairing-status/plan.md -> "Primary Dependencies"] [Source: .specify/archive/003-whatsapp-pairing-status/verification.md -> "Setup T002"]
 
 ## Project Structure
 
@@ -129,9 +133,13 @@ push and pull request.
 - `internal/store` owns SQLite startup, queries, writes and embedded migrations; both schema histories share
   one private file. `OPERATIONS.md` describes offline backup, restore and recovery.
   [Source: .specify/archive/002-sqlite-storage/plan.md -> "Structure Decision"] [Source: .specify/archive/002-sqlite-storage/spec.md -> FR-047]
+- Feature 003 historical baseline: `internal/wa` owns the connection generation, pairing, status and recovery
+  boundary; `internal/walog` shares the argument-dropping bridge. Guard device persistence through `internal/store`.
+  [Source: .specify/archive/003-whatsapp-pairing-status/plan.md -> "Connection Boundary"] [Source: .specify/archive/003-whatsapp-pairing-status/verification.md -> "Foundation T018"]
 
 ## Recent Changes
 
+- [specs/003-whatsapp-pairing-status](.specify/archive/003-whatsapp-pairing-status/plan.md): Historical pairing, offline status, guarded persistence and fail-closed recovery baseline; consult its verification for evidence and limitations.
 - [specs/002-sqlite-storage](.specify/archive/002-sqlite-storage/spec.md): Archived the SQLite lifecycle, migrations, query contracts and storage safeguards.
 - [specs/001-binary-skeleton](.specify/archive/001-binary-skeleton/spec.md): Archived the CLI, configuration, locking, shutdown, privacy and CI baseline.
 
@@ -149,6 +157,20 @@ the user unlinking the device on the phone, then deleting the directory. Record 
 `verification.md`; a step not run is "not verified". Automated tests use `internal/wasim` only.
 
 ## Known Issues & Gotchas
+
+### Feature 003 Historical: Disconnect Does Not Prove Drain
+**Issue:** Retired clients can still have work in flight after disconnect.
+**Root Cause:** The pinned library can detach handler work from the generation's cancellation context.
+**Prevention Rule:** Do not infer quiescence from a timeout or disconnect; retain ownership until admitted work drains. The historical
+pair-only post-515 reconnect was separately approved with recorded residual risk; other retry paths need their own proof.
+[Source: .specify/archive/003-whatsapp-pairing-status/research.md -> R7] [Source: .specify/archive/003-whatsapp-pairing-status/verification.md -> "T077 Residual Risk Corrected - 2026-11-07 (owner re-confirmation given)"]
+
+### Feature 003 Historical: Recovery Terminal Evidence
+**Issue:** Injected handle tests do not prove interactive detection on a real native console or PTY.
+**Root Cause:** Pipes and injected streams do not exercise the actual OS terminal handle checks.
+**Prevention Rule:** Require real native console/PTY checks where supported; Windows mintty may fail native checks. Unrun Windows,
+Linux and macOS terminal/PTY controls remain unverified, and redirected or ambiguous handles must fail closed.
+[Source: .specify/archive/003-whatsapp-pairing-status/contracts/cli.md -> "pair"] [Source: .specify/archive/003-whatsapp-pairing-status/verification.md -> "CI Platform Evidence for T068-T073 - 2026-11-06"]
 
 ### Read-Only SQLite Open Is Not a No-Write Guarantee
 **Issue:** A compatibility probe must see committed WAL data without creating or changing SQLite sidecars.

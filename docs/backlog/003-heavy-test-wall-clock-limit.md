@@ -5,7 +5,7 @@
 - **Affected area:** `internal/store` heavy opt-in tests (`WA_HEAVY_TESTS=1`), the nightly `heavy` CI job.
 - **Owner:** Maintainer `tiger-seo`.
 - **Review trigger:** the next failure of the nightly `heavy` job, or before a release.
-- **Source:** `specs/003-whatsapp-pairing-status/verification.md`, section "T061 Verification Gates".
+- **Source:** `.specify/archive/003-whatsapp-pairing-status/verification.md`, section "T061 Verification Gates".
 
 ## Evidence
 

@@ -1,6 +1,7 @@
 # Main Project Specification
 > **Revision**: 2026-11-22 — Archived specs/001-binary-skeleton to preserve the baseline CLI, configuration, lifecycle and CI specification.
 > **Revision**: 2026-11-22 — Archived specs/002-sqlite-storage to add the SQLite storage, query and migration contracts.
+> **Revision**: 2026-11-22 — Archived specs/003-whatsapp-pairing-status to record the pairing, offline status, version selection, guarded device writes and safe recovery baseline.
 
 ## Configuration Decisions
 
@@ -518,6 +519,94 @@ separate OS test identities. No real WhatsApp account or network connection is n
 
 ---
 
+### User Story 14 - Link a Device and Reuse Its Session (Priority: P1)
+
+[Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> User Story 1]
+
+As the account owner, I can link a device and understand that the temporary unsafe-run policy prevents automatic reuse after a production Connect attempt.
+
+**Why this priority**: A durable connection is the prerequisite for every later WhatsApp capability.
+
+**Independent Test**: Use isolated synthetic storage to confirm linking, orderly resource drain and unsafe-marker retention after an attempted production adapter Connect; reopening must block reuse. A clean marker with a saved identity may be reused only if no prior attempt made it unsafe. Manual checks require separate permission.
+
+**Acceptance Scenarios**:
+
+1. **Given** an unpaired data directory, **When** the owner runs `pair`, **Then** the current QR is displayed in the terminal and the command waits for success, expiry, cancellation or a connection failure.
+2. **Given** an active pairing attempt, **When** the phone successfully links the device and connection is confirmed, **Then** the connection owner's in-process status snapshot reports connected and logged in, the QR is cleared, the session is saved, and `pair` exits successfully after orderly shutdown.
+3. **Given** a saved session and unsafe marker after any production Connect attempt, **When** a connection-owning command starts, **Then** it refuses automatic connection and QR and requires offline recovery; a clean saved identity may be used only when the marker permits it.
+4. **Given** another process owns the data directory, **When** `pair` starts, **Then** it fails with the existing lock-holder diagnostic and neither creates a second client nor modifies the owner's session.
+5. **Given** an active connection or pairing attempt, **When** the owner interrupts the command, **Then** connection work and device writes stop before storage closes and the data-directory lock is released.
+6. **Given** either existing `stdio` or `serve` shell, **When** it starts with a clean marker and saved session, **Then** it connects and remains running until cancellation; unsafe state blocks startup account work. With no saved session it remains unpaired without a QR. Neither shell exposes tools or a network listener here; both drain before releasing ownership.
+7. **Given** a saved-session startup attempt fails or times out in `stdio` or `serve`, **When** safe retries within the same active generation are demonstrated and no terminal event or 405 handoff intervenes, **Then** at most three additional attempts follow five cancellable seconds each. Otherwise retries are temporarily unavailable: remain disconnected with a diagnostic, preserve the identity and open no pairing window. Never connect after retirement of an unproven generation.
+8. **Given** a fresh device and an explicitly approved QR pairing attempt, **When** the registration payload and QR client type are prepared, **Then** they identify the companion as Linux/Chrome as the previous service did, without modifying global library state or saved credentials. The phone's displayed label is observed separately and is not guaranteed by this application.
+
+---
+
+### User Story 15 - Recover Pairing Without Restarting (Priority: P1)
+
+[Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> User Story 2]
+
+As the account owner, I can receive replacement QR codes within an active attempt. After a production Connect attempt, logout or timeout requires offline recovery before a separately approved fresh pairing.
+
+**Why this priority**: Recoverability fixes the existing failure that leaves a running service permanently unpaired.
+
+**Independent Test**: Simulate QR replacement, logout and a new request; prove the latter is denied after a production Connect attempt, and exercise separately approved offline recovery without losing conversations.
+
+**Acceptance Scenarios**:
+
+1. **Given** a fresh pairing attempt reaches final timeout without durable identity and current-generation Connected, **When** the owner presses Enter, **Then** no new attempt or QR starts; the owner retires the attempt and requires explicit offline recovery before a separate new pairing.
+2. **Given** a running session receives a logout event, **When** its in-process status snapshot is inspected, **Then** connected and logged-in are false and no previous QR is available; logout alone does not open a new pairing window.
+3. **Given** that logged-out process has attempted production Connect, **When** a new pairing is requested, **Then** it is denied even after cleanup; offline recovery and a separately approved fresh pairing are required, preserving conversations.
+4. **Given** pairing is already in progress, **When** concurrent requests ask for a QR, **Then** they share the current unexpired attempt rather than starting competing connections.
+5. **Given** an old attempt completes after it was cancelled or superseded, **When** its delayed events arrive, **Then** they cannot replace the current QR or incorrectly mark the new session as connected.
+6. **Given** an active owner-approved attempt, **When** WhatsApp supplies a replacement QR, **Then** it replaces the previous code automatically without another approval and only the current unexpired code is available. Expiry of one code alone does not authorize starting another attempt.
+7. **Given** an unresolved final timeout, **When** the owner cancels, presses Enter or input ends, **Then** `pair` exits unsuccessfully after orderly shutdown with the marker unsafe and starts no further attempt.
+8. **Given** interrupted app-state/contact sync and an unsafe run, **When** separately authorized offline verification and any required unlink and local identity removal complete, followed by a separately authorized fresh pair, **Then** transferred repair bits are materialized for the new identity before ordinary progress. Bounded repair preserves chats and the new identity's credentials/session keys, clears only successfully repaired state and retains failed or superseded needs. Identity removal may remove the old device's keys only as FR-099 permits.
+9. **Given** an unsafe-run marker after a crash or failed logout cleanup, **When** the process restarts, **Then** it starts no automatic connection, pairing or QR and reports that offline operator recovery is required, even if a saved identity exists or no identity was saved before the crash.
+10. **Given** that unresolved marker, **When** an operator explicitly selects recovery in `pair`, verifies the named account/device and separately authorizes any required phone-side unlink and local identity removal, **Then** local recovery preserves chats/messages and remains offline; a fresh pairing needs a separate explicit approval. EOF, refusal, insufficient verification or a definite failed commit preserves the block; an ambiguous commit exits unsuccessfully and requires committed-state reinspection before further action.
+
+---
+
+### User Story 16 - Understand Local Session Status (Priority: P2)
+
+[Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> User Story 3]
+
+As an operator, I can run `whatsapp-mcp status` to inspect whether a local session exists and which version is available, without accidentally starting pairing or waiting for a network connection.
+
+**Why this priority**: Operators need an honest, quick diagnostic that does not change account state.
+
+**Independent Test**: Run `status` against missing, unpaired, paired, unsafe and locked temporary data directories with network access prohibited.
+
+**Acceptance Scenarios**:
+
+1. **Given** no data directory or database/sidecar artifacts exist, **When** `status` runs, **Then** it reports not connected, not logged in, pairing-required false and the bundled version labelled as not refreshed, exits successfully, and creates no data directory, database or lock file; an existing held lock still causes the holder error even before its owner creates the database.
+2. **Given** a saved session and no running owner, **When** `status` runs, **Then** it reports a local snapshot with connected false, logged-in true based on saved credentials, pairing-required false, and the bundled version labelled as not refreshed; it explicitly says the saved session has not been verified with WhatsApp.
+3. **Given** another process owns the data directory, **When** `status` runs, **Then** it exits with a clear locked-data-directory error naming the holder rather than reading concurrently or claiming to know that process's live connection state.
+4. **Given** unsafe, corrupt or unsupported existing storage, **When** `status` runs, **Then** it reports an actionable error without repairing, creating or migrating that storage.
+5. **Given** an unsafe-run marker or a legacy database without a marker, **When** `status` inspects it, **Then** it warns that offline recovery is required and exits 1; if the database is otherwise inspectable, its four fields still describe local identity presence rather than claiming account verification.
+
+---
+
+### User Story 17 - Stay Compatible With WhatsApp (Priority: P2)
+
+[Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> User Story 4]
+
+As an operator, I can keep a connection running while the application refreshes its WhatsApp Web version and makes a limited recovery attempt if WhatsApp rejects an outdated client.
+
+**Why this priority**: Compatibility updates should not require routine operator intervention or cause endless reconnect loops.
+
+**Independent Test**: Simulate time, version responses and outdated-client events, and inspect version changes, retry counts and resulting status without contacting WhatsApp.
+
+**Acceptance Scenarios**:
+
+1. **Given** a connection-owning command starts, **When** startup version discovery succeeds, **Then** the discovered version is selected before its first connection attempt.
+2. **Given** discovery fails, **When** the command starts, **Then** a warning is reported and connection proceeds with the last usable version, or the bundled version if none has been discovered.
+3. **Given** a connected session, **When** six hours elapse and refresh succeeds, **Then** the selected version changes for the next connection without disconnecting the current session.
+4. **Given** WhatsApp reports an outdated client (405), **When** same-active-generation recovery is demonstrated safe, **Then** retries wait five seconds and refresh before connecting, at most three. Otherwise recovery is temporarily unavailable and the owner remains disconnected; retirement of an unproven generation never permits a replacement Connect.
+5. **Given** the 405 budget is exhausted or safe same-generation retry is unproven, **When** more outdated-client events arrive, **Then** no further automatic retry occurs and an actionable diagnostic is reported; only a confirmed successful connection resets the budget.
+
+---
+
 ### Edge Cases
 
 - **`version` with a broken environment:** it reads no configuration, touches no data directory and takes no
@@ -548,10 +637,6 @@ separate OS test identities. No real WhatsApp account or network connection is n
   instance holds the data directory and that its PID is unknown. [Source: .specify/archive/001-binary-skeleton/spec.md -> "Lock held but the PID cannot be read"]
 
 - **Signal before startup finishes:** the process still exits cleanly and releases anything it took. [Source: .specify/archive/001-binary-skeleton/spec.md -> "Signal before startup finishes"]
-
-- **Commands not yet implemented:** `pair` and `status` validate the configuration, then report that the command
-  is not implemented yet and exit with the general error code. `pair` takes the lock first, so it already reports
-  "already running" the way its final version will. [Source: .specify/archive/001-binary-skeleton/spec.md -> "Commands not yet implemented"]
 
 - **Database locked by a long write elsewhere in the process:** admitted work waits only within the configured
   busy/operation deadline and is cancellable. Normal-load concurrency meets SC-012; overload returns a distinct
@@ -615,6 +700,24 @@ separate OS test identities. No real WhatsApp account or network connection is n
 
 - **Cancellation near commit:** report success only for a confirmed commit; if the outcome cannot be established,
   return an explicit indeterminate outcome, not a claim of rollback. A retry uses the existing idempotent identity. [Source: .specify/archive/002-sqlite-storage/spec.md -> "Cancellation near commit"]
+
+- A network disconnect preserves saved login state, clears connected and generates no QR. Ordinary upstream reconnect is temporarily available only when same-active-generation safety is demonstrated; otherwise it is unavailable. It must stop on shutdown and cannot bypass terminal logout or the 405 budget. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "A network disconnect preserves saved login state, clears connected and"]
+
+- A saved device identifier is not proof that WhatsApp still accepts the device. Live connection failure must not be presented as a successful login verification. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "A saved device identifier is not proof that WhatsApp still accepts the"]
+
+- Expiry, successful connection, logout and cancellation racing each other must leave one consistent status snapshot and no stale pairing material. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Expiry, successful connection, logout and cancellation racing each other"]
+
+- A code's expiry is distinct from the pairing attempt's final timeout. An expired code is cleared immediately; the same approved attempt may supply a replacement. An unresolved terminal timeout requires explicit offline recovery and a separate pairing approval; Enter or end-of-input cannot authorize either. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "A code's expiry is distinct from the pairing attempt's final timeout. An"]
+
+- Cancelling during the five-second retry wait or version discovery prevents subsequent connection attempts. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Cancelling during the five-second retry wait or version discovery prevents"]
+
+- Version discovery can stall, redirect unexpectedly, return oversized content, omit its revision, or return an invalid revision. These cases preserve the prior usable version and do not consume unlimited resources. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Version discovery can stall, redirect unexpectedly, return oversized"]
+
+- An empty or malformed QR event cannot be rendered or retained as a valid QR. Untrusted diagnostic text containing terminal controls cannot execute terminal actions. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "An empty or malformed QR event cannot be rendered or retained as a valid"]
+
+- Storage failure during pairing is reported as failure, never as a durable successful pairing. Recovery must not delete conversation tables or other application data. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Storage failure during pairing is reported as failure, never as a durable"]
+
+- A shutdown timeout is not permission to close the database or release the lock while a device write remains active. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "A shutdown timeout is not permission to close the database or release the"]
 
 ## Requirements
 
@@ -683,6 +786,9 @@ separate OS test identities. No real WhatsApp account or network connection is n
 - **FR-020**: All logs MUST go to stderr in every command. In `stdio` mode nothing other than MCP protocol traffic [Source: .specify/archive/001-binary-skeleton/spec.md -> FR-020]
   may ever be written to stdout. Stdout is otherwise used only for a command's own output (`version` now,
   `status` later).
+  WhatsApp client and device-store diagnostics MUST use the existing unified, level-controlled logger.
+  Human pairing output in stdio mode MUST stay off stdout; no feature transport behavior may consume or
+  contaminate protocol stdout. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-015]
 - **FR-021**: Each log line MUST carry a timestamp, a level, a message and key-value attributes, in a [Source: .specify/archive/001-binary-skeleton/spec.md -> FR-021]
   human-readable text form.
 - **FR-022**: Configuration and logging errors that occur before the logger exists MUST still be reported on [Source: .specify/archive/001-binary-skeleton/spec.md -> FR-022]
@@ -727,6 +833,8 @@ separate OS test identities. No real WhatsApp account or network connection is n
 
 - **FR-034**: All persistent state MUST live in one database file, `<data dir>/whatsapp.db`, holding both the [Source: .specify/archive/002-sqlite-storage/spec.md -> FR-001]
   whatsmeow device store and the message tables. No other database file is created and PostgreSQL is not supported.
+  Connection-owning commands MUST use the single device session after taking the exclusive lock and validating
+  storage, and MUST NOT import an earlier deployment. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-001]
 - **FR-035**: The database MUST be opened with write-ahead logging, foreign-key enforcement, a busy timeout of at [Source: .specify/archive/002-sqlite-storage/spec.md -> FR-002]
   least 5 seconds, and write transactions that take the write lock at their start, so that concurrent writers wait
   instead of failing.
@@ -890,6 +998,66 @@ separate OS test identities. No real WhatsApp account or network connection is n
   levels, and protected offline backup/restore. Fixtures MUST be synthetic and tests MUST NOT connect to WhatsApp.
   Cross-identity/platform checks needing special privileges MUST have a documented isolated test procedure and
   recorded evidence before acceptance; an unavailable CI capability MUST NOT be reported as a passed test.
+
+#### Connection, pairing, and recovery
+
+- **FR-084**: `pair` MUST support QR-only interactive linking, display each current QR in the terminal, report success only after confirmed connection and saved credentials, and exit successfully after quiescing the connection. During one owner-approved attempt, replacement codes MUST be displayed automatically while invalidating the previous code. An unresolved final timeout, cancellation or failure MUST exit unsuccessfully with a useful offline-recovery diagnostic; Enter MUST NOT start another attempt. Recovery and a subsequent pairing each require separate explicit approvals.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-002]
+
+- **FR-085**: A saved session with a clean marker MAY be reused without QR; after any production Connect attempt the unsafe marker blocks automatic reuse on restart until offline recovery. Connection failure alone MUST NOT erase or silently replace it.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-003]
+
+- **FR-086**: The running connection owner MUST maintain a coherent status snapshot with `connected`, `logged_in`, `pairing_required` and `wa_version`. Confirmed connection sets connected and logged-in true and clears QR material. Disconnect clears only connected; confirmed logout clears connected and logged-in and invalidates pairing material.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-004]
+
+- **FR-087**: `pairing_required` MUST retain the reference meaning: true only when not logged in and an unexpired QR is available. An expired QR or logged-out session without a new pairing request MUST report false. A returned QR MUST represent the current pairing attempt only.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-005]
+
+- **FR-088**: After any production Connect attempt, deny a new same-process pairing even after confirmed logout and durable cleanup unless safety is proven and reviewed under a later decision. FR-099 offline recovery and separate fresh-pair approval are required. Logout alone never authorizes pairing; preserve conversations and never reuse revoked credentials.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-006]
+
+- **FR-089**: Concurrent pairing requests MUST share one active attempt, including while its current code is expired and awaiting replacement; they MUST NOT silently start another attempt. Requests during shutdown MUST be rejected. Events from cancelled, timed-out or superseded attempts MUST NOT mutate current pairing or login state. Expiry of an individual code invalidates that code, not its still-active attempt.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-007]
+
+- **FR-090**: `status` MUST print the four status fields and exit without connecting, fetching a version, generating a QR, migrating storage or altering saved account state. Missing storage MUST be reported as an unpaired local snapshot without creating artifacts. Existing storage inspection MUST respect the exclusive owner lock and private-storage checks; corrupt, unsupported, unsafe or locked storage MUST cause a clear failure.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-008]
+
+- **FR-091**: Standalone `status` MUST distinguish local saved-session presence from live authentication: connected is false, logged-in reflects saved device identity, pairing-required is false, and the output warns that credentials have not been verified online. Its version is the locally available bundled version, explicitly labelled as not refreshed. It MUST NOT query or imply live knowledge of a running daemon.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-009]
+
+- **FR-092**: Connection startup MUST attempt to discover the current WhatsApp Web version before connecting and MUST refresh it every six hours while running. Successful refresh applies to subsequent connections only; failure retains the last usable version or the bundled fallback and emits a warning.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-010]
+
+- **FR-093**: Outdated-client recovery retains its budget of at most three retries after initial rejection, each after a cancellable five-second delay and version refresh, only where FR-099 permits a demonstrated-safe same-active-generation retry. Otherwise it is temporarily unavailable and reports the limitation. Repeated events MUST NOT multiply the budget; only confirmed connection resets it. Exhaustion stops automatic outdated reconnection and reports the cause.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-011]
+
+- **FR-094**: The connection boundary MUST support offline substitutes for lifecycle, pairing, status and events, and the send, upload, download, contact-lookup and group-info capabilities required by later features. This feature MUST NOT enable message sending, downloading, ingest or MCP tools merely to establish that boundary.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-012]
+
+- **FR-095**: The `stdio` and `serve` shells start the embedded owner when the marker permits, use a clean saved session or remain unpaired, and remain running until cancellation. The approved startup budget is at most three retries, five cancellable seconds apart, only where FR-099 permits demonstrated-safe same-active-generation retries; otherwise remain disconnected with an actionable limitation diagnostic and saved identity intact. It MUST NOT bypass 405, logout or shutdown. No automatic QR, tools or listener are exposed here.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-013]
+
+- **FR-096**: Shutdown MUST stop version refresh, pairing, reconnect work, event handling and all client-originated device writes before closing shared storage, then release the lock. It MUST not report clean shutdown or release ownership while those writes can still occur.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-014]
+
+- **FR-097**: Device operations MUST share the approved store admission, deadline, input/output and disk policy. Before changing app-state sync progress or a bulk contact snapshot, the owner MUST durably record the affected collection's repair need. An interrupted/failed sync MUST retain that need across restart. After an explicitly authorized connection, bounded re-synchronization MAY repair only the affected protocol metadata/contact snapshot; clear the indication only after complete verified success. Failure MUST remain visible and retryable without automatic unpairing, deleting chats/credentials/session keys, silently truncating data or claiming rollback of earlier committed operations.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-016]
+
+- **FR-098**: Fresh QR registration MUST use the previous service's companion OS `Linux` and platform `CHROME`, including the matching Chrome QR client type. Its registration version and user-agent OS version/build MUST use one selected handshake version, as in the previous service. The adapter MUST preserve credentials and all unrelated payload properties, including unknown protobuf fields, keep shared library globals immutable, and reuse an existing saved identity without forcing re-pairing when FR-099 permits reuse. A failure to decode or encode companion properties MUST fail the handshake without sending an incorrectly identified registration, preserve saved credentials and record a secret-free diagnostic category for reporting outside the callback. Repeated failures may coalesce; forced termination or an indefinitely stalled logger cannot guarantee delivery. WhatsApp determines the displayed name; no exact phone label or retroactive relabelling is promised.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-017]
+
+- **FR-099**: Before account-capable work, durably arm the unsafe-run marker; failed or ambiguous arming admits no account work. After any production Connect attempt, including failure or cancellation, retain it unsafe even after orderly drain and confirmed logout cleanup. Without such an attempt, clear only after orderly drain and durable completion of any confirmed-revocation cleanup. Unsafe, unreadable, invalid or ambiguous state blocks automatic connection, pairing and QR after restart. The marker does not prove revocation: offline recovery requires explicit operator verification of the account/device, separately authorized phone-side unlink if needed, and separately authorized local removal of only the device identity if present before clearing; a later fresh pairing requires separate approval. Never silently reuse an uncertain identity, infer safe state from a missing device row, remove chats/messages, or treat an automatic restart or ordinary Enter as consent. Existing pre-marker databases are unknown; new databases may start clean only when creation is known under the exclusive lock. `status` remains offline and non-migrating, honestly reports local identity presence when inspectable, warns and exits unsuccessfully for unsafe or legacy-unknown state.
+
+  Verification must identify the exact account and linked-device entry, or establish that the exact device is absent; a generic Linux/Chrome label, timestamp, guess, or absence of a local row is not sufficient. If entries cannot be distinguished, the operator may separately authorize and manually unlink every potentially matching entry, after a warning that unrelated devices may be disconnected, and verify their absence. If identification or absence remains unverified, recovery remains blocked, with no local removal or marker clear. No exact phone label or reliable identifying attribute is guaranteed. Offline recovery requires verified interactive input and output as specified in the CLI contract; unsupported or redirected terminals fail closed. This policy does not itself authorize phone-side action.
+
+  Startup retries, 405, 515 and ordinary reconnect remain desired policies, but an automatic retry is temporarily permitted only if demonstrated safe within the same active generation. No further Connect is permitted on or after retirement of an unproven upstream generation, including a replacement client. Otherwise the path is unavailable pending resolution, with a diagnostic and no new pairing. The marker latch alone is not proof that an active retry is safe.
+
+  Exception (owner-approved 2026-11-06, T077): the `pair` command alone makes exactly one owner-initiated reconnect after a post-pairing 515, on the same generation, under the single attempt slot and the 30-second watchdog; a failed or stalled reconnect is final and is reported as an incomplete link. It is a code-level switch (`OwnerConfig.PostPairReconnect`), not a setting, and `stdio` and `serve` keep every reconnect denied. The approval rests on the residual risk in verification.md "T077 Decision" as corrected on 2026-11-07, which the owner must re-confirm. When 515 follows pairing and its reconnect is unavailable, report incomplete linking and required offline recovery, retain unsafe and exit unsuccessfully; PairSuccess alone must not be presented as a connected or usable device. Whether every pairing encounters 515 is unproven. The explicit phase-3 investigation and review gate in T077 precedes the US1 linking checkpoint.
+
+  A logout or client deletion request recognized before its generation's callback and device admissions have drained is latched through retirement: clearing requires durable cleanup of that revocation, otherwise the marker stays unsafe. Low-disk admission, including its existing resume hysteresis, applies to cleanup and marker clearing without exemption; refusal leaves unsafe state and an actionable instruction to restore free space and perform offline recovery. Durability against power loss is conditional on the actual platform synchronization implementation and storage honoring it; SQLite WAL FULL alone does not establish macOS full hardware flush. Native evidence and limitations are required before making platform-specific claims.
+
+  Identity removal, whether after confirmed revocation or separately authorized offline recovery, MUST retain pending FR-097 collection-repair needs across device-row cascades, restart and fresh pairing. Materialize those needs for the new saved identity before ordinary app-state progress and clear them only after successful fenced repair. Device-specific credentials/keys may be removed only as part of genuine confirmed revocation or separately authorized offline identity removal, never as a shortcut for app-state repair.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-018]
 
 ### Key Entities
 
@@ -1262,6 +1430,135 @@ type and original file name. [Source: .specify/archive/002-sqlite-storage/spec.m
 a person as known to the device store (names and JID, with the LID-to-phone map). Read by the store,
 written only by whatsmeow. [Source: .specify/archive/002-sqlite-storage/spec.md -> "Contact"]
 
+#### Device Session
+
+The one saved linked-device identity and credentials for the selected data directory; may exist locally while offline or be revoked by the phone. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Device Session"]
+
+[Source: .specify/archive/003-whatsapp-pairing-status/data-model.md -> "Device Session and Generation"]
+
+Use the existing whatsmeow device row, keys and session-specific/global interfaces. No new copy of credentials is stored. Owner generations add only process-local control state:
+
+| Field | Meaning and constraint |
+| --- | --- |
+| epoch | Monotonically distinct within one owner; stale epoch events never change current state. |
+| device/client | At most one active pair; fresh device after confirmed revocation, same shared container. Never overlap a new client with unquiescent old access. |
+| lifetime | Cancellable generation context, not a 30-second expiring connection context. |
+| admission | Per-generation reject/drain plus the one shared store gate. Nested transaction calls reuse a live lease. |
+| phase | idle, connecting, pairing, connected, disconnected, logged_out, retiring, storage_failed, stopping or stopped. |
+| storage health | Separate from physical connection; startup repair pending, guarded-write fault and ready are internal, not extra login-tool fields. |
+
+Confirmed logout permits revocation cleanup; separately authorized offline recovery also permits local identity removal under FR-099. A new unpaired client may be created only when the recovery barrier permits it, after the prior window drains and a reload confirms no saved identity exists. Ordinary disconnect preserves credentials and logged-in state. Save/storage failure cannot count as successful durable linking. Forced termination/disk failure is not described as clean recovery.
+
+Guard interface fields are installed before client creation and stay stable throughout the generation. Initialized denotes interface wiring, not durable identity; ordinary pre-ready calls fail fast before gate admission/SQL until first Save succeeds, rather than exhausting slots waiting for Save. Private raw delegates may bind on that Save's validated JID without being published in device fields. Client delete requests retire the generation and return deferred cleanup rather than allowing the library to reset live fields; confirmed-revocation SQL cleanup happens after drain. Failed pairing preserves any saved identity for explicit verification rather than silently deleting it.
+
+Failed revocation persistence blocks new generations in the current owner, not safe finalization forever: on explicit stop, close/unlock only after true quiescence and exit unsuccessfully with an unresolved-state warning. The previously armed unsafe-run marker blocks automatic account work on restart; no promise of persisted deletion is made when storage rejected it. Recovery must not infer that uncertainty proves revocation.
+
+#### Connection Status
+
+A consistent snapshot of connection, login, active-pairing availability and selected WhatsApp Web version, distinguished from the standalone offline snapshot. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Connection Status"]
+
+[Source: .specify/archive/003-whatsapp-pairing-status/data-model.md -> "Connection Status"]
+
+| Field | Constraint |
+| --- | --- |
+| connected | True only after the current generation's Connected confirmation; false on disconnect/logout/stop. |
+| logged_in | Locally saved identity unless confirmed revoked: false immediately on confirmed logout, preserved on ordinary disconnect. Revoked-device retirement/cleanup must finish before a new generation. Not proof of current network acceptance. Fresh PairSuccess may establish saved identity, but pair command still waits for Connected. |
+| pairing_required | Derived: not logged_in AND current code exists AND now is before its expiry. False after code expiry even if a window awaits replacement. |
+| wa_version | Selected immutable candidate rendered as a three-part version, not a claim of server negotiation. Standalone status uses the bundled version only and labels it unrefreshed. |
+
+Return a copied coherent snapshot. Standalone status always connected=false/pairing_required=false, with an offline-credentials warning. Do not expose device JID, keys, QR or internal recovery ticket in ordinary status.
+
+#### Pairing Attempt
+
+A single owner-requested linking window that may supply multiple replacement codes, retaining only the current code and its expiry. A code's expiry does not end the attempt; final timeout, cancellation, logout or success ends it and invalidates its QR and delayed events. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Pairing Attempt"]
+
+[Source: .specify/archive/003-whatsapp-pairing-status/data-model.md -> "Pairing Attempt"]
+
+| Field | Constraint |
+| --- | --- |
+| attempt identity | Bound to the owner epoch; one attempt at a time. |
+| approval | Explicit request opens one window including upstream replacement codes, never a new window automatically. |
+| current code | At most 4 KiB; empty/malformed/over-limit/encoder-failed input cannot replace valid state. |
+| current representation | At most one derived terminal/image representation; no QR history, files or logs. |
+| expires_at | Earlier of upstream expiry and 60 seconds from receipt; use monotonic elapsed time internally. |
+| result | active, succeeded, timed_out, cancelled or failed. Terminal outcomes invalidate code and late events. |
+| consumer | Exactly one fast channel consumer; callers share the snapshot/update signal rather than reading the upstream channel. |
+
+Code expiry is not final attempt timeout. An unresolved final timeout retains unsafe state and requires explicit offline recovery before a separately approved new pairing; Enter, EOF and cancellation do not authorize a new attempt or recovery. Request wait-context expiry does not silently grant/cancel another caller's shared window; explicit owner cancellation controls the attempt.
+
+A client generation is bound to its logical pairing window; retire/drain it before a different window so untagged old events cannot masquerade as the new attempt. Reload durable identity after drain to avoid overwriting it, not to authorize reuse: an unresolved attempt remains blocked by FR-099 even if a late identity is found. Version recovery inside a still-approved window remains subject to the existing 405 budget, never authorization to reopen a terminal window.
+
+#### Version Selection
+
+The bundled fallback and the latest successfully discovered WhatsApp Web version, used on the next connection. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Version Selection"]
+
+#### Recovery Budget
+
+Up to three delayed outdated-client retries since the last confirmed connection; distinct from pairing requests and ordinary network recovery. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Recovery Budget"]
+
+##### Shared version and retry invariants
+
+[Source: .specify/archive/003-whatsapp-pairing-status/data-model.md -> "Version Selection and Recovery Budget"]
+
+- Version is a value triple of uint32 components. Discovery accepts the pinned `2.3000.<uint32 decimal>` grammar, including revision zero; no invented version floor. Preserve bundled fallback and latest successful candidate in memory; no version persistence/migration.
+- Handshake freezes one candidate and registration hash together in a fresh cloned payload. Library globals remain immutable. Refresh never changes an in-flight payload or disconnects a healthy socket.
+- One version request in flight, 15 seconds, at most 1 MiB actual application-body consumption, complete response required, redirects/TLS errors rejected. Unknown-length bodies reaching the budget without proving completion are conservatively rejected, never accepted as prefixes.
+- The 405 budget is three retries after the initial rejection, each five seconds and a refresh attempt; duplicate events share it. Only current Connected resets it. Ordinary network backoff is separate and cannot bypass terminal state.
+- Saved-session shell startup recovery has a distinct budget of three retries after the initial failure/timeout, each after a cancellable five-second wait. Connected, shutdown, logout, storage fault or 405 handoff ends that sequence. Exhaustion retains identity and a disconnected shell; it never starts pairing or replenishes the 405 budget.
+- Each owner-initiated initial, explicit, startup-retry, 405 or 515 connection attempt has a 30-second watchdog; timeout cancels and drains before another attempt. A still-undrained call retains the single attempt slot and ownership. A healthy connection is not bounded by that watchdog.
+
+These budgets remain desired policies, not guarantees of retry availability. Default deny startup retry, 405, 515 and ordinary upstream reconnect until the path-specific detached-handler proof and current owner review in the connection-owner contract and all applicable gates pass. Never Connect on or after retirement of an upstream generation whose drain is unproven, including a replacement client; otherwise remain disconnected and report the limitation. The one exception is the owner-approved post-pair reconnect of `pair` (see the connection-owner contract). The budgets are not delivered by feature 003; their implementation is deferred to the follow-up in the roadmap.
+
+#### Unsafe-Run Marker
+
+[Source: .specify/archive/003-whatsapp-pairing-status/data-model.md -> "Unsafe-Run Marker"]
+
+Application migration 3 adds exactly one bounded store-level marker with clean/unsafe states and a five-bit set of repair collections whose device-specific markers would otherwise be lost on identity deletion. A new database known to have been created under the lock starts clean; an existing schema 1/2 database initializes unsafe because its previous run cannot be classified, even if no device row exists. If creation or migration was interrupted before the marker was committed, the reopened database is existing/unknown, never reconstructed as freshly created. Missing, malformed, unreadable or unsupported marker state is never clean. A committed unsafe state precedes all account-capable work and remains armed across all generations. If no production Connect was attempted, automatic clearing additionally requires true drain and durable completion of any confirmed-revocation cleanup. After any such attempt, only separately authorized offline recovery can clear it, after its verification and removal prerequisites. An arm error or ambiguous commit prevents automatic clear in that invocation; reopen and inspect the committed state. The marker is not proof of logout, identity validity or phone-side unlink; clean/unsafe and the pending repair bitset are independent.
+
+Temporary restriction: after any production Connect attempt, including failure or cancellation, orderly drain and cleanup are insufficient to clear the marker; only separately authorized offline recovery may do so. No same-process re-pair or automatic saved reuse follows that attempt. Store/lock drain remains mandatory.
+
+The marker schema enforces one row with primary key `id = 1`, non-null state limited to `clean` or `unsafe`, and a non-null integer repair bitset from 0 through 31. The bit positions correspond exactly to the five existing supported `device_repair` collections; migration and tests must use one documented stable mapping. Status inspection validates the singleton and all constraints without writing. A missing or malformed schema-3 row is classified unsafe/corrupt and is not automatically recreated because the pending bits may be unknown.
+
+An opened fresh-pairing attempt stays unresolved until it has both a durably saved identity and a current-generation Connected confirmation. Timeout, failure, cancellation or an orderly stop before both conditions retains unsafe state: the phone may have linked a device even when no local row exists. PairSuccess alone is insufficient. Subsequent automatic pairing or saved-identity reuse is blocked until offline recovery.
+
+Recovery uses the explicit, interactive offline branch of `pair`: the operator verifies the named account/device and any orphaned link, performs separately authorized phone-side unlink if needed, and separately authorizes removal of the local identity if present. Removal and marker clearing have atomic or equivalent safe ordering; no network or fresh QR occurs in that recovery action, and no chats/messages are deleted. Refusal, EOF, unverified phone state or definitely failed persistence keeps the marker unsafe. An ambiguous commit exits unsuccessfully and requires reopening to inspect committed state; clean can appear only after the authorized prerequisites were met. A later explicitly approved pair is separate. Process/OS/power failure coverage requires verified durable synchronization, not WAL `synchronous(NORMAL)` alone; physical corruption, storage that violates flush guarantees and restored older backups remain outside the guarantee.
+
+Before any genuine confirmed-revocation deletion or separately authorized offline identity removal, atomically union that device's pending `device_repair` collections into the store-level bitset in the same transaction as deletion, before foreign-key cascades remove the original rows. Retain the bitset across marker clearing, a missing identity and restart. When a new identity is saved, materialize the pending collections as new-device repair needs with unknown target and valid revision in the same transaction as first Save, or keep ordinary app-state admission closed until materialization commits. This closes the interval between Save and marker creation while still permitting the generation-valid key delivery needed for repair. Fence and clear each need only after successful current repair, never merely after pairing. Interrupted transfer/materialization cannot lose a bit or falsely declare recovery complete. Device session keys removed by separately authorized identity removal or genuine revocation are distinct from keys protected against deletion by app-state repair.
+
+#### Durable Repair Metadata
+
+[Source: .specify/archive/003-whatsapp-pairing-status/data-model.md -> "Durable Repair Metadata"]
+
+Application migration 2 adds `device_repair`; migration 3 adds the singleton unsafe-run marker. Device schema 16 and chats/messages remain unchanged. Fresh stores run migrations 1 through 3; an existing schema 1/2 database upgrades to schema 3 with unsafe state. Inspection of an old readable schema remains read-only and reports legacy safety unknown. No Go migration file is written during this planning phase.
+
+| Column | Constraint |
+| --- | --- |
+| device_jid | Required, canonical saved device identity, at most 256 bytes; foreign key to whatsmeow_device.jid with ON DELETE CASCADE. |
+| collection | Required, exactly one of critical_block, critical_unblock_low, regular_high, regular, regular_low. |
+| revision | Required positive signed 64-bit integer; increments before each protected mutation; overflow fails without resetting live state. |
+| target_version | Nullable fixed 8-byte big-endian encoding of the protocol uint64 version; NULL means reset/unknown rather than an integer-domain truncation. |
+| repair_ticket | Nullable fixed 16-byte non-secret uniqueness token for an owner-controlled repair; do not log it. Ordinary mutations do not inherit another repair's ticket. |
+| updated_at_ms | Required UTC Unix milliseconds, diagnostic only, never a correctness/ordering substitute for revision. |
+
+Primary key is (device_jid, collection). At most one row per five known collections for the owned device; no message bodies, contact snapshots, credentials or unbounded error strings. Unknown collection/JID/input is rejected before marker or data writes. Marker fields do not define a new total database quota.
+
+#### Repair Coordinator
+
+[Source: .specify/archive/003-whatsapp-pairing-status/data-model.md -> "Repair Coordinator"]
+
+| Field | Constraint |
+| --- | --- |
+| admission_mode | Before connecting with pending repair, ordinary untagged app-state progress/MAC and bulk-snapshot calls fail fast; tagged repair and sync-key delivery remain permitted. Resume ordinary sync only after required recovery succeeds. |
+| actual_call | At most one owner-invoked FetchAppState call is outstanding across client generations; timeout/retirement does not release its slot before that invocation returns. |
+| deadline_outcome | Ten-second caller wait; cancel/invalidate the repair ticket, retain the marker, discard late results, and start no replacement FetchAppState call while the prior invocation remains outstanding. |
+| deferred_sync | Coalesce deferred ordinary sync demand in a five-collection bitset; replay through the same FetchAppState slot after repair, never as another full-resync retry or an unbounded per-notification goroutine. |
+
+The SDK's appStateSyncLock is a plain mutex before its context-aware calls. A context alone cannot bound that wait. Startup admission mode is established before NewClient/Connect, not merely after an error: untagged background FetchAppState then fails its first guarded progress call before SQL/HTTP, rather than holding that mutex across network sync ahead of repair. Expected deferral does not become a storage fault or consume a repair attempt. Never block sync-key delivery needed by a tagged repair. A dirty marker created during otherwise successful ordinary sync does not by itself switch admission mode.
+
+The controller waits on result/cancellation/deadline, not directly on an uninterruptible SDK call; its one actual-call lease remains held until that call returns. Late work sees an inactive ticket/cancelled context and cannot clear a marker or mutate through a retired guard. Deferred ordinary requests are coalesced/replayed as ordinary incremental sync after repair, not extra full-resync attempts; failure leaves demand pending for a new notification/connection event, never a tight autonomous retry loop. A guarded-write fault during active use pauses/cancels that generation and requires an operator-authorized restart, whose pending markers activate startup admission before competing SDK work. Missing sync keys are transient: retain pending state and allow key delivery, without repeatedly retrying full resync.
+
+The SDK spawns missing-key requests with context.WithoutCancel: their ctx has no caller deadline/cancellation. They are SDK-owned protocol jobs, not outstanding FetchAppState invocations; do not invent an owner tail timer or claim the ten-second caller budget bounds them. The pin has a default 75-second message-response wait, per-key 24-hour request dedup and disconnect-cleared response waiters/retryFrame connection wait up to five seconds; these are component behaviours, not a hard total-tail/RSS guarantee. On stop disconnect before finalization and deny/cancel all old-generation device operations even for detached contexts. Inactive repair tickets forbid protected progress/clear, not necessary generation-valid key-request crypto/key delivery, which still uses fresh shared operation budgets. Never free a FetchAppState slot before that actual invocation returns or clear on late success.
+
 ## Storage Data Flow
 
 [Source: .specify/archive/002-sqlite-storage/data-model.md -> "Derived values"]
@@ -1290,6 +1587,37 @@ gets `sender_jid = P` and the phone filled in; then, if chat `L` exists, `P` tak
 `L`'s name is offered to `P` by the name rule only when its quality is saved or real; a fallback is dropped.
 Repeating the merge once nothing is left under `L` does nothing.
 
+## Connection and Recovery Data Flow
+
+### Marker and Repair Transitions
+
+[Source: .specify/archive/003-whatsapp-pairing-status/data-model.md -> "Marker and Repair Transitions"]
+
+1. Before a protected version/MAC/bulk-contact mutation, validate the call, commit an upsert/increment of its marker, then delegate under the same admitted operation. If recording fails, do not mutate the protected state. If later work fails or crashes, marker remains.
+2. Separate sibling methods may already have committed. A marker records uncertainty; it does not roll them back. Ordinary successful updates may conservatively leave a marker for next-start verification.
+3. After an authorized connection, process startup-pending/failed collections through one serialized worker, at most one automatic attempt per collection per owner generation. Do not consume a gate lease while waiting for the network. Reuse the 10-second operation budget and 16-MiB external-body budget.
+4. Prepare a repair ticket; propagate it through the actual full-resync call. Track every guarded-write error even when upstream only logs it. Unrelated/interleaved mutations replace/invalidate the ticket/revision so an old completion cannot clear new work.
+5. Clear by compare-and-delete only after successful call completion, no guarded errors, current generation and an admission fence proving no superseding/in-flight protected mutation. If fencing/CAS fails, retain the row; no silent second repair loop.
+6. Timeout/failure keeps durable state and internal recovery-pending health. If the run marker is unsafe, separately authorized offline recovery and fresh pairing precede a new connection; transferred needs survive identity removal and materialize for the new device. Never automatically unpair, evict cryptographic state for app-state repair, delete chats/messages or declare readiness on Connected alone.
+
+The marker-admission/clear fence must not deadlock nested Signal transactions or hold a transaction/SQL writer across network calls. Fault-injection and interleaving tests are part of the acceptance contract, not assumed proof.
+
+### Store and Stop States
+
+[Source: .specify/archive/003-whatsapp-pairing-status/data-model.md -> "Store and Stop States"]
+
+| State | Invariant |
+| --- | --- |
+| open | Existing accepted shared budgets apply to device and application operations. |
+| generation retiring | Old client cannot admit new calls; admitted calls drain. Shared store remains available for controlled revocation/fresh generation only after old drain. |
+| store closing | Shared admission permanently closed; reject new calls; contexts cancelled after grace. Pools remain open while work is active. |
+| quiescent | Zero admitted operations and no future admissions; safe to close pools. Completion signal closes once. |
+| closed | Pools closed after quiescence; lock release may follow. Close errors are reported; timeout alone never establishes this state. |
+
+Reuse 16 active/64 waiters, five-second admission, ten-second operation, 16-MiB input/32-MiB output and existing disk reserve/resume profile. Reuse appropriate field/aggregate budgets, not an unrelated total-address-book count. Contact/LID device views and session migration retain no private raw cache; raw migratedPNSessionsCache is not an excepted device-store control. Unused all-contact/all-key exports fail explicitly rather than truncate or materialize unlimited results.
+
+E003-RX-01 applies only to documented upstream receive resource exposure. It does not relax these store-state or marker invariants.
+
 ## Security
 
 The threat model is the [security review](../../docs/security-review.md) (F01–F16). This section takes up the
@@ -1317,6 +1645,8 @@ sidecars, temporary files and backups, which carry the same data.
   conversations (FR-081).
 - **Backups and decommissioned copies.** These leave the process's control; the operator owns their protection
   (FR-080, FR-082, FR-083).
+
+Assets are device credentials and identities, shared storage and its sidecars, temporary pairing material, accurate status, protocol stdout, and exclusive ownership until the last device write finishes. Boundaries are owner terminal to pairing control; WhatsApp/network responses to lifecycle and version handling; upstream diagnostics to local logs/terminal; and the connection owner to private shared storage. Neither a retrieved message nor a diagnostic string grants authorization. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Assets are device credentials and identities"]
 
 ### Findings taken up or deferred
 
@@ -1350,6 +1680,28 @@ The data-directory privacy and lock safety of the [001 hardening](../../docs/bac
 (`001-SEC-01`, `001-SEC-02`) are merged into `main` (#2) and provide `internal/private`; feature 002 creates its
 sensitive files through it and still owns verification of its database, sidecars and temporary artifacts. A check
 after config loading or lock acquisition does not retroactively protect earlier operations.
+
+#### Connection and pairing finding dispositions
+
+[Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Treatment in this feature and remaining owner"]
+
+| Finding | Treatment in this feature and remaining owner |
+| --- | --- |
+| F01 - authorization and consent | Local owner pairing window is required by FR-100/FR-101. General read/tool pairing policy belongs to 005-006, send approval requires an owner decision before 007, and transport parity belongs to 009. No MCP pairing capability is enabled here. |
+| F02 - remote confidentiality | No HTTP/proxy capability here; defer to 009. Secure version discovery remains required by FR-103. |
+| F03 - private storage | Inherit 001/002 controls and verify device-write paths under FR-102. Encryption and backup custody remain operator responsibilities; broader deployment guidance belongs to 011. |
+| F04 - secret lifecycle | QR lifetime and credential-free diagnostics are addressed by FR-100/FR-105; HTTP token and webhook key generation/rotation remain in 009/010. |
+| F05 - filesystem containment | Device-store paths retain 002's controls under FR-102; outbound paths and cache namespace/cleanup remain in 007/008. |
+| F06 - media processing | No media parser/converter enabled; defer to 007/008. |
+| F07/F08 - webhook destination/replay | No webhook enabled; defer to 010. |
+| F09 - resource exhaustion | FR-103/FR-104 and the bounded profile cover discovery/pairing/retry work. Under constitution 2.0.0 Principles V/X, existing E003-RX-01 in verification.md is an approved temporary deviation only for documented upstream receive-resource gaps: owner tiger-seo, expiry 2026-12-02, compensating controls and earlier-review triggers. The receive bounds remain unmet; device/application-owned controls are not excepted and F09 is not closed. Follow-up: docs/backlog/003-whatsmeow-receive-resource-bounds.md. Ingest bounds belong to 004, tool bounds to 005-006, media bounds to 007-008, transport bounds to 009 and webhook bounds to 010. |
+| F10 - input and output validation | FR-103/FR-104/FR-105 cover version, QR and terminal input boundaries; message/tool/media validation remains with 004-008 and HTTP validation with 009. |
+| F11 - sensitive logs and audit | FR-100/FR-105 cover lifecycle events and redaction here. Durable audit collection, protected retention and operator review guidance remain in 011; this feature does not claim a complete security audit trail. |
+| F12 - retention/privacy | No QR persistence or transcript evidence under FR-100. Message/client data flows remain with 004-006; media/webhook flows with 008/010; full retention and decommissioning guidance with 011, extending existing storage operations guidance. |
+| F13 - recovery and backups | Retain 002's storage recovery controls; FR-096 prevents active device writes during close. Synthetic tests only for restored device state; broader operator recovery rehearsal remains in 011. |
+| F14 - incident response | Revoked credentials cannot be reused by FR-088. Full compromise/rotation/unlink runbook belongs to 011 with credential-specific steps in 009/010; this feature does not auto-unlink a phone or destroy data. |
+| F15 - supply chain | FR-107 applies now; release signatures, provenance and distribution guidance remain in 011. |
+| F16 - assurance/ownership | Record feature-specific security evidence and limitations; deployment/control ownership and any regulated cryptographic assurance profile remain operator decisions in 011. No compliance claim is made. |
 
 ### Security requirements
 
@@ -1432,6 +1784,30 @@ after config loading or lock acquisition does not retroactively protect earlier 
   encryption/key destruction depends on the operator's storage system. Do not delete unrelated files or add
   WhatsApp-message deletion/automatic retention as part of this feature.
 
+- **FR-100**: QR material MUST remain transient and available only in the active owner-approved attempt. Each code MUST be cleared on its expiry or replacement; all pairing material MUST be cleared on the attempt's final timeout, cancellation, success or logout. QR payloads and session secrets MUST NOT appear in logs, errors, ordinary status output, temporary files or verification evidence, including at debug level. Deliberate terminal QR display is the sole human-display exception in this feature.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SEC-001]
+
+- **FR-101**: Pairing MUST only begin on explicit owner request, not on status reads, startup without credentials, network disconnection or unsolicited events. This feature MUST NOT expose an unauthenticated listener or a remotely callable pairing endpoint.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SEC-002]
+
+- **FR-102**: Existing private-file and handle-identity protections MUST remain effective for client-created device data and sidecars. Unsafe storage MUST fail before account connection or pairing. No revoked-session cleanup may delete chats, messages or unrelated files. Private storage is not encryption; host and backup encryption remain operator responsibilities.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SEC-003]
+
+- **FR-103**: Version discovery MUST validate a secure upstream response, reject invalid certificates and unexpected redirects, consume bounded time and bytes, and accept only a well-formed supported version. Rejected discovery MUST preserve the prior version, expose no credentials, and never redirect account credentials to another service.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SEC-004]
+
+- **FR-104**: Concurrent lifecycle work and externally supplied QR/version data MUST be bounded by the acceptance profile below. Cancellation MUST prevent delayed work from starting another connection. Over-limit input MUST be rejected without changing saved session state or replacing a valid current version/QR.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SEC-005]
+
+- **FR-105**: Upstream text MUST be safely encoded for logs and terminal diagnostics, with no attacker-controlled terminal escapes. Logs MUST record pairing requested/succeeded/expired/failed, logout, version refresh failure, retry exhaustion and shutdown failure using time, outcome and a non-secret reason, without raw QR data, keys or unnecessary account identifiers.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SEC-006]
+
+- **FR-106**: Automated tests MUST use synthetic credentials, simulated events and controlled version responses, never real account data or live account connections. Real-account verification MUST obtain the user's explicit permission separately for each account-affecting step and record changes and cleanup without secrets.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SEC-007]
+
+- **FR-107**: Dependencies MUST preserve the existing exact-version, module-integrity, reachable-vulnerability and five-platform build rules. No connection or QR dependency may require a C toolchain.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SEC-008]
+
 ### Storage acceptance profile (approved 2026-10-28)
 
 [Source: .specify/archive/002-sqlite-storage/spec.md -> "Storage acceptance profile (approved 2026-10-28)"]
@@ -1448,6 +1824,23 @@ of 1024.
 | Work and waits | 1 write connection and 4 read connections; ≤ 16 active and ≤ 64 waiting operations (beyond that: immediate busy error); admission wait ≤ 5 s; busy timeout 5 s; each query or write ≤ 10 s; resources released within 1 s of cancellation; startup schema upgrades ≤ 10 min in total; closing the store fits within the existing 10-second shutdown limit; SQLite memory (page cache, sorts, temporary b-trees) ≤ 256 MiB per process as a hard heap limit, beyond which the operation fails with a resource-limit error (approved 2026-10-28, second design review). The bound of 2 deep sender listings at once (third design review) was withdrawn on 2026-10-30: sender listings no longer sort, so their memory does not grow with the offset |
 | Disk and WAL | Free-space reserve 256 MiB, checked before each write transaction from a measurement at most 30 s old; once refused, writes resume when ≥ 512 MiB is free. The write-ahead log is truncated to ≤ 64 MiB after checkpoints; a long reader is bounded by the 10 s query deadline. Nothing (keys, messages, journals, backups) is deleted automatically |
 | Platform and recovery | Local filesystems only (NTFS on Windows; ext4 and other local POSIX filesystems; APFS). UNC/network paths (including mapped and `subst` drive letters that resolve to one), `\\?\` and `\\.\` device paths and alternate data streams are rejected. On Windows the access list is limited to the user, SYSTEM and Administrators (constitution Principle V). Upstream device-migration guarantees, backup/restore steps and the isolated cross-identity test procedure are verified and documented under FR-044, FR-074, FR-080 and FR-072 |
+
+### Connection acceptance profile
+
+[Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "These owner-approved fixed limits concern application-owned discovery and lifecycle work"]
+
+These owner-approved fixed limits concern application-owned discovery and lifecycle work; they do not claim to bound all resources internal to the WhatsApp service or its protocol library. Planning must enumerate the library's relevant limits and any remaining exposure before implementation is approved. Changes to this profile require explicit review rather than silent adjustment during implementation.
+
+| Resource | Required bound and failure behaviour |
+| --- | --- |
+| Active client and pairing | One owned client and one active pairing attempt per process; concurrent QR requests reuse that attempt rather than queueing new attempts. |
+| Application-initiated connection attempts | One in flight; each owner-initiated initial, explicit, startup-retry, 405 or 515 connection attempt has a 30-second watchdog, cancellable by shutdown. On timeout cancel and drain before another attempt; an undrained attempt retains ownership. Ordinary library recovery must not spin on immediate failures or bypass terminal logout/405 failure. |
+| Saved-session shell startup recovery | After an initial failure or timeout, at most three retries, each after a cancellable five-second wait; on exhaustion remain disconnected with an actionable diagnostic. This budget is separate from and cannot bypass 405 recovery, logout or shutdown. |
+| Version discovery | One request in flight; 15-second overall deadline; at most 1 MiB of actual response-body consumption; unexpected redirects rejected. |
+| QR payload | At most 4 KiB per current code; retain at most one code and one derived display/image representation; no history of codes. Validity ends at upstream expiry or after 60 seconds from receipt, whichever occurs first. |
+| Automatic outdated recovery | Three retries after the initial rejection, five seconds before each, reset only by confirmed connection. |
+| Version scheduling | One six-hour refresh schedule; overlapping refresh requests share or skip the in-flight request rather than accumulating work. |
+| Stop | Cancel outstanding work immediately; report failure if quiescence is not achieved within 10 seconds. The process remains alive holding the store and lock until writes are quiescent, then closes and exits unsuccessfully. A forced process kill remains an OS/crash boundary, not clean shutdown. |
 
 ### Abuse cases
 
@@ -1483,6 +1876,24 @@ case is tested on each platform it covers; one that cannot be run there is recor
 11. Success and failure paths run over seeded device keys, media keys, message bodies and names containing
     terminal control sequences: none of them appear in logs or errors at any level.
 12. A restored backup is validated offline only: neither it nor the original device store connects to WhatsApp.
+
+#### Connection and pairing abuse cases
+
+- Flood concurrent pairing and 405 events: verify one active attempt, no multiplied retry budget and no unexpected session writes. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Flood concurrent pairing and 405 events: verify one active attempt, no"]
+
+- Replay expired QR/success/logout events from an older attempt: verify they cannot reveal stale material or mutate the current attempt's saved state. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Replay expired QR/success/logout events from an older attempt: verify they"]
+
+- Submit oversized, malformed, stalled or redirected version responses and malformed/oversized QR payloads: verify deadlines and consumption bounds, unchanged valid state and no persisted rejected input. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Submit oversized, malformed, stalled or redirected version responses and"]
+
+- Inject terminal controls and synthetic secrets into upstream error paths: capture every log level and status output; verify safe rendering and no credential or QR leakage. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Inject terminal controls and synthetic secrets into upstream error paths:"]
+
+- Point the process at unsafe or substituted device storage: verify refusal before any account network operation and no application writes to the rejected target. Exercise Windows and Unix protections separately. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Point the process at unsafe or substituted device storage: verify refusal"]
+
+- Interrupt pairing, retry sleep, discovery and an in-flight device write: verify no post-cancellation reconnect, no database close before writes finish, and no early lock release. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Interrupt pairing, retry sleep, discovery and an in-flight device write:"]
+
+- Run standalone status with network access prohibited, missing storage and another active owner: verify no connection, QR creation, migration or saved-state mutation and an honest snapshot/error. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Run standalone status with network access prohibited, missing storage and"]
+
+The feature's later `verification.md` must record synthetic test evidence, supported-platform coverage, measured bounds, explicitly authorized manual results and any unverified limitations. Specifying a requirement is not evidence that its control has passed. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "The feature's later verification.md must record synthetic test evidence"]
 
 ## Success Criteria
 
@@ -1533,8 +1944,38 @@ case is tested on each platform it covers; one that cannot be run there is recor
   integrity/foreign-key checks, preserves both schema histories and every pre-quiescence committed write, and
   satisfies private-access rules. Interrupted upgrades and disk-full failures follow the documented recovery path.
 - **SC-018**: Captured startup, success and failure diagnostics at every log level contain the required event fields [Source: .specify/archive/002-sqlite-storage/spec.md -> SC-011]
-  and none of the seeded secrets/message bodies or executable terminal control sequences. The "Storage" section of
+  and none of the seeded secrets/message bodies or executable terminal control sequences. Captured lifecycle
+  diagnostics at every supported log level contain zero QR payloads or session credentials; stdio stdout contains
+  zero human-readable pairing or log output. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-006]
+  The "Storage" section of
   `OPERATIONS.md` covers FR-080/FR-082/FR-083 and identifies the owner of encryption, backups, retention and recovery objectives.
+
+- **SC-019**: Scripted attempts, including failure and cancellation, retain unsafe state after orderly drain; restart requests neither connection nor QR until offline recovery. Clean-marker saved-session startup is tested separately without implying post-attempt reuse.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-001]
+
+- **SC-020**: Scripted logout and unresolved timeout deny a new same-process attempt after production Connect; offline recovery and separately approved pairing preserve conversation records.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-002]
+
+- **SC-021**: Every scripted status transition reports the four required fields consistently; standalone status performs zero network requests and makes zero changes to saved account state.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-003]
+
+- **SC-022**: A six-hour interval refreshes without interrupting a connection. Where same-generation safety is demonstrated, a repeated 405 sequence has at most three delayed retries, no fourth and resets only on confirmed connection; otherwise it produces no unsafe retry and reports unavailability.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-004]
+
+- **SC-023**: All cancellation and shutdown race scenarios demonstrate zero device writes after storage closes and zero lock release before device activity is quiescent.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-005]
+
+- **SC-024**: The manual journey documents the temporary unsafe restart and offline recovery; each account-affecting step requires separate recorded permission and redacted results. Unperformed checks remain unverified; no-scan restart and same-process re-pair are follow-up goals.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-007]
+
+- **SC-025**: Offline substitute tests cover every connection-boundary capability in FR-094 without a real account. Simulated command tests cover both `stdio` and `serve`, with and without saved sessions, and observe zero exposed tools, listeners or unsolicited QR attempts in this feature.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-008]
+
+- **SC-026**: Every scripted interruption between app-state version, MAC and contact writes leaves a durable repair indication; restart observes it, success clears only the repaired indication, and failed/interleaved recovery retains it. Tests show app-state repair itself deletes no chats, credentials or session keys and has no unbounded retry loop; separately authorized identity removal under FR-099 may remove only the affected device's credentials/keys while preserving the repair need and conversations.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-009]
+
+- **SC-027**: Synthetic startup failures and timeouts in both shells produce at most three five-second-delayed retries only when same-active-generation safety is demonstrated; otherwise no retry occurs and the limitation is reported. Successful connection or cancellation stops the sequence. Stalled owner-initiated initial and permitted retry, 405 and 515 attempts initiate cancellation at 30 seconds, retain the slot and ownership until drain and never open an unsolicited pairing window.
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-010]
 
 ## Assumptions
 
@@ -1553,9 +1994,6 @@ case is tested on each platform it covers; one that cannot be run there is recor
 
 - **AS-005**: **`stdio` and `serve` placeholders run until stopped** so that the lock and shutdown can be checked end to end
   with the real binary before the MCP and HTTP features exist. [Source: .specify/archive/001-binary-skeleton/spec.md -> "`stdio` and `serve` placeholders run until stopped"]
-
-- **AS-006**: **`status` will not take the lock**, so that it can report on a running daemon later. Feature 003 decides how it
-  reads the state. [Source: .specify/archive/001-binary-skeleton/spec.md -> "`status` will not take the lock"]
 
 - **AS-007**: **Build information** is injected at build time; how is a plan matter. Feature 011 sets it for releases. [Source: .specify/archive/001-binary-skeleton/spec.md -> "Build information"]
 
@@ -1597,3 +2035,25 @@ case is tested on each platform it covers; one that cannot be run there is recor
   media download and its cache (008), recipient/approval policy, HTTP/webhooks/converters, and backup/database
   maintenance commands. Storage-compatible backup/restore and decommissioning guidance and offline acceptance
   evidence are in scope; no new service, account action or maintenance command is implied. [Source: .specify/archive/002-sqlite-storage/spec.md -> "Out of scope"]
+
+- **AS-018**: Feature 002 is the storage foundation. Its existing permissions, migrations, lock behaviour and data-directory rules remain binding; this feature extends lifecycle ownership rather than redesigning storage. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Feature 002 is the storage foundation. Its existing permissions,"]
+
+- **AS-019**: The owner confirmed `status` as an offline local inspection for feature 003, not a health probe for another process. It may take the existing lock for safe inspection, but does not create a lock file for absent storage. It fails with a lock-holder error when another process owns the directory; live owner queries remain outside this feature. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "The owner confirmed `status` as an offline local inspection for feature"]
+
+- **AS-020**: `pair` ends after successful linking. Same-process re-pair after an upstream attempt is temporarily unavailable; feature 005 cannot bypass the barrier. Running `pair` beside an existing owner still fails on the lock; no implicit proxy is introduced. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "`pair` ends after successful linking. Same-process re-pair after an"]
+
+- **AS-021**: The terminal `pair` invocation is the owner's authorization to start one pairing attempt, including automatically supplied replacement codes within it. After an unresolved final timeout, cancellation or end-of-input exits unsuccessfully; Enter does not authorize a new attempt or offline recovery. Future MCP authorization policy is not inferred from tool arguments or authentication alone. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "The terminal `pair` invocation is the owner's authorization to start one"]
+
+- **AS-022**: The phone, WhatsApp service and network may delay or refuse linking. No fixed end-to-end pairing duration or guarantee of upstream availability is promised. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "The phone, WhatsApp service and network may delay or refuse linking. No"]
+
+- **AS-023**: The bounded acceptance profile below is owner-approved as fixed constants, not configurable settings. Any incompatibility discovered during planning must be raised for explicit review before changing those limits. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "The bounded acceptance profile below is owner-approved as fixed constants,"]
+
+- **AS-024**: The owner approved reusing the existing store budgets on device calls, an embedded repair-metadata migration and a separate unsafe-run marker migration. Schema/transport safeguards are mandatory and outside the receive exception; metadata does not imply message ingest or a new account-management command. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "The owner approved reusing the existing store budgets on device calls, an"]
+
+## Scope and References
+
+This feature covers `docs/roadmap.md` 003 and `docs/specification.md` section 8: A3 (`pair` and `status`), A5 (testable connection boundary), P4 (pairing/status state), P5 (version refresh and 405 recovery), M9 (recoverable QR pairing), the WhatsApp log bridge and shutdown portions of M10, and D11 (QR only). Sections 3.4 and 3.6 define preserved events, retry timings and pairing semantics; section 6 defect 16 is explicitly corrected. A2/D14, G1 and constitution Principles I-X remain constraints. Decisions D1-D18 are not reopened. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "This feature covers `docs/roadmap.md` 003 and `docs/specification.md`"]
+
+Included: connection lifecycle, shared saved-session use, terminal pairing, local status, current QR availability for future callers, offline substitutes, version refresh, bounded outdated-client recovery and device-write shutdown ordering identified in feature 002's design review. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Included: connection lifecycle, shared saved-session use, terminal"]
+
+Excluded: message/history ingest, LID merging and name resolution (004); MCP tool registration and QR image transport (005); sending and media handling (007-008); HTTP, proxying and daemon status queries (009); webhooks (010); phone-code pairing, new account-management commands, multiple accounts, REST and old-deployment migration. Device-session persistence needed by linking is included; application message persistence is not. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Excluded: message/history ingest, LID merging and name resolution"]

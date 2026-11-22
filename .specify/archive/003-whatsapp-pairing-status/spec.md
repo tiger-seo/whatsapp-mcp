@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-02
 
-**Status**: Draft
+**Status**: Completed
 
 **Input**: User description: "@docs/roadmap.md 003". Roadmap specify input: "Connect whatsmeow from the shared database, pair with a terminal QR code, report status, keep the WhatsApp Web version current, and recover from logout without a restart."
 
