@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-27
 
-**Status**: Draft
+**Status**: Completed
 
 **Input**: User description: "Create the single SQLite database on modernc.org/sqlite. It holds both the whatsmeow
 device store and our message tables, with versioned embedded migrations and the store operations ingest and tools
@@ -654,7 +654,7 @@ separate OS test identities. No real WhatsApp account or network connection is n
 
 ## Security *(constitution Principle X)*
 
-The threat model is the [security review](../../docs/security-review.md) (F01–F16). This section takes up the
+The threat model is the [security review](../../../docs/security-review.md) (F01–F16). This section takes up the
 storage portions of F03, F05, F09–F13 and F16 as requirements and defers every other finding to a named later
 feature. These are requirements, not claims of implemented controls or confirmed vulnerabilities. D1–D18 remain
 unchanged.
@@ -704,7 +704,7 @@ and query/input rules address F09/F10 (`SC-5`, `SI-10`); safe events address the
 recovery addresses F13 (`CP-9`, `CP-10`); retention/operator responsibilities address F12/F16 (`SI-12`, `CM-6`).
 These mappings do not establish satisfaction of a NIST baseline or close the wider review findings.
 
-The data-directory privacy and lock safety of the [001 hardening](../../docs/backlog/001-binary-skeleton-security-hardening.md)
+The data-directory privacy and lock safety of the [001 hardening](../../../docs/backlog/001-binary-skeleton-security-hardening.md)
 (`001-SEC-01`, `001-SEC-02`) are merged into `main` (#2) and provide `internal/private`; feature 002 creates its
 sensitive files through it and still owns verification of its database, sidecars and temporary artifacts. A check
 after config loading or lock acquisition does not retroactively protect earlier operations.

@@ -266,7 +266,7 @@ Then the findings, most severe first, each as:
   Gate: <binding requirement and why this finding blocks, if applicable>
 ```
 
-In design mode the location is the document and section (`specs/002-sqlite-storage/plan.md` §Summary,
+In design mode the location is the document and section (`.specify/archive/002-sqlite-storage/plan.md` §Summary,
 `tasks.md` T014), and "Breaks when" describes what the built feature would do.
 
 Then **For the owner**: decisions that are theirs (merge, release, a change to the specification or a

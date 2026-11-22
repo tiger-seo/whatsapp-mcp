@@ -25,13 +25,13 @@ a new setting is one descriptor in `setting.go` plus one `Config` field), `inter
 infer behaviour from the code. §1–§7 describe the earlier implementation (behaviour to keep), §6 its defects (avoided
 by design), §8 this project; §8.10 holds decisions D1–D18 (settled: do not reopen unless the user asks) and §8.11 the
 feature security decisions. `docs/roadmap.md` orders the features. The storage spikes S1 and S2 are in
-`specs/002-sqlite-storage/research.md` (appendix "Spike results").
+`.specify/archive/002-sqlite-storage/research.md` (appendix "Spike results").
 
 ### `specs/NNN-*/`: feature specs
 Every feature so far: 001 binary skeleton, 002 SQLite storage, 003 connection, pairing and status (all merged), 004
 shutdown drain (pull request #11). Each has `spec.md`, `plan.md`, `tasks.md`, contracts and a `verification.md` with
-the evidence. The binary-skeleton baseline is consolidated in `.specify/memory/spec.md` and
-`.specify/memory/plan.md`; its original feature artifacts are in `.specify/archive/001-binary-skeleton/`.
+the evidence. The binary-skeleton and storage baselines are consolidated in `.specify/memory/spec.md` and
+`.specify/memory/plan.md`; the original feature artifacts are in `.specify/archive/001-binary-skeleton/` and `.specify/archive/002-sqlite-storage/`.
 
 ### `.specify/memory/constitution.md`: principles
 Read it before planning or implementing. It sets the review workflow below.
@@ -117,15 +117,22 @@ push and pull request.
 - Binary-skeleton baseline: Go 1.27.0 with the `go1.27.3` toolchain and `CGO_ENABLED=0`; pure-Go
   `gofrs/flock` and `pelletier/go-toml/v2`. These are archival baseline versions, not current pin guidance.
   [Source: .specify/archive/001-binary-skeleton/plan.md -> "Primary Dependencies"] [Source: .specify/archive/001-binary-skeleton/verification.md -> "Toolchain"]
+- Storage baseline: pure-Go `modernc.org/sqlite` v1.61.0 with matching `modernc.org/libc` v1.79.0, the pinned
+  whatsmeow SQL store, and `golang.org/x/text` for case folding and NFC. These versions are historical.
+  [Source: .specify/archive/002-sqlite-storage/plan.md -> "Primary Dependencies"] [Source: .specify/archive/002-sqlite-storage/verification.md -> "Dependencies and govulncheck"]
 
 ## Project Structure
 
 - The CLI owns startup and signal wiring. `internal/config` owns the settings registry and directory
   resolution, `internal/lock` owns exclusive access, and `internal/buildinfo` owns build metadata.
   [Source: .specify/archive/001-binary-skeleton/plan.md -> "Structure Decision"]
+- `internal/store` owns SQLite startup, queries, writes and embedded migrations; both schema histories share
+  one private file. `OPERATIONS.md` describes offline backup, restore and recovery.
+  [Source: .specify/archive/002-sqlite-storage/plan.md -> "Structure Decision"] [Source: .specify/archive/002-sqlite-storage/spec.md -> FR-047]
 
 ## Recent Changes
 
+- [specs/002-sqlite-storage](.specify/archive/002-sqlite-storage/spec.md): Archived the SQLite lifecycle, migrations, query contracts and storage safeguards.
 - [specs/001-binary-skeleton](.specify/archive/001-binary-skeleton/spec.md): Archived the CLI, configuration, locking, shutdown, privacy and CI baseline.
 
 ## File Operations
@@ -142,6 +149,18 @@ the user unlinking the device on the phone, then deleting the directory. Record 
 `verification.md`; a step not run is "not verified". Automated tests use `internal/wasim` only.
 
 ## Known Issues & Gotchas
+
+### Read-Only SQLite Open Is Not a No-Write Guarantee
+**Issue:** A compatibility probe must see committed WAL data without creating or changing SQLite sidecars.
+**Root Cause:** Read-only SQLite modes either need sidecar access or do not see all committed WAL changes.
+**Prevention Rule:** Use the committed read-only view for both schema checks before issuing writable operations.
+[Source: .specify/archive/002-sqlite-storage/research.md -> R4]
+
+### SQLite Heap Limits Need Memory Statistics
+**Issue:** A heap limit can appear configured without limiting SQLite allocations.
+**Root Cause:** The baseline driver disables SQLite memory statistics by default; Go heap metrics omit SQLite memory.
+**Prevention Rule:** Enable SQLite memory statistics before opening connections and verify the hard limit independently.
+[Source: .specify/archive/002-sqlite-storage/research.md -> R16]
 
 ### Keep the Lock PID Outside the Windows Locked Byte
 **Issue:** A contending process cannot read a PID stored at byte 0 on Windows.

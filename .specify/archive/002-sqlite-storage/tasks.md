@@ -5,7 +5,7 @@ description: "Task list for feature 002: storage in one SQLite file with migrati
 
 # Tasks: Storage: one SQLite file and migrations
 
-**Input**: Design documents from `specs/002-sqlite-storage/`
+**Input**: Design documents from `.specify/archive/002-sqlite-storage/`
 
 **Prerequisites**: [plan.md](plan.md), [spec.md](spec.md), [research.md](research.md), [data-model.md](data-model.md),
 [contracts/store-api.md](contracts/store-api.md), [contracts/startup-and-events.md](contracts/startup-and-events.md),
@@ -31,7 +31,7 @@ hardens all of them); the P2 stories US5 and US6 follow.
 - Code comments never cite FR-, SC-, US-, D- or F- identifiers (constitution).
 - Files are LF. After a scripted batch, `git ls-files --eol` must show no `w/crlf`.
 - Limits are the constants from T005; tests reference those constants, not literals.
-- Record evidence (command, date, result, platform) in `specs/002-sqlite-storage/verification.md` whenever a task
+- Record evidence (command, date, result, platform) in `.specify/archive/002-sqlite-storage/verification.md` whenever a task
   says "record".
 
 ---
@@ -74,7 +74,7 @@ reviews" table of `verification.md` after the parking, is `PASS` (or `CONCERNS` 
   - the store owns `<data dir>/whatsapp.db`, and no other package issues database queries;
   - `Device()` is the only shared handle;
   - the store is safe for concurrent use.
-- [X] T003 [P] Extend `specs/002-sqlite-storage/verification.md`, which already holds the "Owner reviews" table.
+- [X] T003 [P] Extend `.specify/archive/002-sqlite-storage/verification.md`, which already holds the "Owner reviews" table.
   Keep that table, and add these sections above it:
   - "Environment";
   - "Gate results (committed view, device upgrade transactions)";
@@ -1155,7 +1155,7 @@ result, then merge again and check nothing changes.
 - [X] T062 Run `gofmt -l .` (empty), `go vet ./...`, `go test ./...` (read each exit code directly, not through a
   pipe) and `govulncheck ./...`. Record the results. Record any unreachable finding as an exception in
   `verification.md` with owner, compensating controls and expiry; a reachable one blocks the feature.
-- [X] T063 Run every step of `specs/002-sqlite-storage/quickstart.md`, including the local benchmark (step 5,
+- [X] T063 Run every step of `.specify/archive/002-sqlite-storage/quickstart.md`, including the local benchmark (step 5,
   SC-004: record each `ns/op` and the machine) and the 60 s fuzz runs (step 2). Record the results in
   `verification.md`.
   _Partial: steps 6 and 7 ran on Windows only, see T067 and T073._

@@ -86,7 +86,7 @@ go test ./internal/store -run '^$' -bench BenchmarkQueries -benchtime 20x -count
 
 The benchmark seeds 100,000 messages across 1,000 chats once, then runs every query in FR-021–FR-033. Expected:
 every `ns/op` is below 200 ms. Record the output, the date and the machine (CPU, RAM, disk, OS) in
-`specs/002-sqlite-storage/verification.md`.
+`.specify/archive/002-sqlite-storage/verification.md`.
 
 ## 6. Cross-identity access (SC-008, manual with recorded evidence)
 
