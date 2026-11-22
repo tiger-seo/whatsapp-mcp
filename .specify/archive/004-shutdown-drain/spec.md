@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-07
 
-**Status**: Draft
+**Status**: Completed
 
 **Input**: User description: "@docs/backlog/003-post-pair-reconnect-and-unsafe-marker.md". This is stage 1 of the roadmap follow-up "WhatsApp logout and shutdown drain": clear the unsafe-run marker after an orderly stop proven quiet, move the post-pair reconnect onto a fresh client, and remove the code-level `PostPairReconnect` switch. No new automatic reconnects.
 

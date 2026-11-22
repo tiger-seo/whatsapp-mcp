@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-27
 
-**Status**: Draft
+**Status**: Completed
 
 **Input**: User description: "Create the whatsapp-mcp binary skeleton. It has the subcommands stdio, serve, pair,
 status and version; only version does real work yet. It also needs layered configuration (flag > WHATSAPP_MCP_*

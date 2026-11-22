@@ -1,0 +1,97 @@
+# Changelog
+
+## Merged Features Log
+
+### MCP Over Stdio: Chat and Contact Tools — archived 2026-11-22
+**Branch:** `006-mcp-stdio-tools`
+**Spec:** [specs/006-mcp-stdio-tools/spec.md](../archive/006-mcp-stdio-tools/spec.md)
+
+**What was added:**
+- Browse stored chats and find contacts and their conversations through five bounded local MCP read tools. Login and pairing tools remain deferred.
+
+**New Components:**
+- `internal/mcp` with SDK registration, public results, guarded stdio and bounded diagnostics; a store-owned read facade and command lifecycle wiring.
+
+**Superseded:**
+- RETIRED: SC-005 (from .specify/archive/001-binary-skeleton/spec.md -> SC-005) → replaced by SC-046. Reason: Working stdio MCP emits protocol bytes; stdout must carry zero nonprotocol output.
+
+**Tasks Completed:** 46/46 tasks
+
+### Message Ingest — archived 2026-11-22
+**Branch:** 005-message-ingest
+**Spec:** [specs/005-message-ingest/spec.md](../archive/005-message-ingest/spec.md)
+
+**What was added:**
+- Store supported live messages and supplied history, preserving captions and media metadata without downloading media.
+- Normalize and reconcile LID identities and resolve chat names without a network lookup per message.
+- Report incomplete history and receive overload; stop the connected command on message-store failure without weakening shutdown order.
+
+**New Components:**
+- Generation-owned ingest adapter and bounded history, naming and LID workers in `internal/wa`; store validation and read helpers; terminal failure wiring in connected commands.
+
+**Tasks Completed:** 56/57 tasks
+
+### Reusable Session After a Proven Quiet Stop — archived 2026-11-22
+**Branch:** 004-shutdown-drain
+**Spec:** [specs/004-shutdown-drain/spec.md](../archive/004-shutdown-drain/spec.md)
+
+**What was added:**
+- Reuse a saved session after a proven quiet stop, with fail-closed recovery when the check or another clear prerequisite fails.
+- Run the single post-pair reconnect on a fresh client and generation; remove the switch without enabling other retry paths.
+- Report the quiet-stop outcome and safe failure categories on stderr without exposing raw observations.
+
+**New Components:**
+- Per-generation network fence and bounded quiet-stop observation in `internal/wa`, in-memory device-barrier refusal accounting in `internal/store`, and command outcome wiring.
+
+**Superseded:**
+- RETIRED: SC-019 (from .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-001) → replaced by SC-028. Reason: Proved quiet attempts can be reused; SC-029 exercises unsafe retention in fault cases.
+- RETIRED: SC-024 (from .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-007) → replaced by SC-034. Reason: The separately authorized journey now exercises a restart without recovery.
+- RETIRED: "Temporary restriction" (from .specify/archive/003-whatsapp-pairing-status/data-model.md -> "Unsafe-Run Marker") → replaced by FR-110. Reason: A passed quiet-stop check and all other prerequisites permit orderly clear after a production attempt.
+
+**Tasks Completed:** 47/47 tasks
+
+### WhatsApp Connection, Pairing and Status — archived 2026-11-22
+**Branch:** 003-whatsapp-pairing-status
+**Spec:** [specs/003-whatsapp-pairing-status/spec.md](../archive/003-whatsapp-pairing-status/spec.md)
+
+**What was added:**
+- A connection owner with one terminal QR window, a local offline status snapshot and bounded version discovery.
+- Guarded device-store work, durable app-state repair metadata, an unsafe-run barrier with explicitly authorized offline recovery, and shutdown that keeps ownership until writes drain.
+- Default-deny reconnect with a narrow post-pair exception; the recorded upstream receive-resource exception was specific to this feature baseline, not a verified bound or inherited permission.
+
+**New Components:**
+- `internal/wa`, `internal/walog`, guarded device-store and committed-view status wiring, and application migrations 2 and 3.
+
+**Superseded:**
+- RETIRED: "Commands not yet implemented" (from .specify/archive/001-binary-skeleton/spec.md -> "Commands not yet implemented") → replaced by FR-084. Reason: Pair and status now have command-specific behavior (offline status: FR-090); pair still respects the owner lock.
+- RETIRED: AS-006 (from .specify/archive/001-binary-skeleton/spec.md -> "`status` will not take the lock") → replaced by AS-019. Reason: Status inspects existing committed storage offline and respects the owner lock rather than querying a running daemon.
+
+**Tasks Completed:** 77/77 tasks
+
+### Storage: one SQLite file and migrations — archived 2026-11-22
+**Branch:** 002-sqlite-storage
+**Spec:** [specs/002-sqlite-storage/spec.md](../archive/002-sqlite-storage/spec.md)
+
+**What was added:**
+- One private SQLite database for the device store and message history, with independent schema histories and read-only compatibility preflight.
+- Atomic chat and message writes, deterministic bounded queries, contact identity resolution, and LID merge.
+- A storage recovery, backup and restore contract with synthetic platform evidence and documented limits.
+
+**New Components:**
+- `internal/store`, embedded SQL migrations, storage CLI lifecycle wiring and the storage section of `OPERATIONS.md`.
+
+**Tasks Completed:** 73/73 tasks
+
+### Binary skeleton (CLI, configuration, logging, lock, CI) — archived 2026-11-22
+**Branch:** 001-binary-skeleton
+**Spec:** [specs/001-binary-skeleton/spec.md](../archive/001-binary-skeleton/spec.md)
+
+**What was added:**
+- Build identification and help, layered configuration with startup validation, and a predictable per-user data directory.
+- Exclusive ownership with PID diagnostics, graceful and forced stops, and protocol-clean stdout for the skeleton.
+- CGO-free checks on three operating systems and builds for five targets; the security follow-up added private-path checks and supply-chain gates.
+
+**New Components:**
+- `cmd/whatsapp-mcp`, `internal/config`, `internal/lock`, `internal/buildinfo`, `internal/private` and `.github/workflows/ci.yml`.
+
+**Tasks Completed:** 44/44 tasks

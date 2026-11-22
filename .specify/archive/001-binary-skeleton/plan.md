@@ -2,7 +2,7 @@
 
 **Branch**: `001-binary-skeleton` | **Date**: 2026-10-27 | **Spec**: [spec.md](spec.md)
 
-**Input**: Feature specification from `specs/001-binary-skeleton/spec.md`
+**Input**: Feature specification from `.specify/archive/001-binary-skeleton/spec.md`
 
 ## Summary
 
@@ -96,7 +96,7 @@ the lock file is a consequence of D14 on Windows, not a departure from it.
 ### Documentation (this feature)
 
 ```text
-specs/001-binary-skeleton/
+.specify/archive/001-binary-skeleton/
 ├── plan.md              # This file
 ├── research.md          # Phase 0: R1–R13
 ├── data-model.md        # Phase 1: Setting, Config, lock file, build info, lifecycle
@@ -182,7 +182,7 @@ internal/buildinfo/
 4. **The README** is rewritten in feature 011. This feature changes only its "**Status:** in development; no code
    yet." line, and the "Current state" section of `AGENTS.md`, once the code exists.
 5. **Verification:** record the results of [quickstart.md](quickstart.md) and the CI run in
-   `specs/001-binary-skeleton/verification.md`.
+   `.specify/archive/001-binary-skeleton/verification.md`.
 
 ## Complexity Tracking
 

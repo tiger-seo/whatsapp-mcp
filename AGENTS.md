@@ -25,12 +25,14 @@ a new setting is one descriptor in `setting.go` plus one `Config` field), `inter
 infer behaviour from the code. §1–§7 describe the earlier implementation (behaviour to keep), §6 its defects (avoided
 by design), §8 this project; §8.10 holds decisions D1–D18 (settled: do not reopen unless the user asks) and §8.11 the
 feature security decisions. `docs/roadmap.md` orders the features. The storage spikes S1 and S2 are in
-`specs/002-sqlite-storage/research.md` (appendix "Spike results").
+`.specify/archive/002-sqlite-storage/research.md` (appendix "Spike results").
 
 ### `specs/NNN-*/`: feature specs
 Every feature so far: 001 binary skeleton, 002 SQLite storage, 003 connection, pairing and status (all merged), 004
 shutdown drain (pull request #11). Each has `spec.md`, `plan.md`, `tasks.md`, contracts and a `verification.md` with
-the evidence and the Owner reviews table. Nothing is archived yet (`.specify/archive/` does not exist).
+the evidence. The binary skeleton, storage, connection/pairing/status, shutdown-drain, message-ingest and MCP stdio baselines are consolidated in
+`.specify/memory/spec.md` and `.specify/memory/plan.md`; the original feature artifacts for 001–006 are in
+`.specify/archive/`.
 
 ### `.specify/memory/constitution.md`: principles
 Read it before planning or implementing. It sets the review workflow below.
@@ -78,7 +80,7 @@ Three real-account runs (2026-11-14, cleaned up) are in `verification.md`; the l
 observed on a real account. Feature 006 implements five local read-only MCP tools in `stdio`, using a store-owned
 read facade and the existing owner/lock lifecycle. Owner launch allows all stored chat and contact reads; it does
 not grant account actions. Its native pipe evidence covers Windows/amd64, Linux/amd64 and macOS/arm64 with no real
-account. Delivery and owner review are tracked in [feature 006 tasks](specs/006-mcp-stdio-tools/tasks.md#current-state).
+account. Delivery and owner review are recorded in the archived [feature 006 tasks](.specify/archive/006-mcp-stdio-tools/tasks.md#current-state).
 Since 2026-11-13 `go.mod` replaces whatsmeow with the owner's fork `github.com/tiger-seo/whatsmeow` at `bedcf01`
 (branch `receive-bounds`), which enforces the receive bounds, sends nothing to the user's phone on another account's
 behalf, and carries the lost-515 fix proposed upstream as tulir/whatsmeow#1337; E003-RX-01 is retired.
@@ -92,6 +94,7 @@ exit code read from the command itself (a pipe through `tail` or `grep` hides a 
 gofmt -l .                                              # must print nothing
 go vet ./...
 go mod verify
+go build ./cmd/whatsapp-mcp                             # CGO-free local CLI build
 go test ./... -count=1 -timeout 30m                     # store tests write several GB to TEMP
 for t in windows/amd64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do GOOS=${t%/*} GOARCH=${t#*/} go build -o /dev/null ./cmd/whatsapp-mcp; done
 go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
@@ -110,6 +113,41 @@ On demand only (each guarded by an environment variable):
 CI (`.github/workflows/ci.yml`) runs gofmt, vet, the five builds and `go test` on Linux, Windows and macOS for every
 push and pull request.
 
+For local MCP regression coverage, run `go test ./internal/mcp ./cmd/whatsapp-mcp` with `CGO_ENABLED=0` and synthetic fixtures. The native pipe checks require native runners, not cross-builds. [Source: .specify/archive/006-mcp-stdio-tools/plan.md -> "Testing"] [Source: .specify/archive/006-mcp-stdio-tools/verification.md -> "Output Deadline and Config Size Follow-up (2026-11-20 UTC)"]
+
+## Active Technologies
+
+- One Go binary with `CGO_ENABLED=0`. See [go.mod](go.mod) for the toolchain and exact dependency pins.
+- Core dependencies: the owner-approved whatsmeow fork for WhatsApp, `modernc.org/sqlite` for storage, and the official `github.com/modelcontextprotocol/go-sdk` for MCP.
+- Use the pure-Go `rsc.io/qr` root package, not its C-backed `libqrencode` subpackage.
+
+## Project Structure
+
+- `internal/mcp` owns the SDK guard, schemas, public DTOs, stdio framing and diagnostic pumps. `internal/store` owns the narrow read facade, admission and WAL guard; `cmd/whatsapp-mcp` owns lifecycle and native pipe tests. Never pass the account owner to a tool. [Source: .specify/archive/006-mcp-stdio-tools/plan.md -> "Structure Decision"] [Source: .specify/archive/006-mcp-stdio-tools/plan.md -> "Source Code (repository root)"]
+
+- Ingest lives beside the session in `internal/wa`: common extraction, a single bounded history worker, a name cache and lookup worker, and LID normalization and reconciliation. `internal/store` owns validation, byte accounting and read helpers; the CLI handles the owner's terminal failure signal. [Source: .specify/archive/005-message-ingest/plan.md -> "Source Code (repository root)"]
+
+- In the quiet-stop path, `internal/wa/fence.go` isolates each generation's network, `quiet.go` observes bounded library work, and the owner coordinates retirement and fresh-client handover. `internal/store` owns the barrier's in-memory refusal counts; the CLI reports the outcome. No schema migration. [Source: .specify/archive/004-shutdown-drain/plan.md -> "Source Code (repository root)"] [Source: .specify/archive/004-shutdown-drain/plan.md -> "Storage"]
+
+- The CLI owns startup and signal wiring. `internal/config` owns the settings registry and directory
+  resolution, `internal/lock` owns exclusive access, and `internal/buildinfo` owns build metadata.
+  [Source: .specify/archive/001-binary-skeleton/plan.md -> "Structure Decision"]
+- `internal/store` owns SQLite startup, queries, writes and embedded migrations; both schema histories share
+  one private file. `OPERATIONS.md` describes offline backup, restore and recovery.
+  [Source: .specify/archive/002-sqlite-storage/plan.md -> "Structure Decision"] [Source: .specify/archive/002-sqlite-storage/spec.md -> FR-047]
+- Feature 003 historical baseline: `internal/wa` owns the connection generation, pairing, status and recovery
+  boundary; `internal/walog` shares the argument-dropping bridge. Guard device persistence through `internal/store`.
+  [Source: .specify/archive/003-whatsapp-pairing-status/plan.md -> "Connection Boundary"] [Source: .specify/archive/003-whatsapp-pairing-status/verification.md -> "Foundation T018"]
+
+## Recent Changes
+
+- [specs/006-mcp-stdio-tools](.specify/archive/006-mcp-stdio-tools/spec.md): Five bounded local chat/contact read tools over MCP stdio; no login, QR, send or HTTP capability added.
+- [specs/005-message-ingest](.specify/archive/005-message-ingest/spec.md): Archived live and history message persistence, atomic LID reconciliation, bounded naming work and explicit failure reporting.
+- [specs/004-shutdown-drain](.specify/archive/004-shutdown-drain/spec.md): Archived proven quiet-stop reuse, the fresh-client post-pair handover and stderr failure diagnostics. A failed check still requires offline recovery.
+- [specs/003-whatsapp-pairing-status](.specify/archive/003-whatsapp-pairing-status/plan.md): Historical pairing, offline status, guarded persistence and fail-closed recovery baseline; consult its verification for evidence and limitations.
+- [specs/002-sqlite-storage](.specify/archive/002-sqlite-storage/spec.md): Archived the SQLite lifecycle, migrations, query contracts and storage safeguards.
+- [specs/001-binary-skeleton](.specify/archive/001-binary-skeleton/spec.md): Archived the CLI, configuration, locking, shutdown, privacy and CI baseline.
+
 ## File Operations
 
 The repository stores LF. A script that edits files on Windows must read with `newline=''` and write with
@@ -124,6 +162,74 @@ the user unlinking the device on the phone, then deleting the directory. Record 
 `verification.md`; a step not run is "not verified". Automated tests use `internal/wasim` only.
 
 ## Known Issues & Gotchas
+
+### SDK Middleware Is Too Late for Admission
+**Issue:** Limiting work only in tool handlers does not bound queued requests.
+**Root Cause:** The pinned SDK can dispatch or queue before receiving middleware.
+**Prevention Rule:** Guard request credits before SDK dispatch, including in the wrapped in-memory transport; hold tool credit through actual response completion. [Source: .specify/archive/006-mcp-stdio-tools/research.md -> R2]
+
+### Cancelling I/O Is Not the Same as Draining Work
+**Issue:** Blocked inherited streams can outlive cancellation; late SQLite iteration can retain its snapshot.
+**Root Cause:** Inherited handles are not uniformly interruptible, and the pinned SQLite driver does not install first-step cancellation controls for later `Next` calls.
+**Prevention Rule:** Keep fixed byte-only pumps with interruptible connection waits; use first-step reads, retain store accounting through actual return, and never release the lock early. [Source: .specify/archive/006-mcp-stdio-tools/research.md -> R3] [Source: .specify/archive/006-mcp-stdio-tools/research.md -> R6]
+
+### Row Limits Do Not Bound Encoded Output
+**Issue:** A valid row count can still yield a response over budget.
+**Root Cause:** The SDK response includes both structured content and escaped text; envelopes and escaping consume additional bytes.
+**Prevention Rule:** Precharge both encodings and check actual final bytes. Return a bounded error, never a truncated successful page. [Source: .specify/archive/006-mcp-stdio-tools/research.md -> R4]
+
+### Live Acknowledgement Does Not Guarantee Replay
+**Issue:** A terminal ingest failure can leave the record incomplete; a history notification may already be acknowledged.
+**Root Cause:** Live handler success controls acknowledgement, while history arrives through a separate asynchronous download; the service does not promise replay.
+**Prevention Rule:** Leave failed live writes unacknowledged, report incomplete history explicitly, and stop on message-store failure without implying replay or moving shutdown steps. [Source: .specify/archive/005-message-ingest/research.md -> R3] [Source: .specify/archive/005-message-ingest/research.md -> R4] [Source: .specify/archive/005-message-ingest/research.md -> R9]
+
+### Late Name Offers Can Recreate Merged Chats
+**Issue:** A stale name update can recreate a LID chat after it was merged away.
+**Root Cause:** A generic chat update can create a missing row.
+**Prevention Rule:** Ingest name offers use `ChatUpdate.ExistingOnly`. The late-contact reread is driven by ingest activity for chats seen in that generation, not a timer or global sweep; the real-account run did not observe the timed reread. [Source: .specify/archive/005-message-ingest/data-model.md -> "New store helpers (read only, no schema change)"] [Source: .specify/archive/005-message-ingest/verification.md -> "Third real-account run (T056), 2026-11-14: the late contact re-read was not observed"]
+
+### Feature 004 Historical: Lost Post-Pair Restart Request
+**Issue:** On the feature 004 pin, a server close simultaneous with the post-pair restart request could leave the link incomplete.
+**Root Cause:** Cancellation of the socket context could win before the library delivered the request to the owner.
+**Prevention Rule:** Do not treat pairing success alone as a usable link. Bound the wait to 30 seconds, refuse a late request, leave the marker unsafe and report incomplete linking for offline recovery. [Source: .specify/archive/004-shutdown-drain/verification.md -> "Lost restart request on Linux CI"]
+
+### Feature 003 Historical: Disconnect Does Not Prove Drain
+**Issue:** Retired clients can still have work in flight after disconnect.
+**Root Cause:** The pinned library can detach handler work from the generation's cancellation context.
+**Prevention Rule:** Do not infer quiescence from a timeout or disconnect; retain ownership until admitted work drains. The historical
+pair-only post-515 reconnect was separately approved with recorded residual risk; other retry paths need their own proof.
+[Source: .specify/archive/003-whatsapp-pairing-status/research.md -> R7] [Source: .specify/archive/003-whatsapp-pairing-status/verification.md -> "T077 Residual Risk Corrected - 2026-11-07 (owner re-confirmation given)"]
+
+### Feature 003 Historical: Recovery Terminal Evidence
+**Issue:** Injected handle tests do not prove interactive detection on a real native console or PTY.
+**Root Cause:** Pipes and injected streams do not exercise the actual OS terminal handle checks.
+**Prevention Rule:** Require real native console/PTY checks where supported; Windows mintty may fail native checks. Unrun Windows,
+Linux and macOS terminal/PTY controls remain unverified, and redirected or ambiguous handles must fail closed.
+[Source: .specify/archive/003-whatsapp-pairing-status/contracts/cli.md -> "pair"] [Source: .specify/archive/003-whatsapp-pairing-status/verification.md -> "CI Platform Evidence for T068-T073 - 2026-11-06"]
+
+### Read-Only SQLite Open Is Not a No-Write Guarantee
+**Issue:** A compatibility probe must see committed WAL data without creating or changing SQLite sidecars.
+**Root Cause:** Read-only SQLite modes either need sidecar access or do not see all committed WAL changes.
+**Prevention Rule:** Use the committed read-only view for both schema checks before issuing writable operations.
+[Source: .specify/archive/002-sqlite-storage/research.md -> R4]
+
+### SQLite Heap Limits Need Memory Statistics
+**Issue:** A heap limit can appear configured without limiting SQLite allocations.
+**Root Cause:** The baseline driver disables SQLite memory statistics by default; Go heap metrics omit SQLite memory.
+**Prevention Rule:** Enable SQLite memory statistics before opening connections and verify the hard limit independently.
+[Source: .specify/archive/002-sqlite-storage/research.md -> R16]
+
+### Keep the Lock PID Outside the Windows Locked Byte
+**Issue:** A contending process cannot read a PID stored at byte 0 on Windows.
+**Root Cause:** The byte-range lock at offset 0 is mandatory; Unix locking is advisory.
+**Prevention Rule:** Keep the PID at offset 1, and truncate without deleting the file while still holding the lock.
+[Source: .specify/archive/001-binary-skeleton/research.md -> R6]
+
+### Validate TOML After Decoding
+**Issue:** Validation in `encoding.TextUnmarshaler` did not reliably reject wrong values or retain their positions.
+**Root Cause:** The parser can send textual representations of non-string values without position information.
+**Prevention Rule:** Decode to a map, validate using the registry, and index source lines in a separate parser pass.
+[Source: .specify/archive/001-binary-skeleton/research.md -> R2]
 
 ### ⚠️ The Quiet-Stop Check Sees Every Goroutine in the Process
 **Symptom:** a simulator test fails with `work_running` although its own client stopped cleanly.
@@ -141,7 +247,7 @@ recording wrapper (see `internal/wa/appstate_stop_test.go`), then decide.
 ### ⚠️ The Stop Order Is a Safety Invariant
 **Symptom:** a change to retirement looks harmless and the order test fails, or worse, a write is lost.
 **Cause:** the quiet-stop rules depend on the order work cancel → `Disconnect` → network fence → storage barrier →
-library context (`contracts/quiet-stop.md` in `specs/004-shutdown-drain/`). A write after the fence closed sends
+library context (`contracts/quiet-stop.md` in `.specify/archive/004-shutdown-drain/`). A write after the fence closed sends
 nothing, and a read refused after the barrier changes nothing and cannot reach the network, so neither fails the
 check; both arguments hold only in that order.
 **Rule:** never swap the fence and the barrier or cancel the library context earlier. A new store method must set the
@@ -152,7 +258,7 @@ guard's `write` flag correctly: a write marked as a read escapes the check.
 **Cause:** the fork's receive bounds and their approved limits are tied to the exact revision; the quiet check's
 allow-list entries record the version they were reviewed for (`quiet_test.go` compares them with `go.mod`); new upstream reconnect paths must stay behind
 `EnableAutoReconnect = false`; `appstate_stop_test.go` matches function names in a goroutine dump.
-**Rule:** ask the owner first, check the Fork Acceptance Contract in `specs/005-message-ingest/plan.md`, read the diff for reconnect and storage changes, and
+**Rule:** ask the owner first, check the Fork Acceptance Contract in `.specify/archive/005-message-ingest/plan.md`, read the diff for reconnect and storage changes, and
 rerun the full gates and the pass-rate run.
 
 ### ⚠️ WSL2 Runs Need Three Workarounds

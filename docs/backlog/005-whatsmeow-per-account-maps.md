@@ -6,7 +6,7 @@
 - **Owner:** Maintainer `tiger-seo`.
 - **Review trigger:** on a pin change, a memory incident, or before a release meant for accounts with very many
   contacts or groups.
-- **Source:** `specs/005-message-ingest/plan.md` (Constitution Check), `research.md` R2.
+- **Source:** `.specify/archive/005-message-ingest/plan.md` (Constitution Check), `research.md` R2.
 
 ## Problem
 

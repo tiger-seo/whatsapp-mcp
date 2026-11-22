@@ -237,7 +237,7 @@ release the store.
   on native Windows only (not yet on the CI runners or WSL2). The 1 s and 2 s deadlines are about 100 times the
   slowest measured simulator check; real checks took 230 to 480 ms. A server disconnect during a stop was not tried on a real account.
   The check counts goroutines process-wide, so a goroutine leaked by anything else in the process fails it.
-  Evidence: `specs/004-shutdown-drain/verification.md`.
+  Evidence: `.specify/archive/004-shutdown-drain/verification.md`.
 - **Not checked:** power loss and OS crash; macOS `F_FULLFSYNC` hardware flushes; interactive recovery on a real
   console, Linux terminal or macOS terminal; a kill between pairing and the first save; a second real account or
   phone model (every real run used one account and one phone).
@@ -265,7 +265,7 @@ adds read-only `stdio` access as described below. "Implemented" and "verified" m
 a real account so far**: two `pair` and `serve` runs on one account and one phone on Windows (2026-11-14), which stored
 live and history messages and showed that history chats were named before the device's contact sync had stored the
 saved names; the fix for that (below) has been tested on the simulator and with fakes only. Everything else comes from
-the simulator, fakes and a temporary store (`specs/005-message-ingest/verification.md`). No CI run is claimed.
+the simulator, fakes and a temporary store (`.specify/archive/005-message-ingest/verification.md`). No CI run is claimed.
 
 ### What is stored
 
@@ -386,4 +386,4 @@ exit remains available.
 **Verification:** automated suites, including native pipe and shutdown checks, ran with synthetic stores and
 fake owners on Windows/amd64, Linux/amd64 and macOS/arm64. Linux/arm64 and macOS/amd64 were cross-built, not
 verified natively. No real account was used for feature 006. See the
-[verification record](specs/006-mcp-stdio-tools/verification.md) for the exact coverage and limitations.
+[verification record](.specify/archive/006-mcp-stdio-tools/verification.md) for the exact coverage and limitations.

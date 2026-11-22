@@ -110,4 +110,4 @@ Kill terminal 1 hard (`kill -9 <pid>`, or `taskkill //F //PID <pid>` on Windows)
 ## Recording results
 
 Record the commands, the date and the counts (tests passed, targets built, CI run URL) in
-`specs/001-binary-skeleton/verification.md` when implementation finishes.
+`.specify/archive/001-binary-skeleton/verification.md` when implementation finishes.

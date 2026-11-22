@@ -2,7 +2,7 @@
 
 **Branch**: `002-sqlite-storage` | **Date**: 2026-10-28 | **Spec**: [spec.md](spec.md)
 
-**Input**: Feature specification from `specs/002-sqlite-storage/spec.md`
+**Input**: Feature specification from `.specify/archive/002-sqlite-storage/spec.md`
 
 ## Summary
 
@@ -96,7 +96,7 @@ Principle V recorded in Complexity Tracking. The design adds no settings and no 
 ### Documentation (this feature)
 
 ```text
-specs/002-sqlite-storage/
+.specify/archive/002-sqlite-storage/
 ├── spec.md
 ├── plan.md              # this file
 ├── research.md          # Phase 0: decisions R1–R16

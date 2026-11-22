@@ -5,7 +5,7 @@
 - **Affected area:** `cmd/whatsapp-mcp` (`waitSavedConnection`, `pairingWindowFlow`), `internal/wa` (owner phase publication after PairSuccess).
 - **Owner:** Maintainer `tiger-seo`.
 - **Review trigger:** before the first release, or when `pair` or `waitSavedConnection` changes.
-- **Source:** `specs/004-shutdown-drain/verification.md`, section "Lost restart request on Linux CI" (review of `7893044`).
+- **Source:** `.specify/archive/004-shutdown-drain/verification.md`, section "Lost restart request on Linux CI" (review of `7893044`).
 
 ## Problem
 

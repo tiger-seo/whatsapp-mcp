@@ -130,7 +130,7 @@ Owner retirement closes per-generation admissions, cancels lifetime and removes/
 ### Documentation
 
 ```text
-specs/003-whatsapp-pairing-status/
+.specify/archive/003-whatsapp-pairing-status/
   spec.md
   plan.md
   research.md

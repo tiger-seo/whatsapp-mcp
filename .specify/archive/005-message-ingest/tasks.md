@@ -1,6 +1,6 @@
 # Tasks: Message Ingest
 
-**Input**: Design documents in `specs/005-message-ingest/`: spec.md, plan.md, research.md (R1–R15), data-model.md,
+**Input**: Design documents in `.specify/archive/005-message-ingest/`: spec.md, plan.md, research.md (R1–R15), data-model.md,
 contracts/ingest.md and quickstart.md.
 
 **Prerequisites**: A passing owner-judge **design** review of the committed feature directory (the hook refuses
@@ -73,14 +73,14 @@ This section is ignored by the review-gate hook.
   2026-11-13: first `9209108` (commit `88a74e5`), then `d83e19e` (`replace go.mau.fi/whatsmeow =>
   github.com/tiger-seo/whatsmeow v0.0.0-20261113120547-d83e19ef5083`) after the first design review, then `bedcf01`
   (`v0.0.0-20261113124132-bedcf0185245`) after the second; evidence in
-  `specs/005-message-ingest/verification.md` "Pinned Fork Gates", "Fork Re-request Gate" and "Fork Placeholder Gate".
+  `.specify/archive/005-message-ingest/verification.md` "Pinned Fork Gates", "Fork Re-request Gate" and "Fork Placeholder Gate".
 - [X] T002 Run the race detector on the fork and on `./internal/wa ./cmd/...` in WSL2, and fix the race found in
   `cmd/whatsapp-mcp/store_test.go`. Done 2026-11-13; evidence in `verification.md` "Race Detector (WSL2)".
 - [X] T003 Confirm `docs/specification.md` exists locally and contains §3.4, §3.5, §8.5 (S3–S5), §8.6 (P2, P3) and §8.7
   (M7). If it is missing, stop and ask the user for it; do not infer behaviour from code. Record the check in
-  `specs/005-message-ingest/verification.md`.
+  `.specify/archive/005-message-ingest/verification.md`.
 - [X] T004 **OWNER DECISION.** Ask the owner the three "Open questions for the design review" in
-  `specs/005-message-ingest/plan.md`: (1) accept or change the proposed limits in `data-model.md`; (2) accept that a
+  `.specify/archive/005-message-ingest/plan.md`: (1) accept or change the proposed limits in `data-model.md`; (2) accept that a
   stop during a history download can leave the marker unsafe (which means offline recovery, unlinking on the phone
   and pairing again), to be measured in T047, including a `pair`-shaped stop; (3) accept the 16 MiB / 10 s
   media-client limits for history downloads or change them. Record the answers and the date
@@ -146,7 +146,7 @@ terminal signal, and the command's exit on a terminal failure. Depends on T003 a
   terminal signal behaves as before; for `pair`, an ingest failure after the link prints the link outcome, then the
   storage message, and exits 1.
 - [X] T015 Run the tests of T005–T014 and record that each fails for the expected reason (missing symbol or
-  assertion), in `specs/005-message-ingest/verification.md` "Foundational tests".
+  assertion), in `.specify/archive/005-message-ingest/verification.md` "Foundational tests".
 
 ### Implementation
 
@@ -178,7 +178,7 @@ terminal signal, and the command's exit on a terminal failure. Depends on T003 a
   after step 8 with the handler callbacks, `Terminal()`, `Health().IngestFailed`, `Health().ReceiveOverload`,
   `QuietStopResult.DroppedMessages` in the stop log with "messages may be missing" when non-zero. Then wire
   `cmd/whatsapp-mcp/commands.go` (`serve`, `stdio`, `pair`) to wait on `owner.Terminal()` beside the lifecycle and exit 1 with
-  the message of T014. Update `specs/004-shutdown-drain/contracts/quiet-stop.md`'s event-count rule only by pointing to
+  the message of T014. Update `.specify/archive/004-shutdown-drain/contracts/quiet-stop.md`'s event-count rule only by pointing to
   contracts/ingest.md "Revised event-count rule". Make T012–T014 pass.
 - [X] T024 Adapt feature 004's `TestSimulatorStopDuringQueuedAppStateFetches` in `internal/wa/appstate_stop_test.go`
   to `SynchronousAck`: `server_sync` fetches now run inline on the handler (plan, "What `SynchronousAck` changes in the
@@ -440,7 +440,7 @@ provider while ingesting repeated messages.
   the store; the owner
   unlinks the device and the directory is deleted. Record redacted results; a step not performed is "not verified".
   Do not act on a real account without that permission.
-- [ ] T057 Roll up `specs/005-message-ingest/verification.md`: the pin and its limits unchanged, the race and pass-rate
+- [ ] T057 Roll up `.specify/archive/005-message-ingest/verification.md`: the pin and its limits unchanged, the race and pass-rate
   results, the history unsafe-stop rate, platforms covered, accepted risks (library maps, no replay guarantee,
   history after `pair` with T056's measured counts, no undo on a LID remap, `ErrBusy` stopping ingest,
   `unavailable` placeholders not fetched), and every "not verified" item. Update `AGENTS.md` "Current state" and this file's "Current

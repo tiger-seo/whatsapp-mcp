@@ -4,7 +4,7 @@ Internal contract between the connection owner (`internal/wa/owner.go`), the ses
 (`internal/wa/session.go`), the network fence (`internal/wa/fence.go`), the observation (`internal/wa/quiet.go`) and
 the store's device barrier (`internal/store/device.go`, with `MarkRetiring` and `Refused` in `internal/store/repair.go`). It replaces, for the post-pair reconnect and for clearing the
 marker, feature 003's rule that no Connect may follow the retirement of an unproven generation
-(`specs/003-whatsapp-pairing-status/contracts/connection-owner.md`, proof gate). Every other rule of that contract
+(`.specify/archive/003-whatsapp-pairing-status/contracts/connection-owner.md`, proof gate). Every other rule of that contract
 stands.
 
 ## Three contexts, not one

@@ -6,7 +6,7 @@
   006–007 MCP read tools.
 - **Owner:** Maintainer `tiger-seo`.
 - **Review trigger:** a new store reader or admission-policy change, or an `ingest_failed` with error class `busy`.
-- **Source:** `specs/005-message-ingest/research.md` R9.
+- **Source:** `.specify/archive/005-message-ingest/research.md` R9.
 
 ## Problem
 
@@ -21,6 +21,6 @@ command would stop.
 One tool can take an immediately available store slot and reader; tools never queue or bypass waiting ordinary
 work. The gate preserves ordinary capacity, cancels for ordinary contention, and retains accounting until the
 read connection returns. A WAL drain fence protects the next writer at the transaction boundary. The synthetic
-[pressure and native evidence](../../specs/006-mcp-stdio-tools/verification.md#t035-resource-measurements-2026-11-20-utc)
+[pressure and native evidence](../../.specify/archive/006-mcp-stdio-tools/verification.md#t035-resource-measurements-2026-11-20-utc)
 covers this policy, not every storage failure. Ordinary write `ErrBusy` remains terminal, without a retry;
 a failed drain can still fail ingest and close stdio unsuccessfully. This is not approval for new reader workloads.

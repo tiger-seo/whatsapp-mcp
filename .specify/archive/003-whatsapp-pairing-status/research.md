@@ -27,7 +27,7 @@ No network or account operation and no runtime handshake test was performed in t
 
 **Alternatives considered**: A second sqlstore database, a fresh connection library, the CGO driver and importing a previous linked device are outside the source requirements and decisions D2/D16.
 
-**Evidence**: `go.mod`; `docs/specification.md` section 8; `specs/002-sqlite-storage/verification.md` environment and CI evidence. Module verification establishes cache integrity, not absence of vulnerabilities or correctness of future client integration.
+**Evidence**: `go.mod`; `docs/specification.md` section 8; `.specify/archive/002-sqlite-storage/verification.md` environment and CI evidence. Module verification establishes cache integrity, not absence of vulnerabilities or correctness of future client integration.
 
 ## R2 - Use the Owner-Approved Acceptance Profile Without Silent Adjustments
 
