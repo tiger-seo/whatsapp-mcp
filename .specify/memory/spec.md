@@ -8,6 +8,7 @@
 > **Revision**: 2026-11-22 — Aligned the quiet-stop event count in FR-109 with FR-138: dropped ingest messages are reported separately and do not fail the check.
 > **Revision**: 2026-11-22 — Archived specs/006-mcp-stdio-tools: five local read tools, bounded transport and store isolation, and protocol-only stdout replacing the skeleton's zero-byte criterion.
 > **Revision**: 2026-11-22 — Clarified Story 5 and FR-095 so the earlier empty-stdout and no-tools baselines are not mistaken for current stdio requirements.
+> **Revision**: 2026-11-22 — Aligned shutdown, offline status and shell acceptance with the current contracts; retained the archived baselines.
 
 ## Configuration Decisions
 
@@ -212,8 +213,10 @@ the second one's error and exit code; kill the first one abruptly and check that
    the lock without any manual step: there is no stale lock.
 3. **Given** a running instance on data directory A, **When** another instance starts on data directory B,
    **Then** both run.
-4. **Given** a running instance, **When** `whatsapp-mcp version` or `whatsapp-mcp status` runs, **Then** it is
-   not blocked by the lock.
+4. **Given** a running instance, **When** `whatsapp-mcp version` runs, **Then** it is not blocked by the lock.
+   **When** `whatsapp-mcp status` targets the same locked directory, **Then** it exits 1 with the lock-holder
+   diagnostic, without inspecting the database or claiming to report the owner's live state. The successful
+   offline snapshot is covered separately in Story 16. [Source: .specify/archive/003-whatsapp-pairing-status/contracts/cli.md -> "Existing held lock, even before DB creation"]
 
 ---
 
@@ -236,11 +239,12 @@ for the feature 001 skeleton, which did not yet serve MCP.
 **Acceptance Scenarios**:
 
 1. **Given** a running `serve` or `stdio`, **When** it receives SIGINT or SIGTERM (or Ctrl+C in a Windows
-   console), **Then** it logs that it is shutting down, stops, releases the lock and exits 0.
+   console), **Then** it logs that it is shutting down, drains before releasing the lock, and exits 0 only
+   if orderly shutdown succeeds within the bound and no failure is latched. See FR-029.
 2. **Given** a shutdown in progress, **When** a second stop signal arrives, **Then** the process exits at once
    with a non-zero code.
 3. **Given** `stdio` started by an MCP client, **When** the client closes the process's stdin, **Then** the
-   process shuts down the same way and exits 0.
+   process follows the same orderly shutdown and exit rules. [Source: .specify/archive/006-mcp-stdio-tools/contracts/stdio.md -> "Normal EOF between frames, normal client disconnect or first stop signal"]
 4. **Given** `stdio` at log level `debug`, **When** it starts, exchanges MCP messages and shuts down,
    **Then** stdout contains only MCP protocol traffic, and every log line is on stderr. See SC-046.
    [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> SC-007]
@@ -579,7 +583,7 @@ As the account owner, I can link a device and reuse its saved session after an e
 3. **Given** a saved session after a production Connect attempt, **When** a connection-owning command starts, **Then** it may reuse the identity if the previous stop cleared the marker under FR-110. If the marker is still unsafe, it refuses automatic connection and QR and requires offline recovery.
 4. **Given** another process owns the data directory, **When** `pair` starts, **Then** it fails with the existing lock-holder diagnostic and neither creates a second client nor modifies the owner's session.
 5. **Given** an active connection or pairing attempt, **When** the owner interrupts the command, **Then** connection work and device writes stop before storage closes and the data-directory lock is released.
-6. **Given** either existing `stdio` or `serve` shell, **When** it starts with a clean marker and saved session, **Then** it connects and remains running until cancellation; unsafe state blocks startup account work. With no saved session it remains unpaired without a QR. Neither shell exposes tools or a network listener here; both drain before releasing ownership.
+6. **Given** either existing `stdio` or `serve` shell, **When** it starts with a clean marker and saved session, **Then** it connects and remains running until cancellation; unsafe state blocks startup account work. With no saved session it remains unpaired without a QR. Neither shell exposes a network listener; both drain before releasing ownership. The feature 003 shells had no tools; since feature 006, `stdio` exposes the five local read-only tools in FR-140. `serve` still has no MCP endpoint. [Source: .specify/archive/006-mcp-stdio-tools/spec.md -> FR-002]
 7. **Given** a saved-session startup attempt fails or times out in `stdio` or `serve`, **When** safe retries within the same active generation are demonstrated and no terminal event or 405 handoff intervenes, **Then** at most three additional attempts follow five cancellable seconds each. Otherwise retries are temporarily unavailable: remain disconnected with a diagnostic, preserve the identity and open no pairing window. Never connect after retirement of an unproven generation.
 8. **Given** a fresh device and an explicitly approved QR pairing attempt, **When** the registration payload and QR client type are prepared, **Then** they identify the companion as Linux/Chrome as the previous service did, without modifying global library state or saved credentials. The phone's displayed label is observed separately and is not guaranteed by this application.
 
@@ -665,7 +669,7 @@ As the account owner, I stop `stdio` or `serve` normally and start it again late
 3. **Given** library work that is still running when the observation deadline passes, **When** the command stops, **Then** the marker stays unsafe, storage still drains and closes in order, and the next start requires offline recovery as today.
 4. **Given** a call to storage or the network that was refused after its block, **When** the check runs, **Then** it fails, whatever the observation shows, and the marker stays unsafe.
 5. **Given** a confirmed logout or a request to delete the client during the run, **When** the stop passes the check, **Then** the marker clears only if the logout cleanup has been made durable, as today; a passing check never overrides a logout.
-6. **Given** a crash, a forced kill, a second stop signal that forces exit, or a stop that exceeds its bound, **When** the process ends, **Then** the marker stays unsafe. A stop that exceeds its bound but still reaches the clear decision fails the check (`stop_bound_exceeded`) and does not clear.
+6. **Given** a crash, forced kill or second stop signal before safe clear, **Then** no orderly clear is made. An orderly stop that reaches the clear decision after its bound fails the check (`stop_bound_exceeded`) and leaves the marker unsafe. If the check passed within the bound but subsequent ordered cleanup times out, the command still exits unsuccessfully; the in-bound clear decision may leave a clean marker. See FR-096.
 7. **Given** a run that never attempted a production connection, **When** it stops normally, **Then** the existing safe-clear rules apply unchanged.
 8. **Given** the late-logout ordering that caused the 2026-11-04 fail-closed policy (a logout handled by the client library after retirement, finding its callback removed and its delete refused; regression `TestRunGuardLatePinnedLogoutAfterRetirement`), **When** the stop is checked, **Then** the check fails, either because the logout work is still running at the deadline or because its delete was refused, and the marker stays unsafe. A clean marker is never committed before that work has finished.
 9. **Given** a client-library message handler that is still running (held) when its generation is retired, **When** the check runs, **Then** it fails until the handler has returned, and passes only if the handler made no call after the blocks.
@@ -822,10 +826,12 @@ As the account owner, I can find someone by their saved or advertised name or ph
 - **Disk full or read-only file:** the write fails with an error naming the file and the reason; nothing is half
   written. [Source: .specify/archive/002-sqlite-storage/spec.md -> "Disk full or read-only file"]
 
-- **Graceful shutdown:** the database is closed cleanly as part of shutdown, within the existing 10-second limit.
-  Closing stops admitting new operations at once, gives running ones a short grace period, then cancels them, so
-  one long operation cannot use up the whole limit. A call made during or after closing gets a distinct "closed"
-  error. [Source: .specify/archive/002-sqlite-storage/spec.md -> "Graceful shutdown"]
+- **Graceful shutdown:** closing stops admitting new operations at once, gives running ones a short grace period,
+  then cancels them. A call made during or after closing gets a distinct "closed" error.
+  [Source: .specify/archive/002-sqlite-storage/spec.md -> "Graceful shutdown"]
+  Cancellation does not establish quiescence. If orderly shutdown exceeds the ten-second bound, report failure
+  without closing the database or releasing the lock while work is active. See FR-029.
+  [Source: .specify/archive/003-whatsapp-pairing-status/contracts/connection-owner.md -> "Stop and Failure Contract"]
 
 - **Empty or missing message ID or chat JID, or a chat JID that is not a full JID:** the write is rejected with an
   error naming the field; nothing is stored. [Source: .specify/archive/002-sqlite-storage/spec.md -> "Empty or missing message ID or chat JID, or a chat JID that is not a full JID"]
@@ -945,9 +951,10 @@ As the account owner, I can find someone by their saved or advertised name or ph
 - **FR-003**: In this feature, `stdio` and `serve` MUST load and validate the configuration, prepare the data [Source: .specify/archive/001-binary-skeleton/spec.md -> FR-003]
   directory, take the lock, log that the command's functionality is not implemented yet, and then run until a
   shutdown is requested. `stdio` MUST also treat the end of its stdin as a shutdown request.
-- **FR-004**: In this feature, `pair` MUST validate the configuration, prepare the data directory and take the [Source: .specify/archive/001-binary-skeleton/spec.md -> FR-004]
-  lock; `status` MUST validate the configuration and prepare the data directory without taking the lock. Both MUST
-  then report on stderr that the command is not implemented yet and exit with the general error code.
+- **FR-004** (historical binary skeleton, before the pairing and status contracts): `pair` validated configuration,
+  prepared the directory and took the lock; `status` validated configuration and prepared the directory without
+  taking the lock. Both reported that the command was not implemented and returned the general error code.
+  [Source: .specify/archive/001-binary-skeleton/spec.md -> FR-004]
 - **FR-005**: The binary MUST use these exit codes: 0 for success and graceful shutdown; 1 for a general error, [Source: .specify/archive/001-binary-skeleton/spec.md -> FR-005]
   including a held lock and a command not implemented yet; 2 for a usage error (unknown command or flag, missing
   command) and for invalid configuration.
@@ -1021,10 +1028,14 @@ As the account owner, I can find someone by their saved or advertised name or ph
 **Shutdown (M10)**
 
 - **FR-027**: Long-running commands MUST shut down gracefully on SIGINT and SIGTERM on Unix, and on Ctrl+C (and [Source: .specify/archive/001-binary-skeleton/spec.md -> FR-027]
-  Ctrl+Break) in a Windows console. Shutdown MUST stop the command's work, release the lock and exit 0.
+  Ctrl+Break) in a Windows console. Shutdown MUST drain the command's work before releasing the lock.
+  Exit 0 on successful orderly shutdown; use the applicable failure exit rules otherwise (FR-029, FR-096, FR-151).
 - **FR-028**: A second stop signal during shutdown MUST end the process at once with a non-zero exit code. [Source: .specify/archive/001-binary-skeleton/spec.md -> FR-028]
-- **FR-029**: Graceful shutdown MUST finish within 10 seconds; if it does not, the process MUST log what it was [Source: .specify/archive/001-binary-skeleton/spec.md -> FR-029]
-  waiting for and exit with a non-zero code.
+- **FR-029**: If orderly shutdown is still incomplete at 10 seconds, the process MUST report the pending step
+  and latch an unsuccessful exit. The deadline MUST NOT force process exit or authorize closing storage or
+  releasing the lock before active work drains. Continue ordered cleanup until quiescent, then close storage,
+  release the lock and exit nonzero. The explicitly unclean second-signal exit in FR-028 is separate.
+  [Source: .specify/archive/003-whatsapp-pairing-status/contracts/connection-owner.md -> "Stop and Failure Contract"]
 
 **Layout (A4)**
 
@@ -1508,8 +1519,8 @@ Where a resolved value came from. It is used in error messages and the debug dum
 
 [Source: .specify/archive/001-binary-skeleton/data-model.md -> "Run lifecycle (`cmd/whatsapp-mcp`)"]
 
-Long-running commands (`stdio`, `serve`) go through these states. `pair` and `status` stop after "lock taken"
-or after "directory ready", with "not implemented yet" and exit 1.
+Long-running commands (`stdio`, `serve`) use this lifecycle. `pair` and offline `status` follow their own
+command contracts; the skeleton's unimplemented-command exit is historical.
 
 ```text
 starting ──config invalid──────────────► exit 2
@@ -1517,15 +1528,17 @@ starting ──config invalid──────────────► exit 
    ├──data dir unusable / lock held──────► exit 1
    ▼
 running ──1st signal / stdin EOF (stdio)──► stopping
-                                               │ stop steps run in reverse order, 10 s deadline
-                                               ├──all steps done──────────► exit 0
-                                               ├──deadline passed─────────► log the pending step, exit 1
+                                               │ stop steps run in reverse order
+                                               ├──clean completion────────► exit 0
+                                               ├──10 s while pending──────► report pending step, latch failure,
+                                               │                             retain ownership through drain,
+                                               │                             finish cleanup, then exit 1
                                                └──2nd signal──────────────► exit 1 at once
 ```
 
 - **Stop step:** `{Name string; Stop func(context.Context) error}`.
-- A step is registered as soon as its resource is taken. In this feature that is `lock`. A signal that arrives
-  during `starting` therefore releases only what was taken, and the exit is still 0.
+- A step is registered as soon as its resource is taken. A signal during `starting` still cleans up acquired
+  resources; it does not erase a failure or allow early unlock. See FR-029 and FR-151.
 - A step that returns an error is logged at `ERROR`, the remaining steps still run, and the exit code is 1.
 
 #### Database file
@@ -2387,7 +2400,7 @@ of 1024.
 | --- | --- |
 | Fields and metadata | JID ≤ 256 B; message ID ≤ 256 B; chat and contact names ≤ 1 KiB; text ≤ 256 KiB; caption ≤ 256 KiB; search text ≤ 1 KiB; URL ≤ 4 KiB; direct path ≤ 4 KiB; MIME type ≤ 255 B; original file name ≤ 1 KiB; media key, file hash and encrypted file hash exactly 32 B when present; file length 0 to 4 GiB; message times and time filters from 2000-01-01T00:00:00Z (inclusive) to 2100-01-01T00:00:00Z (exclusive). A value outside these is a validation error naming the field, with nothing stored |
 | Batch and results | Batch ≤ 1,000 messages and ≤ 16 MiB aggregate field bytes; chat-update batch ≤ 1,000 updates (their size is bounded by the field limits); list size 1–200; offset 0–100,000; context ≤ 20 rows per side and ≤ 2,000 context rows per call in total; ≤ 32 MiB of result bytes per call; an ambiguous-ID error lists ≤ 100 chats. Existing or upstream data that would exceed a result bound returns a resource-limit error, never a truncated or partial result |
-| Work and waits | 1 write connection and 4 read connections; ≤ 16 active and ≤ 64 waiting operations (beyond that: immediate busy error); admission wait ≤ 5 s; busy timeout 5 s; each query or write ≤ 10 s; resources released within 1 s of cancellation; startup schema upgrades ≤ 10 min in total; closing the store fits within the existing 10-second shutdown limit; SQLite memory (page cache, sorts, temporary b-trees) ≤ 256 MiB per process as a hard heap limit, beyond which the operation fails with a resource-limit error (approved 2026-10-28, second design review). The bound of 2 deep sender listings at once (third design review) was withdrawn on 2026-10-30: sender listings no longer sort, so their memory does not grow with the offset |
+| Work and waits | 1 write connection and 4 read connections; ≤ 16 active and ≤ 64 waiting operations in this storage baseline (beyond that: immediate busy error); admission wait ≤ 5 s; busy timeout 5 s; each query or write ≤ 10 s; resources released within 1 s of cancellation in the storage acceptance profile; startup schema upgrades ≤ 10 min in total. The shutdown timer reports failure but does not authorize early close or unlock (FR-029). SQLite memory (page cache, sorts, temporary b-trees) ≤ 256 MiB per process as a hard heap limit, beyond which the operation fails with a resource-limit error (approved 2026-10-28, second design review). The bound of 2 deep sender listings at once (third design review) was withdrawn on 2026-10-30: sender listings no longer sort, so their memory does not grow with the offset |
 | Disk and WAL | Free-space reserve 256 MiB, checked before each write transaction from a measurement at most 30 s old; once refused, writes resume when ≥ 512 MiB is free. The write-ahead log is truncated to ≤ 64 MiB after checkpoints; a long reader is bounded by the 10 s query deadline. Nothing (keys, messages, journals, backups) is deleted automatically |
 | Platform and recovery | Local filesystems only (NTFS on Windows; ext4 and other local POSIX filesystems; APFS). UNC/network paths (including mapped and `subst` drive letters that resolve to one), `\\?\` and `\\.\` device paths and alternate data streams are rejected. On Windows the access list is limited to the user, SYSTEM and Administrators (constitution Principle V). Upstream device-migration guarantees, backup/restore steps and the isolated cross-identity test procedure are verified and documented under FR-044, FR-074, FR-080 and FR-072 |
 
@@ -2500,8 +2513,10 @@ Synthetic tests cover oversized text, captions, names, metadata and history; mal
   names the setting and the source.
 - **SC-003**: A second instance on the same data directory fails within 1 second with a message that contains the [Source: .specify/archive/001-binary-skeleton/spec.md -> SC-003]
   first instance's PID; after the first instance is force-killed, a new instance starts at the first attempt.
-- **SC-004**: After a stop signal, a long-running command exits 0 within 10 seconds and the data directory can be [Source: .specify/archive/001-binary-skeleton/spec.md -> SC-004]
-  locked again at once.
+- **SC-004**: In the clean-stop case, the command exits 0 within the ten-second bound and the data directory
+  can be locked again at once. In a held-work case, the timeout is reported while storage and the lock are
+  retained; when the work is released, ordered cleanup finishes and the command exits nonzero. No second signal
+  is sent in either case. [Source: .specify/archive/001-binary-skeleton/spec.md -> SC-004] [Source: .specify/archive/003-whatsapp-pairing-status/contracts/connection-owner.md -> "Stop and Failure Contract"]
 - **SC-006**: Runs from at least 2 different working directories without an override use the same data directory. [Source: .specify/archive/001-binary-skeleton/spec.md -> SC-006]
 - **SC-007**: CI is green on the feature's pull request for formatting, static checks, tests on 3 operating [Source: .specify/archive/001-binary-skeleton/spec.md -> SC-007]
   systems and builds for all 5 targets; a deliberately unformatted file makes it fail.
