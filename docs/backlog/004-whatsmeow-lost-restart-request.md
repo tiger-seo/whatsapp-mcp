@@ -1,11 +1,11 @@
 # Backlog: the pinned whatsmeow can drop the post-pair restart request
 
 - **Created:** 2026-11-10
-- **Status:** Open. Recorded as a known limitation of feature 004 (owner decision 2026-11-10, `specs/004-shutdown-drain/spec.md` clarification); fix proposed upstream. Since 2026-11-13 the pinned fork `tiger-seo/whatsmeow@9209108` carries the fix as `c05eb84` (same diff as `ce09515`); not yet verified on a real `pair`.
+- **Status:** Open. Recorded as a known limitation of feature 004 (owner decision 2026-11-10, `.specify/archive/004-shutdown-drain/spec.md` clarification); fix proposed upstream. Since 2026-11-13 the pinned fork `tiger-seo/whatsmeow@9209108` carries the fix as `c05eb84` (same diff as `ce09515`); not yet verified on a real `pair`.
 - **Affected area:** `pair` (the post-pair link), `internal/wa`; the pinned `go.mau.fi/whatsmeow` (`f1b7985`).
 - **Owner:** Maintainer `tiger-seo`.
 - **Review trigger:** when tulir/whatsmeow#1337 is merged or rejected, on the next pin change, or if a real `pair` ends with "linking could not be completed safely" after the phone confirmed the link.
-- **Source:** `specs/004-shutdown-drain/verification.md`, section "Lost restart request on Linux CI".
+- **Source:** `.specify/archive/004-shutdown-drain/verification.md`, section "Lost restart request on Linux CI".
 
 ## Problem
 

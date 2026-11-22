@@ -8,7 +8,7 @@
 
 **Input**: Feature 005 in `docs/roadmap.md`: store live messages and history sync, normalize LIDs, merge LID chats at startup, and resolve names without fetching group information for every message.
 
-**Sources and scope**: `docs/specification.md` P2, P3, M7, S3-S5, D18, M10, §3.4-§3.5 and §6 defects 6, 9, 10 and 11; `.specify/archive/002-sqlite-storage/spec.md` governs existing storage and merge semantics; `specs/004-shutdown-drain/` governs session retirement. Feature 011 owns webhook delivery, feature 009 owns media download and cache naming, and features 006-007 own MCP read tools. No sending, new message types, new reconnect policy or old-deployment import is included.
+**Sources and scope**: `docs/specification.md` P2, P3, M7, S3-S5, D18, M10, §3.4-§3.5 and §6 defects 6, 9, 10 and 11; `.specify/archive/002-sqlite-storage/spec.md` governs existing storage and merge semantics; `.specify/archive/004-shutdown-drain/` governs session retirement. Feature 011 owns webhook delivery, feature 009 owns media download and cache naming, and features 006-007 own MCP read tools. No sending, new message types, new reconnect policy or old-deployment import is included.
 
 ## Clarifications
 

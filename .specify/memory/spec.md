@@ -2,6 +2,8 @@
 > **Revision**: 2026-11-22 — Archived specs/001-binary-skeleton to preserve the baseline CLI, configuration, lifecycle and CI specification.
 > **Revision**: 2026-11-22 — Archived specs/002-sqlite-storage to add the SQLite storage, query and migration contracts.
 > **Revision**: 2026-11-22 — Archived specs/003-whatsapp-pairing-status to record the pairing, offline status, version selection, guarded device writes and safe recovery baseline.
+> **Revision**: 2026-11-22 — Archived specs/004-shutdown-drain to define quiet-stop reuse, fresh-client pairing handover and their evidence; retired three confirmed entries from the blanket recovery baseline.
+> **Revision**: 2026-11-22 — Reconciled the earlier marker and reconnect clauses with FR-110 through FR-113; retained the recovery and durability safeguards and the historical feature 003 artifacts.
 
 ## Configuration Decisions
 
@@ -523,17 +525,17 @@ separate OS test identities. No real WhatsApp account or network connection is n
 
 [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> User Story 1]
 
-As the account owner, I can link a device and understand that the temporary unsafe-run policy prevents automatic reuse after a production Connect attempt.
+As the account owner, I can link a device and reuse its saved session after an eligible quiet stop. If the marker stays unsafe, I must complete offline recovery before reconnecting.
 
 **Why this priority**: A durable connection is the prerequisite for every later WhatsApp capability.
 
-**Independent Test**: Use isolated synthetic storage to confirm linking, orderly resource drain and unsafe-marker retention after an attempted production adapter Connect; reopening must block reuse. A clean marker with a saved identity may be reused only if no prior attempt made it unsafe. Manual checks require separate permission.
+**Independent Test**: Use isolated synthetic storage to confirm linking and orderly resource drain. Restart after an eligible quiet stop and verify reuse without a QR. Repeat with a stop that leaves the marker unsafe and verify restart blocks reuse. Manual checks require separate permission. [Source: .specify/archive/004-shutdown-drain/spec.md -> User Story 1] [Source: .specify/archive/004-shutdown-drain/spec.md -> User Story 2]
 
 **Acceptance Scenarios**:
 
 1. **Given** an unpaired data directory, **When** the owner runs `pair`, **Then** the current QR is displayed in the terminal and the command waits for success, expiry, cancellation or a connection failure.
 2. **Given** an active pairing attempt, **When** the phone successfully links the device and connection is confirmed, **Then** the connection owner's in-process status snapshot reports connected and logged in, the QR is cleared, the session is saved, and `pair` exits successfully after orderly shutdown.
-3. **Given** a saved session and unsafe marker after any production Connect attempt, **When** a connection-owning command starts, **Then** it refuses automatic connection and QR and requires offline recovery; a clean saved identity may be used only when the marker permits it.
+3. **Given** a saved session after a production Connect attempt, **When** a connection-owning command starts, **Then** it may reuse the identity if the previous stop cleared the marker under FR-110. If the marker is still unsafe, it refuses automatic connection and QR and requires offline recovery.
 4. **Given** another process owns the data directory, **When** `pair` starts, **Then** it fails with the existing lock-holder diagnostic and neither creates a second client nor modifies the owner's session.
 5. **Given** an active connection or pairing attempt, **When** the owner interrupts the command, **Then** connection work and device writes stop before storage closes and the data-directory lock is released.
 6. **Given** either existing `stdio` or `serve` shell, **When** it starts with a clean marker and saved session, **Then** it connects and remains running until cancellation; unsafe state blocks startup account work. With no saved session it remains unpaired without a QR. Neither shell exposes tools or a network listener here; both drain before releasing ownership.
@@ -604,6 +606,72 @@ As an operator, I can keep a connection running while the application refreshes 
 3. **Given** a connected session, **When** six hours elapse and refresh succeeds, **Then** the selected version changes for the next connection without disconnecting the current session.
 4. **Given** WhatsApp reports an outdated client (405), **When** same-active-generation recovery is demonstrated safe, **Then** retries wait five seconds and refresh before connecting, at most three. Otherwise recovery is temporarily unavailable and the owner remains disconnected; retirement of an unproven generation never permits a replacement Connect.
 5. **Given** the 405 budget is exhausted or safe same-generation retry is unproven, **When** more outdated-client events arrive, **Then** no further automatic retry occurs and an actionable diagnostic is reported; only a confirmed successful connection resets the budget.
+
+---
+
+### User Story 18 - Restart Without Offline Recovery After a Clean Stop (Priority: P1)
+
+As the account owner, I stop `stdio` or `serve` normally and start it again later. The saved session connects again without an offline recovery and without a new pairing, provided the program could prove that nothing from the previous connection was still running when it stopped.
+
+**Why this priority**: Today every run that connects to WhatsApp leaves the marker unsafe, so every restart needs an offline recovery and a fresh pairing. That makes a long-running server unusable and blocks the real-account history sync of message ingest (feature 005).
+
+**Independent Test**: On the simulator, connect a saved session, stop it normally with no library work left, and restart: the second run connects without recovery. Repeat with leftover work, a refused call and an incomplete observation; each keeps the marker unsafe and the restart refuses to connect.
+
+**Acceptance Scenarios**:
+
+1. **Given** a connected session with no library work left at stop, **When** the owner stops the command normally, **Then** the program blocks network traffic, then storage, observes that no library work remains and that no call was refused, clears the marker, closes storage and releases the lock, and reports that the session can be reused.
+2. **Given** that clean stop, **When** `stdio` or `serve` starts again, **Then** it connects with the saved session, opens no pairing window and needs no offline recovery.
+3. **Given** library work that is still running when the observation deadline passes, **When** the command stops, **Then** the marker stays unsafe, storage still drains and closes in order, and the next start requires offline recovery as today.
+4. **Given** a call to storage or the network that was refused after its block, **When** the check runs, **Then** it fails, whatever the observation shows, and the marker stays unsafe.
+5. **Given** a confirmed logout or a request to delete the client during the run, **When** the stop passes the check, **Then** the marker clears only if the logout cleanup has been made durable, as today; a passing check never overrides a logout.
+6. **Given** a crash, a forced kill, a second stop signal that forces exit, or a stop that exceeds its bound, **When** the process ends, **Then** the marker stays unsafe. A stop that exceeds its bound but still reaches the clear decision fails the check (`stop_bound_exceeded`) and does not clear.
+7. **Given** a run that never attempted a production connection, **When** it stops normally, **Then** the existing safe-clear rules apply unchanged.
+8. **Given** the late-logout ordering that caused the 2026-11-04 fail-closed policy (a logout handled by the client library after retirement, finding its callback removed and its delete refused; regression `TestRunGuardLatePinnedLogoutAfterRetirement`), **When** the stop is checked, **Then** the check fails, either because the logout work is still running at the deadline or because its delete was refused, and the marker stays unsafe. A clean marker is never committed before that work has finished.
+9. **Given** a client-library message handler that is still running (held) when its generation is retired, **When** the check runs, **Then** it fails until the handler has returned, and passes only if the handler made no call after the blocks.
+
+[Source: .specify/archive/004-shutdown-drain/spec.md -> User Story 1]
+
+The general refusal and timeout wording in this story is subject to FR-109’s two counted-but-non-failing refusal cases and FR-096’s distinction between a late decision and an in-bound pass followed by a lifecycle timeout. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-002] [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-011]
+
+---
+
+### User Story 19 - Pair Once and Keep the Device (Priority: P1)
+
+As the account owner, I run `pair`, scan the QR code once, and the device stays linked and reusable. The connection that WhatsApp asks for right after pairing no longer runs on the client that did the pairing, so late traffic from the pairing session cannot reach the new connection.
+
+**Why this priority**: Today the post-pair reconnect reuses the pairing client. Late work from the pairing session can send on the new socket, and the run still ends with the marker unsafe, so the newly linked device needs an offline recovery before first use.
+
+**Independent Test**: On the simulator, pair, receive the restart request that follows pairing, and confirm that the pairing session's late sends never reach the new connection, that the new connection uses a fresh client and generation, and that a clean stop leaves the marker clear for the next `stdio` start.
+
+**Acceptance Scenarios**:
+
+1. **Given** a successful pairing followed by WhatsApp's restart request, **When** the pairing generation passes the quiet-stop check, **Then** the program starts exactly one connection on a fresh client and generation, loaded from the durably saved identity, under the single attempt slot and the 30-second watchdog.
+2. **Given** that the fresh connection confirms, **When** `pair` stops normally and its own stop passes the check, **Then** `pair` exits successfully, the marker is clear and the next `stdio` or `serve` start reuses the session.
+3. **Given** that the fresh connection confirms but `pair`'s own stop fails the check, **When** `pair` ends, **Then** it exits 0 with the existing "linked, offline recovery is required before the next run" notice and the marker unsafe, as the owner decided for feature 003 (design review 516648b). A storage fault or any other stop error still exits 1.
+4. **Given** the restart request arrives before the pairing success has been handled (observed on the simulator in feature 003), **When** the owner receives it, **Then** it waits for the pairing success within the 30-second watchdog, as today; a pairing error, logout, stop or the watchdog refuses it and no connection starts.
+5. **Given** the pairing generation fails the check, **When** the restart request arrives, **Then** no further connection starts; `pair` reports an incomplete link that needs offline recovery, keeps the marker unsafe and exits unsuccessfully.
+6. **Given** the fresh connection fails, stalls past its watchdog or is cancelled, **When** `pair` ends, **Then** the failure is final: no second reconnect, an incomplete-link report, the marker unsafe and an unsuccessful exit.
+7. **Given** late work from the pairing generation (a session announcement, a receipt, a key share, a resent request or a disconnect), **When** it tries to send or write after its generation's blocks, **Then** it is refused and never reaches the fresh connection. A new dial, or a call to the session, counts against the pairing generation's check. A write on a connection that the block already closed sends nothing and is counted, but does not fail the check.
+
+[Source: .specify/archive/004-shutdown-drain/spec.md -> User Story 2]
+
+---
+
+### User Story 20 - Know Why the Session Cannot Be Reused (Priority: P2)
+
+As an operator, when a stop does not pass the check, I can see the reason in plain words and know that offline recovery is needed. Over several runs I can see how often stops pass, which decides whether the fork fallback is needed.
+
+**Why this priority**: A failed check must not look like a crash, and the owner needs a measured pass rate to judge option A against the fork.
+
+**Independent Test**: Force each failure category on the simulator and read the stop diagnostic and the `status` output. No diagnostic may contain library state, arguments, keys or account identifiers.
+
+**Acceptance Scenarios**:
+
+1. **Given** a stop that fails the check, **When** it finishes, **Then** stderr reports one failure category (for example, work still running, a refused network call, a refused storage call, an incomplete observation or a deadline), the counts involved and that offline recovery is required, without raw observation data.
+2. **Given** a stop that passes, **When** it finishes, **Then** stderr reports that the session can be reused.
+3. **Given** either outcome, **When** `status` runs afterwards, **Then** it reports the marker state as it does today; nothing new is stored beyond the marker.
+
+[Source: .specify/archive/004-shutdown-drain/spec.md -> User Story 3]
 
 ---
 
@@ -718,6 +786,21 @@ As an operator, I can keep a connection running while the application refreshes 
 - Storage failure during pairing is reported as failure, never as a durable successful pairing. Recovery must not delete conversation tables or other application data. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Storage failure during pairing is reported as failure, never as a durable"]
 
 - A shutdown timeout is not permission to close the database or release the lock while a device write remains active. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "A shutdown timeout is not permission to close the database or release the"]
+
+- WhatsApp sends the restart request while pairing work is still finishing. The fresh connection waits for the check only up to the check deadline; it never starts while work from the pairing generation may still run. [Source: .specify/archive/004-shutdown-drain/spec.md -> "WhatsApp sends the restart request while pairing work is still finishing"]
+- A logout arrives during the observation. It is latched as today; the marker clears only after durable cleanup. [Source: .specify/archive/004-shutdown-drain/spec.md -> "A logout arrives during the observation"]
+- A pairing attempt times out, is cancelled, or gets a pairing success without a confirmed follow-up connection, and the stop then passes the check. The marker stays unsafe and offline recovery is required, because the phone may list a half-linked device. [Source: .specify/archive/004-shutdown-drain/spec.md -> "A pairing attempt times out, is cancelled, or gets a pairing success without a confirmed follow-up connection, and the stop then passes the check"]
+- The disk is low when the marker would be cleared. The existing low-disk admission refuses the write; the marker stays unsafe and the operator is told to free space and run offline recovery. [Source: .specify/archive/004-shutdown-drain/spec.md -> "The disk is low when the marker would be cleared"]
+- The observation of running work is larger than its bounded buffer. The result counts as incomplete and fails. [Source: .specify/archive/004-shutdown-drain/spec.md -> "The observation of running work is larger than its bounded buffer"]
+- A library handler is writing to storage when the stop begins. It is not cut off by a cancelled context before the network and storage blocks are in place. If a guarded call still fails because of a context error, a stale lease or a refusal, the check fails. [Source: .specify/archive/004-shutdown-drain/spec.md -> "A library handler is writing to storage when the stop begins"]
+- A stop signal arrives during the post-pair handover (while the pairing generation retires, between its retirement and the fresh generation's creation, or between creation and connect). No connection begins after the stop began, and every generation that exists is retired and checked before storage closes and the lock is released. The marker stays unsafe, because the pairing is unresolved. [Source: .specify/archive/004-shutdown-drain/spec.md -> "A stop signal arrives during the post-pair handover (while the pairing generation retires, between its retirement and the fresh generation's creation, or between creation and connect)"]
+- A stop signal arrives in the instant between the library finishing its connect and the owner recording that fact, or between the owner's stop check and the connect call. Both interleavings fail closed and are counted or prevent the connect; they never clear the marker through a false pass. [Source: .specify/archive/004-shutdown-drain/spec.md -> "A stop signal arrives in the instant between the library finishing its connect and the owner recording that fact, or between the owner's stop check and the connect call"]
+- The connect watchdog fires after the connection is established but before the connected event. It disconnects; it does not cancel the contexts the library's handlers run with. [Source: .specify/archive/004-shutdown-drain/spec.md -> "The connect watchdog fires after the connection is established but before the connected event"]
+- The server closes the connection after the post-pair restart request. The resulting `Disconnected` after retirement is expected and does not fail the check. If the close arrives in the same instant as the request, the pinned client library can drop the request; the link then ends as incomplete and safe (known limitation on the feature 004 pin). [Source: .specify/archive/004-shutdown-drain/spec.md -> "The server closes the connection after the post-pair restart request"]
+- A third-party library starts work on the client library's behalf. Only work named exactly in an allow-list may be ignored; anything else fails the check. [Source: .specify/archive/004-shutdown-drain/spec.md -> "A third-party library starts work on the client library's behalf"]
+- The program's own event handlers or future tool code still hold the retired client. Their calls go through the same generation block and are refused and counted, so they cannot start new library work unseen. [Source: .specify/archive/004-shutdown-drain/spec.md -> "The program's own event handlers or future tool code still hold the retired client"]
+- A dependency version change. The allow-list and the check must be revalidated against the new version before release. [Source: .specify/archive/004-shutdown-drain/spec.md -> "A dependency version change"]
+- `stdio` cannot restart itself while a client holds its standard input and output, so the check runs inside the process. A process exit alone is not proof. [Source: .specify/archive/004-shutdown-drain/spec.md -> "`stdio` cannot restart itself while a client holds its standard input and output, so the check runs inside the process"]
 
 ## Requirements
 
@@ -1004,7 +1087,7 @@ As an operator, I can keep a connection running while the application refreshes 
 - **FR-084**: `pair` MUST support QR-only interactive linking, display each current QR in the terminal, report success only after confirmed connection and saved credentials, and exit successfully after quiescing the connection. During one owner-approved attempt, replacement codes MUST be displayed automatically while invalidating the previous code. An unresolved final timeout, cancellation or failure MUST exit unsuccessfully with a useful offline-recovery diagnostic; Enter MUST NOT start another attempt. Recovery and a subsequent pairing each require separate explicit approvals.
   [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-002]
 
-- **FR-085**: A saved session with a clean marker MAY be reused without QR; after any production Connect attempt the unsafe marker blocks automatic reuse on restart until offline recovery. Connection failure alone MUST NOT erase or silently replace it.
+- **FR-085**: A saved session with a clean marker MAY be reused without QR, including when an orderly stop cleared the marker under FR-110 after a production Connect attempt. An unsafe marker blocks automatic reuse on restart until offline recovery. Connection failure alone MUST NOT erase or silently replace the saved session.
   [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-003]
 
 - **FR-086**: The running connection owner MUST maintain a coherent status snapshot with `connected`, `logged_in`, `pairing_required` and `wa_version`. Confirmed connection sets connected and logged-in true and clears QR material. Disconnect clears only connected; confirmed logout clears connected and logged-in and invalidates pairing material.
@@ -1039,6 +1122,7 @@ As an operator, I can keep a connection running while the application refreshes 
 
 - **FR-096**: Shutdown MUST stop version refresh, pairing, reconnect work, event handling and all client-originated device writes before closing shared storage, then release the lock. It MUST not report clean shutdown or release ownership while those writes can still occur.
   [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-014]
+  Shutdown keeps its existing guarantees: every admitted device write finishes before storage closes, and the lock is released only after that. The check MUST NOT lengthen the existing 10-second stop bound for writes. The whole orderly stop, including the check, runs inside that same bound: the observation deadline is capped at the time left, and a stop that decides after the bound fails the check with the marker unsafe, so that a late decision never clears the marker. A decision that passed inside the bound can still be followed by the marker write, the store close and the lock release, and the lifecycle's timer covers them: the command may then report `shutdown timed out` and exit 1 with a clean marker, which is safe because the check passed and the stop completed in order. A failed check is not a failed shutdown; the process exits after an orderly close with the marker unsafe. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-011]
 
 - **FR-097**: Device operations MUST share the approved store admission, deadline, input/output and disk policy. Before changing app-state sync progress or a bulk contact snapshot, the owner MUST durably record the affected collection's repair need. An interrupted/failed sync MUST retain that need across restart. After an explicitly authorized connection, bounded re-synchronization MAY repair only the affected protocol metadata/contact snapshot; clear the indication only after complete verified success. Failure MUST remain visible and retryable without automatic unpairing, deleting chats/credentials/session keys, silently truncating data or claiming rollback of earlier committed operations.
   [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-016]
@@ -1046,18 +1130,42 @@ As an operator, I can keep a connection running while the application refreshes 
 - **FR-098**: Fresh QR registration MUST use the previous service's companion OS `Linux` and platform `CHROME`, including the matching Chrome QR client type. Its registration version and user-agent OS version/build MUST use one selected handshake version, as in the previous service. The adapter MUST preserve credentials and all unrelated payload properties, including unknown protobuf fields, keep shared library globals immutable, and reuse an existing saved identity without forcing re-pairing when FR-099 permits reuse. A failure to decode or encode companion properties MUST fail the handshake without sending an incorrectly identified registration, preserve saved credentials and record a secret-free diagnostic category for reporting outside the callback. Repeated failures may coalesce; forced termination or an indefinitely stalled logger cannot guarantee delivery. WhatsApp determines the displayed name; no exact phone label or retroactive relabelling is promised.
   [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-017]
 
-- **FR-099**: Before account-capable work, durably arm the unsafe-run marker; failed or ambiguous arming admits no account work. After any production Connect attempt, including failure or cancellation, retain it unsafe even after orderly drain and confirmed logout cleanup. Without such an attempt, clear only after orderly drain and durable completion of any confirmed-revocation cleanup. Unsafe, unreadable, invalid or ambiguous state blocks automatic connection, pairing and QR after restart. The marker does not prove revocation: offline recovery requires explicit operator verification of the account/device, separately authorized phone-side unlink if needed, and separately authorized local removal of only the device identity if present before clearing; a later fresh pairing requires separate approval. Never silently reuse an uncertain identity, infer safe state from a missing device row, remove chats/messages, or treat an automatic restart or ordinary Enter as consent. Existing pre-marker databases are unknown; new databases may start clean only when creation is known under the exclusive lock. `status` remains offline and non-migrating, honestly reports local identity presence when inspectable, warns and exits unsuccessfully for unsafe or legacy-unknown state.
+- **FR-099**: Before account-capable work, durably arm the unsafe-run marker; failed or ambiguous arming admits no account work. After a production Connect attempt, including failure or cancellation, clear at orderly shutdown only under FR-110. Without such an attempt, clear only after orderly drain and durable completion of any confirmed-revocation cleanup. Unsafe, unreadable, invalid or ambiguous state blocks automatic connection, pairing and QR after restart. The marker does not prove revocation: offline recovery requires explicit operator verification of the account/device, separately authorized phone-side unlink if needed, and separately authorized local removal of only the device identity if present before clearing; a later fresh pairing requires separate approval. Never silently reuse an uncertain identity, infer safe state from a missing device row, remove chats/messages, or treat an automatic restart or ordinary Enter as consent. Existing pre-marker databases are unknown; new databases may start clean only when creation is known under the exclusive lock. `status` remains offline and non-migrating, honestly reports local identity presence when inspectable, warns and exits unsuccessfully for unsafe or legacy-unknown state.
 
   Verification must identify the exact account and linked-device entry, or establish that the exact device is absent; a generic Linux/Chrome label, timestamp, guess, or absence of a local row is not sufficient. If entries cannot be distinguished, the operator may separately authorize and manually unlink every potentially matching entry, after a warning that unrelated devices may be disconnected, and verify their absence. If identification or absence remains unverified, recovery remains blocked, with no local removal or marker clear. No exact phone label or reliable identifying attribute is guaranteed. Offline recovery requires verified interactive input and output as specified in the CLI contract; unsupported or redirected terminals fail closed. This policy does not itself authorize phone-side action.
 
-  Startup retries, 405, 515 and ordinary reconnect remain desired policies, but an automatic retry is temporarily permitted only if demonstrated safe within the same active generation. No further Connect is permitted on or after retirement of an unproven upstream generation, including a replacement client. Otherwise the path is unavailable pending resolution, with a diagnostic and no new pairing. The marker latch alone is not proof that an active retry is safe.
+  Startup retries, 405 recovery, ordinary reconnect, other 515 reconnects and same-process re-pair remain denied with diagnostics under FR-113. No further Connect is permitted on or after retirement of an unproven upstream generation, including on a replacement client. The marker latch alone does not prove that a retry is safe.
 
-  Exception (owner-approved 2026-11-06, T077): the `pair` command alone makes exactly one owner-initiated reconnect after a post-pairing 515, on the same generation, under the single attempt slot and the 30-second watchdog; a failed or stalled reconnect is final and is reported as an incomplete link. It is a code-level switch (`OwnerConfig.PostPairReconnect`), not a setting, and `stdio` and `serve` keep every reconnect denied. The approval rests on the residual risk in verification.md "T077 Decision" as corrected on 2026-11-07, which the owner must re-confirm. When 515 follows pairing and its reconnect is unavailable, report incomplete linking and required offline recovery, retain unsafe and exit unsuccessfully; PairSuccess alone must not be presented as a connected or usable device. Whether every pairing encounters 515 is unproven. The explicit phase-3 investigation and review gate in T077 precedes the US1 linking checkpoint.
+  The sole post-pair reconnect is the owner-initiated `pair` handover under FR-111 and FR-112: after the pairing generation passes its quiet-stop check, make one attempt on a fresh client and generation under the single attempt slot and the 30-second watchdog. `stdio` and `serve` do not reconnect. If the required follow-up is unavailable, fails or stalls, report incomplete linking and required offline recovery, retain unsafe and exit unsuccessfully. PairSuccess alone is not a connected or usable link. The earlier same-client approval, switch and T077 review gate remain in the archived feature 003 evidence, not as current requirements.
 
   A logout or client deletion request recognized before its generation's callback and device admissions have drained is latched through retirement: clearing requires durable cleanup of that revocation, otherwise the marker stays unsafe. Low-disk admission, including its existing resume hysteresis, applies to cleanup and marker clearing without exemption; refusal leaves unsafe state and an actionable instruction to restore free space and perform offline recovery. Durability against power loss is conditional on the actual platform synchronization implementation and storage honoring it; SQLite WAL FULL alone does not establish macOS full hardware flush. Native evidence and limitations are required before making platform-specific claims.
 
   Identity removal, whether after confirmed revocation or separately authorized offline recovery, MUST retain pending FR-097 collection-repair needs across device-row cascades, restart and fresh pairing. Materialize those needs for the new saved identity before ordinary app-state progress and clear them only after successful fenced repair. Device-specific credentials/keys may be removed only as part of genuine confirmed revocation or separately authorized offline identity removal, never as a shortcut for app-state repair.
-  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-018]
+  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> FR-018] [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-003] [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-004] [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-005] [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-006]
+
+- **FR-108**: Stopping a generation MUST happen in this order: block that generation's network traffic (socket and HTTP), then block its storage access, then observe the client library's remaining work. Storage MUST NOT be blocked while the generation's network can still receive, because a refused write during decryption can make the library acknowledge and lose a message. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-001]
+
+- **FR-109**: A generation passes the quiet-stop check only if, by the owner-approved deadline (see Assumptions), (a) none of the client library's work is running, except work named exactly in a reviewed allow-list, (b) no dial was refused on the generation's fenced network clients after the network block (this proves isolation of the retired client; it cannot see a library send after the library's own disconnect, which the observation covers). A write on a connection that the block already closed is refused with nothing sent and counted, but does not fail the check, because TLS and HTTP/2 teardown write close messages by design, (c) no guarded storage call of the generation failed after retirement began because of a refusal, a context error, a stale lease or another guard error; a read refused only because the storage block has retired is counted separately and does not fail the check, because it changes nothing and the network is already closed when that block retires, (d) no call from the program's own code to the session was refused after retirement began, (e) no event that the session would have forwarded to the owner was dropped after retirement, other than `Disconnected`, and (f) the observation is complete. The check also fails when the whole stop has passed its bound (see FR-096). Every other outcome, including an error, a cut-off observation or the deadline, fails. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-002]
+
+- **FR-110**: After a production connection attempt, the marker MAY be cleared at orderly shutdown only when every generation of the run passed the check and all existing safe-clear prerequisites hold: storage drained, any latched logout or client deletion durably cleaned up, no unresolved pairing attempt, and low-disk admission granted. A pairing attempt is unresolved unless it ended in a confirmed connection with a durable identity: a QR timeout, a cancellation, or a pairing success without a confirmed follow-up connection all count as unresolved, because the phone may list a half-linked device that only the operator can check. Otherwise the marker MUST stay unsafe and the next start requires offline recovery, as today. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-003]
+
+- **FR-111**: The post-pair reconnect MUST run on a fresh client and a new generation, built from the durably saved identity, and only after the pairing success has been handled and the pairing generation has passed the check. It keeps feature 003's rules: a restart request before the pairing success waits for it within the 30-second watchdog, and a pairing error, logout, stop or the watchdog refuses it. It is one owner-initiated attempt under the single attempt slot and the 30-second watchdog. The fresh client MUST log in with the saved identity (no new registration) and the currently selected WhatsApp Web version and Linux/Chrome identification, and a test MUST assert the selected version on this connection. A failure, stall, cancellation or failed check is final: report an incomplete link that needs offline recovery, keep the marker unsafe and exit unsuccessfully. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-004]
+
+- **FR-112**: The code-level `PostPairReconnect` switch MUST be removed. The post-pair reconnect is part of `pair` only; `stdio` and `serve` do not pair and have no reconnect. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-005]
+
+- **FR-113**: No other automatic or repeated connection is added. Startup retries, the 405 budget, ordinary reconnect, any other 515 reconnect and same-process re-pair stay denied with their existing diagnostics. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-006]
+
+- **FR-114**: Every path from the program's own code to a client MUST go through that client's generation block (connect, QR channel, repairs, disconnect, store access). After retirement began, such calls are refused and counted toward the check, except the retirement sequence's own disconnect. The context the library's node handlers run with is not cancelled before the network and storage blocks are in place (FR-108), so that a handler cannot lose a write to a cancelled context unseen. This holds for the stop signal itself, which cancels the owner context before retirement starts: the library context does not derive from it, and the connect watchdog and the startup attempt's cleanup do not cancel it once the connection is established. Counting of failed guarded calls starts at the stop signal, at the start of retirement or at the first cancellation of the attempt context, whichever comes first. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-007]
+
+- **FR-115**: The observation MUST have a bounded memory size and a bounded duration. Its raw contents MUST NOT be logged, stored, returned or included in errors at any level. Only the outcome, a failure category, counts and the duration may be reported. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-008]
+
+- **FR-116**: Each check MUST report its outcome on stderr in operator wording: reusable, or offline recovery required with the category. The check's outcome replaces the blanket "upstream drain unproven" latch and its `upstream_drain_unproven` event; the `run_guard_recovery_required` event stays for every stop that leaves the marker unsafe. stdout in stdio mode stays protocol-only. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-009]
+
+- **FR-117**: The allow-list MUST name exact functions, never a module or package prefix. It is tied to the pinned client library version; a version change MUST fail a test until the allow-list is revalidated. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-010]
+
+- **FR-118**: Offline recovery, `status` and the marker's storage format stay as they are. A clean marker after a passed stop MUST look exactly like a clean marker after a run without a production connection. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-012]
+
+- **FR-119**: The specification's temporary fail-closed limitation (§8.11, 2026-11-04) and the post-pair reconnect approval (§8.11, 2026-11-06) MUST be updated to the 2026-11-07 decision before implementation starts. Feature 003's spec, contracts and `verification.md` stay as the historical record; `OPERATIONS.md` and `AGENTS.md` MUST be updated to describe a reusable session after a passed check, and to say that offline recovery is still needed after a failed one. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-013]
 
 ### Key Entities
 
@@ -1453,6 +1561,26 @@ Guard interface fields are installed before client creation and stay stable thro
 
 Failed revocation persistence blocks new generations in the current owner, not safe finalization forever: on explicit stop, close/unlock only after true quiescence and exit unsuccessfully with an unresolved-state warning. The previously armed unsafe-run marker blocks automatic account work on restart; no promise of persisted deletion is made when storage rejected it. Recovery must not infer that uncertainty proves revocation.
 
+
+Quiet-stop generation extension: [Source: .specify/archive/004-shutdown-drain/spec.md -> "Generation"] [Source: .specify/archive/004-shutdown-drain/data-model.md -> "Generation (extended)"]
+
+One client instance and its connection: an owner `genState` plus its `Session`.
+
+| Field | Meaning | Rule |
+| --- | --- | --- |
+| `epoch` | the owner epoch of this generation | unchanged from feature 003 |
+| `accountWork` | a production Connect was attempted on this client | set before `ConnectContext`; when false, no check is needed |
+| `fence` | the generation's network block | one per generation; never shared with another generation |
+| `barrier` | the store's device barrier | unchanged; gains a refusal count |
+| `droppedEvents` | owner-relevant events dropped after retirement, except `Disconnected` | counted from the moment the retire bit is set |
+| `lateCalls` | calls from the program's own code to the session after the retire bit is set, except the retirement sequence's own Disconnect | counted from the same moment |
+| `work` | the program's own work: the pairing window's QR channel, the repair pass; never a Connect context | a child of the owner context; cancelled by the stop signal and at the start of retirement |
+| `lib` | the library's `BackgroundEventCtx` and the parent of the attempt context its handlers run with | created as `context.WithCancel(context.WithoutCancel(o.ctx))`; cancelled only after the fence and the barrier (invariants I8); never by the stop signal, `work` or a watchdog once Connect has returned |
+| `quiet` | the generation's `QuietStopResult` | written once, by retirement |
+
+**States.** open → connecting / connected / pairing → retiring → retired (blocks closed, drained) → checked (result
+known) → released. A generation never returns to an earlier state. A new Connect never runs on a retired generation.
+
 #### Connection Status
 
 A consistent snapshot of connection, login, active-pairing availability and selected WhatsApp Web version, distinguished from the standalone offline snapshot. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Connection Status"]
@@ -1511,11 +1639,11 @@ These budgets remain desired policies, not guarantees of retry availability. Def
 
 #### Unsafe-Run Marker
 
-[Source: .specify/archive/003-whatsapp-pairing-status/data-model.md -> "Unsafe-Run Marker"]
+[Source: .specify/archive/003-whatsapp-pairing-status/data-model.md -> "Unsafe-Run Marker"] [Source: .specify/archive/004-shutdown-drain/spec.md -> "Run marker"] [Source: .specify/archive/004-shutdown-drain/data-model.md -> "Nothing new is stored on disk"]
 
-Application migration 3 adds exactly one bounded store-level marker with clean/unsafe states and a five-bit set of repair collections whose device-specific markers would otherwise be lost on identity deletion. A new database known to have been created under the lock starts clean; an existing schema 1/2 database initializes unsafe because its previous run cannot be classified, even if no device row exists. If creation or migration was interrupted before the marker was committed, the reopened database is existing/unknown, never reconstructed as freshly created. Missing, malformed, unreadable or unsupported marker state is never clean. A committed unsafe state precedes all account-capable work and remains armed across all generations. If no production Connect was attempted, automatic clearing additionally requires true drain and durable completion of any confirmed-revocation cleanup. After any such attempt, only separately authorized offline recovery can clear it, after its verification and removal prerequisites. An arm error or ambiguous commit prevents automatic clear in that invocation; reopen and inspect the committed state. The marker is not proof of logout, identity validity or phone-side unlink; clean/unsafe and the pending repair bitset are independent.
+The schema-3 format is unchanged and a clean marker following a quiet stop is identical to one from a run without a production connection.
 
-Temporary restriction: after any production Connect attempt, including failure or cancellation, orderly drain and cleanup are insufficient to clear the marker; only separately authorized offline recovery may do so. No same-process re-pair or automatic saved reuse follows that attempt. Store/lock drain remains mandatory.
+Application migration 3 adds exactly one bounded store-level marker with clean/unsafe states and a five-bit set of repair collections whose device-specific markers would otherwise be lost on identity deletion. A new database known to have been created under the lock starts clean; an existing schema 1/2 database initializes unsafe because its previous run cannot be classified, even if no device row exists. If creation or migration was interrupted before the marker was committed, the reopened database is existing/unknown, never reconstructed as freshly created. Missing, malformed, unreadable or unsupported marker state is never clean. A committed unsafe state precedes all account-capable work and remains armed across all generations until a permitted clear. Without a production Connect attempt, automatic clearing still requires true drain and durable completion of any confirmed-revocation cleanup. After such an attempt, only an orderly stop meeting FR-110 may clear automatically. If the marker stays unsafe, recovery still requires separate authorization and the verification and removal prerequisites below. An arm error or ambiguous commit prevents automatic clear in that invocation; reopen and inspect the committed state. The marker is not proof of logout, identity validity or phone-side unlink; clean/unsafe and the pending repair bitset are independent. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-003]
 
 The marker schema enforces one row with primary key `id = 1`, non-null state limited to `clean` or `unsafe`, and a non-null integer repair bitset from 0 through 31. The bit positions correspond exactly to the five existing supported `device_repair` collections; migration and tests must use one documented stable mapping. Status inspection validates the singleton and all constraints without writing. A missing or malformed schema-3 row is classified unsafe/corrupt and is not automatically recreated because the pending bits may be unknown.
 
@@ -1558,6 +1686,66 @@ The SDK's appStateSyncLock is a plain mutex before its context-aware calls. A co
 The controller waits on result/cancellation/deadline, not directly on an uninterruptible SDK call; its one actual-call lease remains held until that call returns. Late work sees an inactive ticket/cancelled context and cannot clear a marker or mutate through a retired guard. Deferred ordinary requests are coalesced/replayed as ordinary incremental sync after repair, not extra full-resync attempts; failure leaves demand pending for a new notification/connection event, never a tight autonomous retry loop. A guarded-write fault during active use pauses/cancels that generation and requires an operator-authorized restart, whose pending markers activate startup admission before competing SDK work. Missing sync keys are transient: retain pending state and allow key delivery, without repeatedly retrying full resync.
 
 The SDK spawns missing-key requests with context.WithoutCancel: their ctx has no caller deadline/cancellation. They are SDK-owned protocol jobs, not outstanding FetchAppState invocations; do not invent an owner tail timer or claim the ten-second caller budget bounds them. The pin has a default 75-second message-response wait, per-key 24-hour request dedup and disconnect-cleared response waiters/retryFrame connection wait up to five seconds; these are component behaviours, not a hard total-tail/RSS guarantee. On stop disconnect before finalization and deny/cancel all old-generation device operations even for detached contexts. Inactive repair tickets forbid protected progress/clear, not necessary generation-valid key-request crypto/key delivery, which still uses fresh shared operation budgets. Never free a FetchAppState slot before that actual invocation returns or clear on late success.
+
+#### Network fence
+
+| Field | Meaning | Rule |
+| --- | --- | --- |
+| `closed` | the fence is closed | set once, after the library's own Disconnect |
+| `conns` | the wrapped connections dialled by this generation | all closed when the fence closes |
+| `refusedDials` | dials attempted after closing | counted, never performed |
+| `refusedWrites` | writes attempted on a wrapped connection after closing | counted, never sent; not part of the check (the connection is already closed, and TLS and HTTP/2 teardown write on it) |
+
+Reads that fail after closing are not counted (research R3).
+
+[Source: .specify/archive/004-shutdown-drain/data-model.md -> "Network fence"] [Source: .specify/archive/004-shutdown-drain/spec.md -> "Network block / storage block"]
+
+#### Storage refusal count
+
+`DeviceBarrier.MarkRetiring()` starts the count when retirement starts. `DeviceBarrier.Refused() uint64` is the number
+of guarded calls for this device session that failed after that point for a reason that comes from the guard or the
+context: `ErrRetired`, a context error, a stale lease or another guard error. A result the database itself returns
+(for example "not found") is not counted. It is monotonic, and is read only after `Retire` has drained the admitted
+work.
+
+A read turned away with `ErrRetired` (after `Retire`, so after the network fence closed) is not in `Refused()`; it is
+counted in `DeviceBarrier.RefusedReads() uint64`, which the check does not use. A read that fails on its context, a
+stale lease or another guard error stays in `Refused()`. Whether a call is a read is the guard's own `write` flag.
+
+[Source: .specify/archive/004-shutdown-drain/data-model.md -> "Storage refusal count"]
+
+#### QuietStopResult
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `Passed` | bool | true only when every condition of FR-109 holds |
+| `Reason` | enum | `passed`, `work_running`, `network_refused`, `storage_refused`, `call_refused`, `event_dropped`, `stop_bound_exceeded`, `observation_incomplete`, `observation_error`, `not_checked` |
+| `LibraryGoroutines` | int | client-library goroutines left at the last observation, after removing allow-listed work |
+| `NetworkRefused` | uint64 | refused dials |
+| `StorageRefused` | uint64 | the barrier's count (refusals, context errors, stale leases, guard errors) |
+| `CallsRefused` | uint64 | late calls to the session (see Generation) |
+| `EventsDropped` | uint64 | dropped owner-relevant events (see Generation) |
+| `Duration` | duration | from the start of retirement to the decision |
+
+When several conditions fail, `Reason` names the first in this order: `observation_incomplete`,
+`observation_error`, `stop_bound_exceeded`, `storage_refused`, `network_refused`, `call_refused`, `event_dropped`,
+`work_running`. The counts report all of
+them. `not_checked` is used for a generation that never attempted a Connect. The result never holds dump text,
+function names, argument values, keys or account identifiers.
+
+[Source: .specify/archive/004-shutdown-drain/data-model.md -> "QuietStopResult"] [Source: .specify/archive/004-shutdown-drain/spec.md -> "Quiet-stop result"]
+
+#### Allow-list entry
+
+| Field | Meaning | Rule |
+| --- | --- | --- |
+| `Function` | one exact function name as `runtime.Stack` prints it | never a package or module prefix |
+| `ReviewedFor` | the `go.mau.fi/whatsmeow` version the entry was reviewed against | must equal the `go.mod` require line, or a test fails |
+| `Evidence` | why the work is harmless after both blocks | a reference to `verification.md` |
+
+The list starts empty (research R5).
+
+[Source: .specify/archive/004-shutdown-drain/data-model.md -> "Allow-list entry"] [Source: .specify/archive/004-shutdown-drain/spec.md -> "Allow-list"]
 
 ## Storage Data Flow
 
@@ -1618,6 +1806,21 @@ Reuse 16 active/64 waiters, five-second admission, ten-second operation, 16-MiB 
 
 E003-RX-01 applies only to documented upstream receive resource exposure. It does not relax these store-state or marker invariants.
 
+### Quiet-Stop Clear Decision
+
+The existing `finishStop` decision, with one more input:
+
+```
+clear = guardArmed
+        && !unresolved            // no unresolved pairing attempt (FR-110)
+        && !unsafeStop            // set by a failed check of a generation that attempted Connect, among the existing causes
+        && (!checked || withinStopBound)  // a generation that attempted Connect was decided before stopBound passed; a run with no production Connect is unaffected (feature 003's safe-clear rules)
+        && !health.StorageFault
+then ClearRunGuard, which still enforces low-disk admission
+```
+
+`upstream_drain_unproven` no longer sets `unsafeStop` on its own. A failed check does, for that generation. [Source: .specify/archive/004-shutdown-drain/data-model.md -> "Run outcome (owner)"]
+
 ## Security
 
 The threat model is the [security review](../../docs/security-review.md) (F01–F16). This section takes up the
@@ -1647,6 +1850,8 @@ sidecars, temporary files and backups, which carry the same data.
   (FR-080, FR-082, FR-083).
 
 Assets are device credentials and identities, shared storage and its sidecars, temporary pairing material, accurate status, protocol stdout, and exclusive ownership until the last device write finishes. Boundaries are owner terminal to pairing control; WhatsApp/network responses to lifecycle and version handling; upstream diagnostics to local logs/terminal; and the connection owner to private shared storage. Neither a retrieved message nor a diagnostic string grants authorization. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Assets are device credentials and identities"]
+
+Assets are the Signal sessions, pre-keys and app-state keys in the device store, the integrity of the server's message queue, the run marker, and the real account's standing with WhatsApp. Boundaries are the client library's background work and the program's storage and network, the old generation and the new one, and the stop diagnostic and the operator's terminal. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Assets and Trust Boundaries"]
 
 ### Findings taken up or deferred
 
@@ -1702,6 +1907,17 @@ after config loading or lock acquisition does not retroactively protect earlier 
 | F14 - incident response | Revoked credentials cannot be reused by FR-088. Full compromise/rotation/unlink runbook belongs to 011 with credential-specific steps in 009/010; this feature does not auto-unlink a phone or destroy data. |
 | F15 - supply chain | FR-107 applies now; release signatures, provenance and distribution guidance remain in 011. |
 | F16 - assurance/ownership | Record feature-specific security evidence and limitations; deployment/control ownership and any regulated cryptographic assurance profile remain operator decisions in 011. No compliance claim is made. |
+
+#### Quiet-stop finding dispositions
+
+| Finding | Treatment in this feature |
+| --- | --- |
+| F09 - resource exhaustion | The observation is bounded in memory and time (FR-115). No new connection path: the post-pair connection already existed. But a reusable session makes repeated, long-running connected `stdio` and `serve` runs possible for the first time, which increases receive work in practice. E003-RX-01 asks for a recheck "before another feature materially expands the receive workload or claims this exception", so the owner decides, before implementation starts, whether E003-RX-01 covers this feature, because it is not inherited by another feature (constitution X) and this feature makes long connected runs possible. The facts (scope, pin, expiry at the start of 2026-12-02 UTC, no renewal) and the owner's answer are recorded in `verification.md` at implementation readiness and again at code review. Its full reassessment belongs with stage 2 or the expiry, whichever comes first. If the exception expires before this feature's code review, the work stops until the owner records a new decision.  [Source: .specify/archive/004-shutdown-drain/spec.md -> "F09 - resource exhaustion"] |
+| F11 - sensitive logs | Only the outcome, category, counts and duration are reported (FR-115, FR-116).  [Source: .specify/archive/004-shutdown-drain/spec.md -> "F11 - sensitive logs"] |
+| F13 - recovery | Offline recovery is unchanged and remains the fallback for every failed check.  [Source: .specify/archive/004-shutdown-drain/spec.md -> "F13 - recovery"] |
+| F14 - incident response | A logout latch still needs durable cleanup before the marker clears (FR-110).  [Source: .specify/archive/004-shutdown-drain/spec.md -> "F14 - incident response"] |
+| F15 - supply chain | No fork, no `replace` and no new dependency (FR-125). The pin moved once, to upstream `f1b7985`, by owner decision with an E003-RX-01 reassessment; the 20 upstream commits were read for reconnect and storage changes, and the new automatic-reconnect paths stay off. The allow-list is revalidated on any version change (FR-117); it is empty.  [Source: .specify/archive/004-shutdown-drain/spec.md -> "F15 - supply chain"] |
+| Others | Not touched by this feature; dispositions in feature 003 stand.  [Source: .specify/archive/004-shutdown-drain/spec.md -> "Others"] |
 
 ### Security requirements
 
@@ -1804,9 +2020,22 @@ after config loading or lock acquisition does not retroactively protect earlier 
 
 - **FR-106**: Automated tests MUST use synthetic credentials, simulated events and controlled version responses, never real account data or live account connections. Real-account verification MUST obtain the user's explicit permission separately for each account-affecting step and record changes and cleanup without secrets.
   [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SEC-007]
+  Automated tests use the simulator and synthetic data only. Each real-account step needs the owner's separate permission and is recorded with redacted results. [Source: .specify/archive/004-shutdown-drain/spec.md -> SEC-006]
 
 - **FR-107**: Dependencies MUST preserve the existing exact-version, module-integrity, reachable-vulnerability and five-platform build rules. No connection or QR dependency may require a C toolchain.
   [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SEC-008]
+
+- **FR-120**: The check fails closed in every case of doubt (FR-109). A false pass is the main new risk: it would let a later run start while lost writes leave sessions, pre-keys or app-state out of step. [Source: .specify/archive/004-shutdown-drain/spec.md -> SEC-001]
+
+- **FR-121**: Network before storage, and the library context cancelled only after both blocks, are invariants with their own tests (FR-108, SC-031). [Source: .specify/archive/004-shutdown-drain/spec.md -> SEC-002]
+
+- **FR-122**: No traffic from a retired generation reaches another generation's connection (FR-111, FR-114, SC-030). [Source: .specify/archive/004-shutdown-drain/spec.md -> SEC-003]
+
+- **FR-123**: Observation data never leaves the check (FR-115). It can hold raw memory words. [Source: .specify/archive/004-shutdown-drain/spec.md -> SEC-004]
+
+- **FR-124**: No new unattended network activity. The only reconnect is the existing post-pair one in `pair`, which the owner starts (FR-112, FR-113). [Source: .specify/archive/004-shutdown-drain/spec.md -> SEC-005]
+
+- **FR-125**: No new dependency, no fork and no `replace`. The pinned client library version changes only by an owner decision with its own E003-RX-01 reassessment. The one change made is the 2026-11-09 move to upstream `f1b7985` (`v0.0.0-20261109152745-f1b798561919`), which fixes a socket read loop that could block forever after a stop. No other module changed. [Source: .specify/archive/004-shutdown-drain/spec.md -> SEC-007]
 
 ### Storage acceptance profile (approved 2026-10-28)
 
@@ -1895,6 +2124,21 @@ case is tested on each platform it covers; one that cannot be run there is recor
 
 The feature's later `verification.md` must record synthetic test evidence, supported-platform coverage, measured bounds, explicitly authorized manual results and any unverified limitations. Specifying a requirement is not evidence that its control has passed. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "The feature's later verification.md must record synthetic test evidence"]
 
+#### Quiet-stop abuse cases and evidence
+
+- Leave a library task running past the deadline: the marker stays unsafe and nothing is written after the storage block. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Leave a library task running past the deadline"]
+- Send from the pairing generation after its network block: the send is refused and never seen by the fresh connection. A new dial is counted and fails the check; a write on a connection the block already closed sends nothing and is counted, but does not fail it. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Send from the pairing generation after its network block"]
+- Write to storage after its block: the write is refused, counted, the check fails and no row changes. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Write to storage after its block"]
+- Read storage after its block, as the library's queued app-state fetches do when the stop lands during a sync: the read is refused and counted separately, nothing changes, and the check does not fail on it. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Read storage after its block, as the library's queued app-state fetches do when the stop lands during a sync"]
+- Cut the observation off at its size bound: the check fails. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Cut the observation off at its size bound"]
+- Deliver a logout during the check, and a stop signal during the check: the marker stays unsafe unless the logout cleanup is durable, and the drain order holds. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Deliver a logout during the check, and a stop signal during the check"]
+- Replay feature 003's late-logout ordering (`TestRunGuardLatePinnedLogoutAfterRetirement`) and a held client-library message handler across retirement, which feature 003 left unproven: the check fails and no clean marker is committed while either is pending. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Replay feature 003's late-logout ordering (`TestRunGuardLatePinnedLogoutAfterRetirement`) and a held client-library message handler across retirement, which feature 003 left unproven"]
+- Make the pairing generation's error tail or QR emitter call disconnect after the fresh connection starts: the call reaches only the retired client and the fresh connection stays up. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Make the pairing generation's error tail or QR emitter call disconnect after the fresh connection starts"]
+- Refuse the marker clear for low disk: the marker stays unsafe and the operator is told what to do. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Refuse the marker clear for low disk"]
+- Capture every log level during each case: no raw observation data, keys or account identifiers. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Capture every log level during each case"]
+
+`verification.md` records the simulator results, the measured pass rate, the platforms covered and any permitted real-account results. Anything not run is reported as not verified. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Abuse Cases and Verification"]
+
 ## Success Criteria
 
 ### Measurable Outcomes
@@ -1950,9 +2194,6 @@ The feature's later `verification.md` must record synthetic test evidence, suppo
   The "Storage" section of
   `OPERATIONS.md` covers FR-080/FR-082/FR-083 and identifies the owner of encryption, backups, retention and recovery objectives.
 
-- **SC-019**: Scripted attempts, including failure and cancellation, retain unsafe state after orderly drain; restart requests neither connection nor QR until offline recovery. Clean-marker saved-session startup is tested separately without implying post-attempt reuse.
-  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-001]
-
 - **SC-020**: Scripted logout and unresolved timeout deny a new same-process attempt after production Connect; offline recovery and separately approved pairing preserve conversation records.
   [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-002]
 
@@ -1965,9 +2206,6 @@ The feature's later `verification.md` must record synthetic test evidence, suppo
 - **SC-023**: All cancellation and shutdown race scenarios demonstrate zero device writes after storage closes and zero lock release before device activity is quiescent.
   [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-005]
 
-- **SC-024**: The manual journey documents the temporary unsafe restart and offline recovery; each account-affecting step requires separate recorded permission and redacted results. Unperformed checks remain unverified; no-scan restart and same-process re-pair are follow-up goals.
-  [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-007]
-
 - **SC-025**: Offline substitute tests cover every connection-boundary capability in FR-094 without a real account. Simulated command tests cover both `stdio` and `serve`, with and without saved sessions, and observe zero exposed tools, listeners or unsolicited QR attempts in this feature.
   [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-008]
 
@@ -1976,6 +2214,20 @@ The feature's later `verification.md` must record synthetic test evidence, suppo
 
 - **SC-027**: Synthetic startup failures and timeouts in both shells produce at most three five-second-delayed retries only when same-active-generation safety is demonstrated; otherwise no retry occurs and the limitation is reported. Successful connection or cancellation stops the sequence. Stalled owner-initiated initial and permitted retry, 405 and 515 attempts initiate cancellation at 30 seconds, retain the slot and ownership until drain and never open an unsolicited pairing window.
   [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-010]
+
+- **SC-028**: On the simulator, every scripted orderly stop with no leftover work and no refused calls clears the marker, and the next start connects with zero offline recoveries and zero QR codes. [Source: .specify/archive/004-shutdown-drain/spec.md -> SC-001]
+
+- **SC-029**: Every scripted fault (leftover work at the deadline, a refused network call, a refused storage call, a cut-off observation, a logout without durable cleanup, a crash or a forced exit) leaves the marker unsafe: zero false clears across all fault scripts. Refusal cases that do not fail the check are defined in FR-109. [Source: .specify/archive/004-shutdown-drain/spec.md -> FR-002] [Source: .specify/archive/004-shutdown-drain/spec.md -> SC-002]
+
+- **SC-030**: Across scripted post-pair runs that inject late sends from the pairing generation, zero of them reach the fresh connection. [Source: .specify/archive/004-shutdown-drain/spec.md -> SC-003]
+
+- **SC-031**: A test proves that storage is never blocked while that generation's network can still receive, and that reversing the order fails the test. [Source: .specify/archive/004-shutdown-drain/spec.md -> SC-004]
+
+- **SC-032**: The pass rate of the check is measured over at least 50 simulated orderly stops of each kind (`pair` with post-pair reconnect, `stdio`, `serve`) and recorded in `verification.md`. The bar is at least 90% for `stdio` and `serve` stops, and at least 90% for the pairing generation's check before the post-pair reconnect. A rate below either bar does not fail the feature by itself: it is recorded, and the owner decides before the code review whether to keep option A, tune it, or move to the fork (option B). [Source: .specify/archive/004-shutdown-drain/spec.md -> SC-005]
+
+- **SC-033**: Captured diagnostics at every log level contain zero raw observation data, keys, QR payloads or full account identifiers. [Source: .specify/archive/004-shutdown-drain/spec.md -> SC-006]
+
+- **SC-034**: With separate permission for each step, one real-account run of `pair`, a normal stop, and a restart with the saved session (`stdio`, or the `session-check -action connect` helper) without recovery is recorded with redacted results, or recorded as not verified if not performed. This closes feature 003's open gap "a real reuse of a clean saved session". The observed pass or fail of each check is recorded. [Source: .specify/archive/004-shutdown-drain/spec.md -> SC-007]
 
 ## Assumptions
 
@@ -2050,6 +2302,18 @@ The feature's later `verification.md` must record synthetic test evidence, suppo
 
 - **AS-024**: The owner approved reusing the existing store budgets on device calls, an embedded repair-metadata migration and a separate unsafe-run marker migration. Schema/transport safeguards are mandatory and outside the receive exception; metadata does not imply message ingest or a new account-management command. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "The owner approved reusing the existing store budgets on device calls, an"]
 
+- **AS-025**: The check's observation deadlines (one for an ordinary stop, possibly a shorter one before the post-pair reconnect) are fixed constants, not settings. A test-only measurement on the simulator, the first phase of implementation and part of the planning evidence, shows how long leftover library work takes and proposes the values. The owner approves them before any production code uses the check to clear the marker (the library's own bounded wait in its disconnect, 5 seconds, is a reference point, not a decision), and any later change needs the owner's review. [Source: .specify/archive/004-shutdown-drain/spec.md -> "The check's observation deadlines (one for an ordinary stop, possibly"]
+
+- **AS-026**: Stopping the pairing generation and loading the device again between pairing and the fresh connection may change what WhatsApp sees. On the real account the restart request came 0.6 to 0.8 s after the pairing success and the follow-up connection was made about 0.2 s later (feature 003 `verification.md`); the check adds up to its deadline to that gap. This is unverified and needs a permitted real-account run. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Stopping the pairing generation and loading the device again between"]
+
+- **AS-027**: If the permitted real-account run shows that the fresh-client reconnect does not complete a link, the owner decides before the code review whether to fix it, keep feature 003's same-client post-pair reconnect with the marker left unsafe, or stop the feature. Removing the code-level switch (FR-112) removes feature 003's fallback of turning it off, so this decision replaces that fallback. [Source: .specify/archive/004-shutdown-drain/spec.md -> "If the permitted real-account run shows that the fresh-client reconnect"]
+
+- **AS-028**: The existing store block already refuses calls after retirement; this feature adds a count of refusals and other guard or context failures and a matching block for network traffic. The simulator runs in the same process as the client, so its own websocket server goroutines may be counted as library work in measurements; the owner decides at the deadline gate how to treat that. [Source: .specify/archive/004-shutdown-drain/spec.md -> "The existing store block already refuses calls after retirement; this"]
+
+- **AS-029**: The client library version stays pinned. A version change (including a pin past upstream change `2fc844f`) is a separate decision with its own E003-RX-01 reassessment. One such change was made: on 2026-11-09 the owner moved the pin to upstream `f1b7985` (`go.mau.fi/whatsmeow v0.0.0-20261109152745-f1b798561919`) and reassessed E003-RX-01 for it. [Source: .specify/archive/004-shutdown-drain/spec.md -> "The client library version stays pinned. A version change (including"]
+
+- **AS-030**: Feature 003's recovery prompt wording is tracked separately in `docs/backlog/003-offline-recovery-prompt-usability.md` and is not changed here. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Feature 003's recovery prompt wording is tracked separately in `docs/backlog/003-offline-recovery-prompt-usability.md`"]
+
 ## Scope and References
 
 This feature covers `docs/roadmap.md` 003 and `docs/specification.md` section 8: A3 (`pair` and `status`), A5 (testable connection boundary), P4 (pairing/status state), P5 (version refresh and 405 recovery), M9 (recoverable QR pairing), the WhatsApp log bridge and shutdown portions of M10, and D11 (QR only). Sections 3.4 and 3.6 define preserved events, retry timings and pairing semantics; section 6 defect 16 is explicitly corrected. A2/D14, G1 and constitution Principles I-X remain constraints. Decisions D1-D18 are not reopened. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "This feature covers `docs/roadmap.md` 003 and `docs/specification.md`"]
@@ -2057,3 +2321,9 @@ This feature covers `docs/roadmap.md` 003 and `docs/specification.md` section 8:
 Included: connection lifecycle, shared saved-session use, terminal pairing, local status, current QR availability for future callers, offline substitutes, version refresh, bounded outdated-client recovery and device-write shutdown ordering identified in feature 002's design review. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Included: connection lifecycle, shared saved-session use, terminal"]
 
 Excluded: message/history ingest, LID merging and name resolution (004); MCP tool registration and QR image transport (005); sending and media handling (007-008); HTTP, proxying and daemon status queries (009); webhooks (010); phone-code pairing, new account-management commands, multiple accounts, REST and old-deployment migration. Device-session persistence needed by linking is included; application message persistence is not. [Source: .specify/archive/003-whatsapp-pairing-status/spec.md -> "Excluded: message/history ingest, LID merging and name resolution"]
+
+This feature covers stage 1 of the roadmap follow-up "WhatsApp logout and shutdown drain" and the backlog item `docs/backlog/003-post-pair-reconnect-and-unsafe-marker.md` (debts 1, 2 and 4). It revises the §8.11 entries of 2026-11-04 (temporary fail-closed connection limitation) and 2026-11-06 (post-pair reconnect) for this feature, and keeps M10's shutdown ordering. Decisions D1–D18 are not reopened. [Source: .specify/archive/004-shutdown-drain/spec.md -> "This feature covers stage 1 of the roadmap follow-up"]
+
+Included: the per-generation network block and refusal count, the storage refusal count, the quiet-stop check and its allow-list, clearing the marker after a passed stop, the fresh-client post-pair reconnect, removal of the code-level switch, stop diagnostics, and simulator tests and measurements. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Included: the per-generation network block and refusal count, the"]
+
+Excluded: the 405 budget, startup retries, ordinary reconnect, other 515 reconnects and same-process re-pair (stage 2, a later feature, after the pass rate is known, with a rate limit and a reassessed E003-RX-01); a whatsmeow fork or any other dependency change (option B, a separate owner decision; the 2026-11-09 pin move to upstream `f1b7985` is the one change made); the upstream proposal in the whatsmeow Matrix room (option C, a separate outward-facing step by the owner); replacing the observation with a process exit (an untested idea); message ingest (feature 005); the recovery prompt wording. [Source: .specify/archive/004-shutdown-drain/spec.md -> "Excluded: the 405 budget, startup retries, ordinary reconnect, other"]

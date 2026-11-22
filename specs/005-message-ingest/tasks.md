@@ -178,7 +178,7 @@ terminal signal, and the command's exit on a terminal failure. Depends on T003 a
   after step 8 with the handler callbacks, `Terminal()`, `Health().IngestFailed`, `Health().ReceiveOverload`,
   `QuietStopResult.DroppedMessages` in the stop log with "messages may be missing" when non-zero. Then wire
   `cmd/whatsapp-mcp/commands.go` (`serve`, `stdio`, `pair`) to wait on `owner.Terminal()` beside the lifecycle and exit 1 with
-  the message of T014. Update `specs/004-shutdown-drain/contracts/quiet-stop.md`'s event-count rule only by pointing to
+  the message of T014. Update `.specify/archive/004-shutdown-drain/contracts/quiet-stop.md`'s event-count rule only by pointing to
   contracts/ingest.md "Revised event-count rule". Make T012–T014 pass.
 - [X] T024 Adapt feature 004's `TestSimulatorStopDuringQueuedAppStateFetches` in `internal/wa/appstate_stop_test.go`
   to `SynchronousAck`: `server_sync` fetches now run inline on the handler (plan, "What `SynchronousAck` changes in the

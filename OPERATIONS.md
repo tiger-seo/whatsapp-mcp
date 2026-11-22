@@ -237,7 +237,7 @@ release the store.
   on native Windows only (not yet on the CI runners or WSL2). The 1 s and 2 s deadlines are about 100 times the
   slowest measured simulator check; real checks took 230 to 480 ms. A server disconnect during a stop was not tried on a real account.
   The check counts goroutines process-wide, so a goroutine leaked by anything else in the process fails it.
-  Evidence: `specs/004-shutdown-drain/verification.md`.
+  Evidence: `.specify/archive/004-shutdown-drain/verification.md`.
 - **Not checked:** power loss and OS crash; macOS `F_FULLFSYNC` hardware flushes; interactive recovery on a real
   console, Linux terminal or macOS terminal; a kill between pairing and the first save; a second real account or
   phone model (every real run used one account and one phone).

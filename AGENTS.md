@@ -30,8 +30,8 @@ feature security decisions. `docs/roadmap.md` orders the features. The storage s
 ### `specs/NNN-*/`: feature specs
 Every feature so far: 001 binary skeleton, 002 SQLite storage, 003 connection, pairing and status (all merged), 004
 shutdown drain (pull request #11). Each has `spec.md`, `plan.md`, `tasks.md`, contracts and a `verification.md` with
-the evidence. The binary skeleton, storage, and connection/pairing/status baselines are consolidated in
-`.specify/memory/spec.md` and `.specify/memory/plan.md`; the original feature artifacts for 001–003 are in
+the evidence. The binary skeleton, storage, connection/pairing/status and shutdown-drain baselines are consolidated in
+`.specify/memory/spec.md` and `.specify/memory/plan.md`; the original feature artifacts for 001–004 are in
 `.specify/archive/`.
 
 ### `.specify/memory/constitution.md`: principles
@@ -115,6 +115,8 @@ push and pull request.
 
 ## Active Technologies
 
+- Feature 004 historical baseline: Go 1.27.0 (`go1.27.3`, CGO disabled); the owner moved whatsmeow to upstream `v0.0.0-20261109152745-f1b798561919` to fix the socket read-loop leak. No new module, fork or `replace` was added by this feature. This is not current pin guidance. [Source: .specify/archive/004-shutdown-drain/plan.md -> "Language/Version"] [Source: .specify/archive/004-shutdown-drain/plan.md -> "Primary Dependencies"]
+
 - Binary-skeleton baseline: Go 1.27.0 with the `go1.27.3` toolchain and `CGO_ENABLED=0`; pure-Go
   `gofrs/flock` and `pelletier/go-toml/v2`. These are archival baseline versions, not current pin guidance.
   [Source: .specify/archive/001-binary-skeleton/plan.md -> "Primary Dependencies"] [Source: .specify/archive/001-binary-skeleton/verification.md -> "Toolchain"]
@@ -126,6 +128,8 @@ push and pull request.
   [Source: .specify/archive/003-whatsapp-pairing-status/plan.md -> "Primary Dependencies"] [Source: .specify/archive/003-whatsapp-pairing-status/verification.md -> "Setup T002"]
 
 ## Project Structure
+
+- In the quiet-stop path, `internal/wa/fence.go` isolates each generation's network, `quiet.go` observes bounded library work, and the owner coordinates retirement and fresh-client handover. `internal/store` owns the barrier's in-memory refusal counts; the CLI reports the outcome. No schema migration. [Source: .specify/archive/004-shutdown-drain/plan.md -> "Source Code (repository root)"] [Source: .specify/archive/004-shutdown-drain/plan.md -> "Storage"]
 
 - The CLI owns startup and signal wiring. `internal/config` owns the settings registry and directory
   resolution, `internal/lock` owns exclusive access, and `internal/buildinfo` owns build metadata.
@@ -139,6 +143,7 @@ push and pull request.
 
 ## Recent Changes
 
+- [specs/004-shutdown-drain](.specify/archive/004-shutdown-drain/spec.md): Archived proven quiet-stop reuse, the fresh-client post-pair handover and stderr failure diagnostics. A failed check still requires offline recovery.
 - [specs/003-whatsapp-pairing-status](.specify/archive/003-whatsapp-pairing-status/plan.md): Historical pairing, offline status, guarded persistence and fail-closed recovery baseline; consult its verification for evidence and limitations.
 - [specs/002-sqlite-storage](.specify/archive/002-sqlite-storage/spec.md): Archived the SQLite lifecycle, migrations, query contracts and storage safeguards.
 - [specs/001-binary-skeleton](.specify/archive/001-binary-skeleton/spec.md): Archived the CLI, configuration, locking, shutdown, privacy and CI baseline.
@@ -157,6 +162,11 @@ the user unlinking the device on the phone, then deleting the directory. Record 
 `verification.md`; a step not run is "not verified". Automated tests use `internal/wasim` only.
 
 ## Known Issues & Gotchas
+
+### Feature 004 Historical: Lost Post-Pair Restart Request
+**Issue:** On the feature 004 pin, a server close simultaneous with the post-pair restart request could leave the link incomplete.
+**Root Cause:** Cancellation of the socket context could win before the library delivered the request to the owner.
+**Prevention Rule:** Do not treat pairing success alone as a usable link. Bound the wait to 30 seconds, refuse a late request, leave the marker unsafe and report incomplete linking for offline recovery. [Source: .specify/archive/004-shutdown-drain/verification.md -> "Lost restart request on Linux CI"]
 
 ### Feature 003 Historical: Disconnect Does Not Prove Drain
 **Issue:** Retired clients can still have work in flight after disconnect.
@@ -212,7 +222,7 @@ recording wrapper (see `internal/wa/appstate_stop_test.go`), then decide.
 ### ⚠️ The Stop Order Is a Safety Invariant
 **Symptom:** a change to retirement looks harmless and the order test fails, or worse, a write is lost.
 **Cause:** the quiet-stop rules depend on the order work cancel → `Disconnect` → network fence → storage barrier →
-library context (`contracts/quiet-stop.md` in `specs/004-shutdown-drain/`). A write after the fence closed sends
+library context (`contracts/quiet-stop.md` in `.specify/archive/004-shutdown-drain/`). A write after the fence closed sends
 nothing, and a read refused after the barrier changes nothing and cannot reach the network, so neither fails the
 check; both arguments hold only in that order.
 **Rule:** never swap the fence and the barrier or cancel the library context earlier. A new store method must set the

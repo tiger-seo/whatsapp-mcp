@@ -2,6 +2,25 @@
 
 ## Merged Features Log
 
+### Reusable Session After a Proven Quiet Stop — archived 2026-11-22
+**Branch:** 004-shutdown-drain
+**Spec:** [specs/004-shutdown-drain/spec.md](../archive/004-shutdown-drain/spec.md)
+
+**What was added:**
+- Reuse a saved session after a proven quiet stop, with fail-closed recovery when the check or another clear prerequisite fails.
+- Run the single post-pair reconnect on a fresh client and generation; remove the switch without enabling other retry paths.
+- Report the quiet-stop outcome and safe failure categories on stderr without exposing raw observations.
+
+**New Components:**
+- Per-generation network fence and bounded quiet-stop observation in `internal/wa`, in-memory device-barrier refusal accounting in `internal/store`, and command outcome wiring.
+
+**Superseded:**
+- RETIRED: SC-019 (from .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-001) → replaced by SC-028. Reason: Proved quiet attempts can be reused; SC-029 exercises unsafe retention in fault cases.
+- RETIRED: SC-024 (from .specify/archive/003-whatsapp-pairing-status/spec.md -> SC-007) → replaced by SC-034. Reason: The separately authorized journey now exercises a restart without recovery.
+- RETIRED: "Temporary restriction" (from .specify/archive/003-whatsapp-pairing-status/data-model.md -> "Unsafe-Run Marker") → replaced by FR-110. Reason: A passed quiet-stop check and all other prerequisites permit orderly clear after a production attempt.
+
+**Tasks Completed:** 47/47 tasks
+
 ### WhatsApp Connection, Pairing and Status — archived 2026-11-22
 **Branch:** 003-whatsapp-pairing-status
 **Spec:** [specs/003-whatsapp-pairing-status/spec.md](../archive/003-whatsapp-pairing-status/spec.md)
