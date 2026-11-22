@@ -1036,6 +1036,9 @@ After the drain failure latches, the next writer-pool calls must fail without wa
 | code | 2026-11-20 | c8c504d12e42ef88cddbcaf591527112cdf72bf6 | BLOCK | |
 | code | 2026-11-20 | e06ac9a3bd29bcce129218942cc626d2b815b264 | BLOCK | |
 | code | 2026-11-20 | d539ae917549704136130bba9f01c6e94a8f111f | BLOCK | |
+| code | 2026-11-22 | 00353d0212c0dcf95ecb2947f12f1cc77c40cb07 | PASS | |
+
+The formal review checked the committed CI evidence and confirmed that the reviewed runtime tree matches `5aaaca4`. The reviewer could not run Go commands in its session. Separately, on 2026-11-22 the focused Windows/amd64 regression command above was rerun with `CGO_ENABLED=0`, `-count=1`, and `-timeout 3m`: exit 0, both packages passed; plain output did not count skips.
 
 The `d539ae9` review used the `owner-judge` rubric with GPT-6.2 Sol at High reasoning. It confirmed that the reader-first write failure and the malformed TOML, wrong-type and invalid `log_level` diagnostics from the prior review were addressed. Remaining blockers: a competing normal stop can still suppress an already-published stdout failure (`internal/mcp/connection.go:165`); a late write acknowledgment can win over the five-second deadline (`internal/mcp/transport.go:432`); and oversized `config.toml` is given syntax/type guidance instead of the size-limit remedy (`cmd/whatsapp-mcp/commands.go:838`). The review also flagged missing committed native evidence, now recorded locally above. The oversized tool-result audit category remains nonblocking. No new tests were run in review, no historical intermittent failure was attributed to these findings, and no finding was parked.
 
