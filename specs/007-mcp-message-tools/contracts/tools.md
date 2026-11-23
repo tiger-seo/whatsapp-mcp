@@ -32,6 +32,7 @@ Use MCP tool errors, not successful empty lists or internal exceptions, for inva
 | Condition | Public behaviour |
 | --- | --- |
 | Invalid input | Name the argument or incompatible range; do not echo its value. |
+| Local store unavailable | Return `unavailable` in both renderings, with no result data or continuation. A closed store directs the caller to check the local session; a low-disk refusal gives a safe disk-space explanation. Do not suggest changing search filters or triggering recovery. |
 | Missing exact/unique message or no last interaction | Identify what was not found without returning a different match. An explicit chat never falls back. |
 | ID in 2–100 chats | Distinct `ambiguous_id` error; bounded structured `matching_chats` strings in ascending order, plus the same safe list in readable text. Ask for `chat_jid`. |
 | ID in more than 100 chats | Limit error explaining there were too many matching chats; ask for `chat_jid`. Do not list a subset. |

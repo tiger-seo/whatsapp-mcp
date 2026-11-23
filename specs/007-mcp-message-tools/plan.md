@@ -28,7 +28,7 @@ Add `list_messages`, `get_message_context` and `get_last_interaction` to the exi
 
 **Constraints**: Preserve store/admission, wire, stderr, shutdown and WAL controls. Use a single bounded snapshot per call and retain accounting through actual release. The local owner read boundary stays unchanged. No real account access.
 
-**Scale/Scope**: Three read-only tools; base page 1–200, checked offset at most 100,000, context at most 20 per side and 2,000 context rows per call. Require complete results for the representative sparse and no-match 400,000-message fixtures and the large-field history fixture before accepting production search-work ceilings. This is not an unbounded history scan guarantee. See [research.md](research.md) and the [store contract](contracts/store-and-lifecycle.md).
+**Scale/Scope**: Three read-only tools; base page 1–200, checked offset at most 100,000, context at most 20 returned neighbours per side and 2,000 context row touches per call. Verify the row ledger and accurate reduction flags at the row cap independently of reply-byte trimming. Require complete results for the representative sparse and no-match 400,000-message fixtures and the large-field history fixture before accepting production search-work ceilings. This is not an unbounded history scan guarantee. See [research.md](research.md) and the [store contract](contracts/store-and-lifecycle.md).
 
 ## Constitution Check
 

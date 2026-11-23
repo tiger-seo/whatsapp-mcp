@@ -24,6 +24,28 @@
 | 2026-11-23 | `go test -mod=readonly -overlay D:/tmp/kilo/wa007_mcp_overlay.json ./internal/mcp -count=1 -timeout 45s -v -run '^TestScratch007GuardedContext$'` | Exit 0; two synthetic subtests, 98 guarded calls, all 50 identities recovered in each subtest on Windows/amd64 with `CGO_ENABLED=0`, `GOPROXY=off`. No SQLite projection or native framing in this probe. |
 | 2026-11-23 | `go test -mod=readonly -overlay D:/tmp/kilo/wa007_wal_overlay.json ./internal/store -count=1 -timeout 45s -v -run '^TestScratch007CandidateWAL$'`, then the same command with `-count=3` | Both exited 0 on Windows/amd64 with `CGO_ENABLED=0`, `GOPROXY=off`; four passes. See [WAL pressure results and limitations](feasibility.md#admitted-query-under-wal-pressure-2026-11-23). |
 | 2026-11-23 | `go test -mod=readonly -overlay D:/tmp/kilo/wa007_mcp_overlay.json ./internal/mcp -count=1 -timeout 60s -v -run '^TestScratch007SQLiteGuardedContext$'` | Exit 0 on Windows/amd64 with `CGO_ENABLED=0`, `GOPROXY=off`; two SQLite-backed fixtures and 100 guarded requests including both terminal empty pages. See [continuation results and limitations](feasibility.md#sqlite-to-guarded-mcp-continuation-2026-11-23). |
+| 2026-11-23 | `git diff --check -- specs/007-mcp-message-tools`; `git ls-files --eol -- specs/007-mcp-message-tools`; `git grep -E -o '^[-] \[[ xX]\] T[0-9]{3}' -- specs/007-mcp-message-tools/tasks.md` with PowerShell sequential ID validation | Exit 0 for all three checks: no whitespace errors, 10 LF files, and 36 sequential task IDs. Documentation checks only for the context lookahead, unavailability and WAL acceptance refinements; no new runtime evidence. |
+| 2026-11-23 | `go test -mod=readonly -overlay D:/tmp/kilo/wa007_mcp_overlay.json ./internal/mcp -count=3 -timeout 60s -v -run '^TestScratch007ContextRowCap$'` | Exit 0; three runs each charged exactly 2,000 row touches and matched both renderings against seeded history. |
+| 2026-11-23 | `go run -mod=readonly D:/tmp/kilo/wa007_batch_probe.go D:/tmp/kilo/wa007_seek_fold_probe.go` | Exit 0; 12 search/limit trials, six filtered batch checks, four plan-only checks and one standalone cancellation check. |
+| 2026-11-23 | `go run -mod=readonly D:/tmp/kilo/wa007_fold_bound_probe.go` | Exit 0; 1,112,064 singleton scalars and eight long patterns measured, not a proof of an arbitrary-string bound. |
+| 2026-11-23 | `go test -mod=readonly -overlay D:/tmp/kilo/wa007_mcp_overlay.json ./internal/mcp -count=1 -timeout 60s -v -run '^TestScratch007SQLiteGuardedContext$'` | Exit 0; two fixtures, 100 guarded requests. |
+| 2026-11-23 | `go test -mod=readonly -overlay D:/tmp/kilo/wa007_wal_overlay.json ./internal/store -count=3 -timeout 60s -v -run '^TestScratch007CandidateWAL$'` | Exit 0; three admitted reader cancellation and writer fence runs. |
+
+The five scratch commands above ran on Windows/amd64 with `CGO_ENABLED=0` and `GOPROXY=off`. See [measurements and remaining work](feasibility.md#context-row-cap-and-probe-reruns-2026-11-23). Linux and macOS were not run.
+
+| Date | Check | Result |
+| --- | --- | --- |
+| 2026-11-23 | `go run -mod=readonly D:/tmp/kilo/wa007_unicode_proof.go` | Exit 0; measured the two scalar inequalities across all 1,112,064 Unicode scalars and checked six repeated-scalar cases on the Go 1.27.4 Unicode 17.0 tables. |
+| 2026-11-23 | `go test -mod=readonly -overlay D:/tmp/kilo/wa007_integrated_overlay.json ./internal/mcp -count=1 -timeout 120s -v -run '^TestScratch007Integrated$'` | Exit 0 on two runs after mapping the scratch work-limit sentinel to `store.ErrResourceLimit`. The final run (66.368 s package time) covered six search/limit requests, 100 guarded continuation requests, two sets of eight writer commits and sampled process memory. Earlier attempts failed the work-limit assertion; no production code changed. |
+
+Both commands ran on Windows/amd64 with `CGO_ENABLED=0` and `GOPROXY=off`. See the [integrated results and remaining gaps](feasibility.md#integrated-admission-and-fold-envelope-2026-11-23).
+
+| Date | Check | Result |
+| --- | --- | --- |
+| 2026-11-23 | `go run -mod=readonly D:/tmp/kilo/wa007_lookup_close.go` | Exit 0; exact pair/no-fallback, bounded ID-only 2/100/101/102 cases, 20 deep-offset alias matches and latest direct/group reference comparison. |
+| 2026-11-23 | `go test -mod=readonly -overlay D:/tmp/kilo/wa007_integrated_overlay.json ./internal/mcp -count=1 -timeout 120s -v -run '^TestScratch007Integrated$'` | Exit 0; 61.074 s package time; eight search/limit requests and 100 guarded continuation requests. Fixed 256-key batch and scratch-only 32 MiB hard SQLite process limit. |
+
+Both runs used Windows/amd64 with `CGO_ENABLED=0` and `GOPROXY=off`. See [fixed-ceiling evidence](feasibility.md#fixed-ceiling-verification-2026-11-23) for the design allocation bounds and limitations.
 
 The owner approved the S6 duplicate-ID overflow rule on 2026-11-23: list all matching chats for 2–100; at 101 or more, require `chat_jid` without returning a chat list or selecting a message. See the [S6 amendment](../../docs/specification.md#85-storage). This resolves the documentation conflict, not the feasibility or design-review gate.
 
