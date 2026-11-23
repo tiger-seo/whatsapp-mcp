@@ -24,7 +24,7 @@ Add `list_messages`, `get_message_context` and `get_last_interaction` to the exi
 
 **Project Type**: One existing CLI binary; no new service, transport or runtime configuration.
 
-**Performance Goals**: Default 50-match maximum-field-size context fixture completes within the existing 10-second tool budget; the store request remains subject to the 5-second cancellation trigger. Limit tests distinguish cancellation requested from actual return.
+**Performance Goals**: Treat successful completion within the existing 10-second tool budget as a pass/fail condition through the delivered guarded SDK path for both variants of the default 50-match maximum-field-size context fixture and both default 400,000-row searches. Time the request through receipt of the reply, excluding fixture setup. The store remains subject to the 5-second cancellation trigger; lifecycle tests distinguish cancellation requested from actual return.
 
 **Constraints**: Preserve store/admission, wire, stderr, shutdown and WAL controls. Use a single bounded snapshot per call and retain accounting through actual release. The local owner read boundary stays unchanged. No real account access.
 
@@ -36,7 +36,7 @@ Add `list_messages`, `get_message_context` and `get_last_interaction` to the exi
 
 | Principles | Design assessment and required evidence |
 | --- | --- |
-| I, VII | Preserve project S3, S6, P1, M4–M7, M10, D9 and D18; trace FR-001–FR-012 and SC-001–SC-005 through the tool contract and acceptance fixtures. Validate real defaults, identity, ordering and message shape through the SDK. |
+| I, VII | Preserve project S3, S6 (including the owner-approved 2026-11-23 ambiguity bound), P1, M4–M7, M10, D9 and D18; trace FR-001–FR-012 and SC-001–SC-005 through the tool contract and acceptance fixtures. Validate real defaults, identity, ordering and message shape through the SDK. |
 | II, IX | One pure-Go module and binary; no dependency or account backend change. Retain the five build targets; no new configuration, API transport or compatibility layer. |
 | III, VIII | Single store owner and lock, no network/account capability passed to tools, no message or identity writes; verify on synthetic data only. |
 | IV, V, X | Preserve private storage and existing local-read scope (F01/F03), bound search and encoding without bypassing admission or drain (F09/F10), and use redacted diagnostics (F11). The [store contract](contracts/store-and-lifecycle.md) specifies enforcement and evidence gates. No exception, deployment approval, or broader finding closure is claimed. |
