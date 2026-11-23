@@ -68,6 +68,25 @@ Not verified. The indexed query and driver-return feasibility checks, actual hea
 | 2026-11-23 | `CGO_ENABLED=0 go test ./internal/mcp -count=1 -timeout 5m` | Exit 0; full MCP package regression suite on Windows/amd64 (package 97.775 s); test count not captured by the non-verbose run. |
 | 2026-11-23 | `CGO_ENABLED=0 go vet ./internal/store ./internal/mcp`; `gofmt -l` on the seven changed Go files; `git diff --check` | Exit 0 for each on Windows/amd64; no formatting or whitespace output. Feature acceptance, other native platforms and complete resource-share measurements remain unverified. |
 
+## Phase 3 Progress (2026-11-23)
+
+Phase 3 has synthetic store and SDK evidence, but the feature is not verified for delivery. All runs used synthetic fixtures on Windows/amd64 with `CGO_ENABLED=0`; no real account was used. Earlier deadline failures are retained below. Prepared-statement reuse and the large-field validation fast path were added after those failures.
+
+| Command | Result |
+| --- | --- |
+| `go test ./internal/mcp -run '^TestMessage(List\|Budget)' -count=1 -timeout 5m -v` | Exit 0; eight top-level tests, including continuation, context-row accounting, maximum offset and SDK argument/representation cases; package 162.324 s. Run before the final one-match search adjustment. |
+| `go test ./internal/mcp -count=1 -timeout 5m` | Exit 0; full MCP package, 257.245 s; test count not captured. Run before the final search query changes. |
+| `go test ./internal/store -run '^TestToolMessageSearch' -count=1 -timeout 3m -v` | Latest run exit 1: 7 top-level tests, with `TestToolMessageSearchOlderAfterLargeFields` and the `not-present` 400,000-row subtest hitting the store's 5-second deadline. Sparse 400,000-row subtest passed in 4.47 s. Earlier runs passed both scale subtests at 4.40 s and 4.39 s, and the large-field fixture separately, but that does not establish reliable deadline compliance. |
+| `go vet ./internal/store ./internal/mcp` | Exit 0 before final one-match search adjustment. |
+| `git diff --check` | Exit 0 before final one-match search adjustment. |
+| `go test ./internal/store -run '^TestToolMessageSearch' -count=1 -timeout 3m -v` | Exit 0; seven top-level tests. Sparse and empty 400,000-row searches took 3.02 s and 3.97 s; older match after 128 maximum-size nonmatches passed. Run before the final key-materialization guard. |
+| `go test ./internal/store -run '^TestToolMessageSearch(Keys\|RejectsOversizedKey\|Scale)$' -count=1 -timeout 3m -v` | Exit 0 after the key-materialization guard; three top-level tests, 400,000-row sparse 3.24 s and empty 3.03 s. Includes the 400,002-row exhaustion check. |
+| `go test ./internal/mcp -run '^TestMessage(List\|Budget)' -count=1 -timeout 5m -v` | Exit 0; eight top-level tests, package 50.071 s. Run before the final key-materialization guard and before explicit request timing was added. |
+| `go test ./internal/mcp -run '^TestMessageBudgetContinuation$' -count=1 -timeout 3m -v` | Exit 0 after the guard; one top-level test, two 50-anchor continuation fixtures. Initial guarded default-context reply, including test result validation, took 435.1164 ms ordinary and 234.1418 ms escape-heavy. Both recovered all 50 identities. |
+| `go vet ./internal/store ./internal/mcp`; `git diff --check` | Exit 0 for each after the key-materialization guard. |
+
+The independent review identified oversized-key materialization, malformed UTF-8 and batch overscan risks. The current implementation includes fixes and synthetic regressions, but the feature still needs its owner code review. Native Linux/macOS, delivered SDK 400,000-row timing, and the remaining feature-wide verification have not been run. The existing `.gitignore` modification predates this work and was not changed.
+
 ## Owner reviews
 
 | Stage | Date | Commit | Verdict | Owner decision |

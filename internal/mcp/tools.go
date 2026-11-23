@@ -326,6 +326,9 @@ func validIdentity(s string, contact bool) bool {
 }
 
 func toolSchemas(tool string) (map[string]any, map[string]any) {
+	if tool == "list_messages" {
+		return messageListSchemas()
+	}
 	str := func(max int) map[string]any { return map[string]any{"type": "string", "maxLength": max} }
 	props := map[string]any{}
 	required := []string{}

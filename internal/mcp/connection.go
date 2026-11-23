@@ -112,6 +112,8 @@ func diagnosticToolIdentity(name string) DiagnosticTool {
 		return DiagnosticDirectChat
 	case "get_contact_chats":
 		return DiagnosticContactChats
+	case "list_messages":
+		return DiagnosticListMessages
 	default:
 		return DiagnosticToolUnknown
 	}

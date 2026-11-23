@@ -120,3 +120,109 @@ func encodeMessageList(messages []Message) *sdk.CallToolResult {
 	}
 	return &sdk.CallToolResult{StructuredContent: json.RawMessage(structured), Content: []sdk.Content{&sdk.TextContent{Text: text}}}
 }
+
+type messageContextHit struct {
+	Message
+	Before        []Message `json:"before"`
+	After         []Message `json:"after"`
+	BeforeReduced bool      `json:"before_reduced"`
+	AfterReduced  bool      `json:"after_reduced"`
+	PreviewFields []string  `json:"preview_fields,omitempty"`
+}
+
+type messageNextPage struct {
+	Page  int `json:"page"`
+	Limit int `json:"limit"`
+}
+
+type messageContextPage struct {
+	Messages     []messageContextHit `json:"messages"`
+	PageReduced  bool                `json:"page_reduced"`
+	NextPage     *messageNextPage    `json:"next_page,omitempty"`
+	NarrowSearch bool                `json:"narrow_search,omitempty"`
+}
+
+func messageListPolicy(s *messageSizing, includeContext bool) store.MessageListPolicy {
+	return func(row store.MessageView, anchor, first bool) (store.MessageView, bool, error) {
+		m, ok := messageProjection(row)
+		if !ok {
+			return store.MessageView{}, false, errors.New("invalid stored message projection")
+		}
+		if s.admit(m) {
+			return row, true, nil
+		}
+		if !includeContext || !anchor || !first {
+			return store.MessageView{}, false, nil
+		}
+		row.Text = messagePreview(row.Text)
+		row.Caption = messagePreview(row.Caption)
+		m, ok = messageProjection(row)
+		if !ok || !s.admit(m) {
+			return store.MessageView{}, false, nil
+		}
+		return row, true, nil
+	}
+}
+
+func messagePreview(s string) string {
+	const max = 32 << 10
+	if len(s) <= max {
+		return s
+	}
+	end := max
+	for !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end]
+}
+
+func encodeMessageContextPage(page store.MessageList, a messageArguments, sizing messageSizing) *sdk.CallToolResult {
+	result := messageContextPage{Messages: make([]messageContextHit, 0, len(page.Hits)), PageReduced: page.PageReduced}
+	if page.PageReduced {
+		next := a.Offset + len(page.Hits)
+		if next > 100000 {
+			result.NarrowSearch = true
+		} else {
+			result.NextPage = &messageNextPage{Page: next, Limit: 1}
+		}
+	} else if a.Page == 100000 && a.Limit == 1 && len(page.Hits) > 0 {
+		result.NarrowSearch = true
+	}
+	for _, hit := range page.Hits {
+		m, ok := messageProjection(hit.Message)
+		if !ok {
+			return messageReplyLimit()
+		}
+		item := messageContextHit{Message: m, Before: make([]Message, 0, len(hit.Before)), After: make([]Message, 0, len(hit.After)), BeforeReduced: hit.BeforeReduced, AfterReduced: hit.AfterReduced, PreviewFields: hit.PreviewFields}
+		for _, row := range hit.Before {
+			m, ok := messageProjection(row)
+			if !ok {
+				return messageReplyLimit()
+			}
+			item.Before = append(item.Before, m)
+		}
+		for _, row := range hit.After {
+			m, ok := messageProjection(row)
+			if !ok {
+				return messageReplyLimit()
+			}
+			item.After = append(item.After, m)
+		}
+		result.Messages = append(result.Messages, item)
+	}
+	structured, err := json.Marshal(result)
+	if err != nil || uint64(len(structured)) > sizing.charge.structured {
+		return messageReplyLimit()
+	}
+	text := safeResultText(structured, int(sizing.charge.text))
+	if text == "" || !resultFrameFits(uint64(len(structured)), uint64(len(text))) {
+		return messageReplyLimit()
+	}
+	return &sdk.CallToolResult{StructuredContent: json.RawMessage(structured), Content: []sdk.Content{&sdk.TextContent{Text: text}}}
+}
+
+func messageReplyLimit() *sdk.CallToolResult {
+	root := ErrorResult{Error: ToolError{Code: "resource_limit", Message: "Message reply exceeds the size limit; use a smaller list limit or narrower context"}}
+	text, _ := json.Marshal(root)
+	return &sdk.CallToolResult{IsError: true, StructuredContent: root, Content: []sdk.Content{&sdk.TextContent{Text: string(text)}}}
+}

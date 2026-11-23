@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql/driver"
 	"sync"
+	"unicode/utf8"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
@@ -35,6 +36,18 @@ func registerFold() {
 		})
 		if err != nil {
 			panic("store: registering mcp_fold: " + err.Error())
+		}
+		err = sqlite.RegisterDeterministicScalarFunction("mcp_valid_utf8", 4, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+			for _, arg := range args {
+				data, ok := arg.([]byte)
+				if !ok || !utf8.Valid(data) {
+					return int64(0), nil
+				}
+			}
+			return int64(1), nil
+		})
+		if err != nil {
+			panic("store: registering mcp_valid_utf8: " + err.Error())
 		}
 	})
 }

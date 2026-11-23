@@ -291,6 +291,7 @@ func TestDiagnosticsAuditKnownTools(t *testing.T) {
 		{DiagnosticSearchContacts, "search_contacts"},
 		{DiagnosticDirectChat, "get_direct_chat_by_contact"},
 		{DiagnosticContactChats, "get_contact_chats"},
+		{DiagnosticListMessages, "list_messages"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := &diagnosticWriter{}

@@ -2,13 +2,95 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/tiger-seo/whatsapp-mcp/internal/store"
 )
+
+type messageListReader interface {
+	ListMessages(context.Context, store.MessageFilter, store.Context, store.Page, bool, store.MessageListPolicy) (store.MessageList, error)
+}
+
+func messageListHandler(reader messageListReader) sdk.ToolHandler {
+	return func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+		raw := req.Params.Arguments
+		if len(raw) == 0 {
+			raw = json.RawMessage(`{}`)
+		}
+		a, invalid := validateMessageArguments("list_messages", raw)
+		if invalid != nil {
+			return argumentErrorResult(invalid), nil
+		}
+		sizing, _ := newMessageSizing(128 << 10)
+		page, err := reader.ListMessages(ctx, store.MessageFilter{After: a.After, Before: a.Before, ChatJID: a.ChatJID, Sender: a.Sender, Query: a.Query}, store.Context{Before: a.ContextBefore, After: a.ContextAfter}, store.Page{Limit: a.Limit, Offset: a.Offset}, a.IncludeContext, messageListPolicy(&sizing, a.IncludeContext))
+		if err != nil {
+			var limit *store.ResourceLimitError
+			if errors.As(err, &limit) {
+				if limit.Limit == "search work" || limit.Limit == "message identity" {
+					root := ErrorResult{Error: ToolError{Code: "resource_limit", Message: "The message search could not be verified within its work limit; use narrower filters"}}
+					text, _ := json.Marshal(root)
+					return &sdk.CallToolResult{IsError: true, StructuredContent: root, Content: []sdk.Content{&sdk.TextContent{Text: string(text)}}}, nil
+				}
+				return messageReplyLimit(), nil
+			}
+			return chatReadError(err, "arguments"), nil
+		}
+		if a.IncludeContext {
+			return encodeMessageContextPage(page, a, sizing), nil
+		}
+		messages := make([]Message, 0, len(page.Hits))
+		for _, hit := range page.Hits {
+			m, ok := messageProjection(hit.Message)
+			if !ok {
+				return messageReplyLimit(), nil
+			}
+			messages = append(messages, m)
+		}
+		return encodeMessageList(messages), nil
+	}
+}
+
+func messageListSchemas() (map[string]any, map[string]any) {
+	text := func(max int) map[string]any { return map[string]any{"type": "string", "maxLength": max} }
+	num := func(min, max, def int) map[string]any {
+		return map[string]any{"type": "integer", "minimum": min, "maximum": max, "default": def}
+	}
+	query := text(1024)
+	query["default"] = ""
+	props := map[string]any{"after": text(64), "before": text(64), "chat_jid": text(256), "sender_phone_number": text(256), "query": query, "limit": num(1, 200, 50), "page": num(0, 100000, 0), "include_context": map[string]any{"type": "boolean", "default": false}, "context_before": num(0, 20, 5), "context_after": num(0, 20, 5)}
+	input := map[string]any{"type": "object", "properties": props, "additionalProperties": false, "required": []string{}}
+	object := func(properties map[string]any, required []string) map[string]any {
+		return map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}
+	}
+	str := map[string]any{"type": "string"}
+	boolean := map[string]any{"type": "boolean"}
+	fields := []string{"id", "chat_jid", "chat_name", "sender", "sender_name", "timestamp", "is_from_me", "content", "caption", "media_type"}
+	messageProps := func() map[string]any {
+		return map[string]any{"id": str, "chat_jid": str, "chat_name": str, "sender": str, "sender_name": str, "timestamp": str, "is_from_me": boolean, "content": str, "caption": str, "media_type": map[string]any{"type": "string", "enum": []string{"", "image", "video", "audio", "document"}}}
+	}
+	message := object(messageProps(), fields)
+	hitProps := messageProps()
+	hitProps["before"] = map[string]any{"type": "array", "items": message}
+	hitProps["after"] = map[string]any{"type": "array", "items": message}
+	hitProps["before_reduced"], hitProps["after_reduced"] = boolean, boolean
+	hitProps["preview_fields"] = map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []string{"content", "caption"}}}
+	hit := object(hitProps, append(append([]string{}, fields...), "before", "after", "before_reduced", "after_reduced"))
+	plain := object(map[string]any{"messages": map[string]any{"type": "array", "items": message}}, []string{"messages"})
+	next := object(map[string]any{"page": map[string]any{"type": "integer", "minimum": 0, "maximum": 100000}, "limit": map[string]any{"const": 1, "type": "integer"}}, []string{"page", "limit"})
+	contextPage := object(map[string]any{"messages": map[string]any{"type": "array", "items": hit}, "page_reduced": boolean, "next_page": next, "narrow_search": map[string]any{"type": "boolean", "const": true}}, []string{"messages", "page_reduced"})
+	errorBody := object(map[string]any{"code": str, "message": str, "field": str}, []string{"code", "message"})
+	failure := object(map[string]any{"error": errorBody}, []string{"error"})
+	output := map[string]any{"type": "object", "oneOf": []any{plain, contextPage, failure}}
+	return input, output
+}
 
 type messageArguments struct {
 	After, Before                          time.Time
