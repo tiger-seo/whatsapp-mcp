@@ -19,6 +19,88 @@ type messageListReader interface {
 	ListMessages(context.Context, store.MessageFilter, store.Context, store.Page, bool, store.MessageListPolicy) (store.MessageList, error)
 }
 
+type messageContextReader interface {
+	GetMessageContext(context.Context, string, string, store.Context, func(store.MessageView) (bool, error)) (store.MessageContextResult, error)
+}
+
+func messageContextHandler(reader messageContextReader) sdk.ToolHandler {
+	return func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+		raw := req.Params.Arguments
+		if len(raw) == 0 {
+			raw = json.RawMessage(`{}`)
+		}
+		a, invalid := validateMessageArguments("get_message_context", raw)
+		if invalid != nil {
+			return argumentErrorResult(invalid), nil
+		}
+		sizing, _ := newMessageSizing(128 << 10)
+		result, err := reader.GetMessageContext(ctx, a.ChatJID, a.MessageID, store.Context{Before: a.ContextBefore, After: a.ContextAfter}, sizing.admitRow)
+		if err != nil {
+			var ambiguous *store.AmbiguousIDError
+			var limit *store.ResourceLimitError
+			if errors.As(err, &ambiguous) {
+				if len(ambiguous.ChatJIDs) < 2 || len(ambiguous.ChatJIDs) > 100 {
+					return contextError("resource_limit", "Too many matching chats; specify chat_jid", nil), nil
+				}
+				for i, chat := range ambiguous.ChatJIDs {
+					if !validIdentity(chat, false) || (i > 0 && ambiguous.ChatJIDs[i-1] >= chat) {
+						return contextError("resource_limit", "Message identity could not be verified", nil), nil
+					}
+				}
+				return contextError("ambiguous_id", "Message ID matches multiple chats; specify chat_jid", ambiguous.ChatJIDs), nil
+			}
+			if errors.As(err, &limit) {
+				if limit.Limit == "matching chats" {
+					return contextError("resource_limit", "Too many matching chats; specify chat_jid", nil), nil
+				}
+				return contextError("resource_limit", "Message reply or stored message exceeds a resource limit", nil), nil
+			}
+			if errors.Is(err, store.ErrNotFound) {
+				return contextError("not_found", "Message not found", nil), nil
+			}
+			return chatReadError(err, "message_id"), nil
+		}
+		return encodeExactMessageContext(result, sizing), nil
+	}
+}
+
+func contextError(code, message string, chats []string) *sdk.CallToolResult {
+	if len(chats) > 0 {
+		root := struct {
+			Error struct {
+				Code          string   `json:"code"`
+				Message       string   `json:"message"`
+				MatchingChats []string `json:"matching_chats"`
+			} `json:"error"`
+		}{}
+		root.Error.Code, root.Error.Message, root.Error.MatchingChats = code, message, chats
+		text, _ := json.Marshal(root)
+		return &sdk.CallToolResult{IsError: true, StructuredContent: root, Content: []sdk.Content{&sdk.TextContent{Text: string(text)}}}
+	}
+	root := ErrorResult{Error: ToolError{Code: code, Message: message}}
+	text, _ := json.Marshal(root)
+	return &sdk.CallToolResult{IsError: true, StructuredContent: root, Content: []sdk.Content{&sdk.TextContent{Text: string(text)}}}
+}
+
+func messageContextSchemas() (map[string]any, map[string]any) {
+	_, listOutput := messageListSchemas()
+	plain := listOutput["oneOf"].([]any)[0].(map[string]any)
+	messageArray := plain["properties"].(map[string]any)["messages"].(map[string]any)
+	message := messageArray["items"]
+	array := map[string]any{"type": "array", "items": message}
+	input := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"message_id"}, "properties": map[string]any{
+		"message_id": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}, "chat_jid": map[string]any{"type": "string", "maxLength": 256},
+		"before": map[string]any{"type": "integer", "minimum": 0, "maximum": 20, "default": 6}, "after": map[string]any{"type": "integer", "minimum": 0, "maximum": 20, "default": 6},
+	}}
+	success := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"messages", "before", "after", "before_reduced", "after_reduced"}, "properties": map[string]any{
+		"messages": map[string]any{"type": "array", "items": message, "minItems": 1, "maxItems": 1}, "before": array, "after": array, "before_reduced": map[string]any{"type": "boolean"}, "after_reduced": map[string]any{"type": "boolean"},
+	}}
+	failure := listOutput["oneOf"].([]any)[2].(map[string]any)
+	errorSchema := failure["properties"].(map[string]any)["error"].(map[string]any)
+	errorSchema["properties"].(map[string]any)["matching_chats"] = map[string]any{"type": "array", "minItems": 2, "maxItems": 100, "items": map[string]any{"type": "string", "maxLength": 256}}
+	return input, map[string]any{"type": "object", "oneOf": []any{success, failure}}
+}
+
 func messageListHandler(reader messageListReader) sdk.ToolHandler {
 	return func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		raw := req.Params.Arguments

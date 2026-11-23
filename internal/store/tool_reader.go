@@ -66,46 +66,10 @@ type MessageContextResult struct {
 // It must not serialize, perform I/O, spawn work, reenter the store, or retain
 // rejected messages. A rejected anchor fails the entire read.
 func (r *ToolReader) GetMessageExact(ctx context.Context, chatJID, id string, counts Context, accept func(MessageView) (bool, error)) (MessageContextResult, error) {
-	chat, err := parseChatJID("chat_jid", chatJID)
-	if err != nil {
-		return MessageContextResult{}, err
+	if chatJID == "" {
+		return MessageContextResult{}, invalid("chat_jid", "required")
 	}
-	if err := validateID("id", id); err != nil {
-		return MessageContextResult{}, err
-	}
-	if err := validateContext(counts); err != nil {
-		return MessageContextResult{}, err
-	}
-	if accept == nil {
-		return MessageContextResult{}, invalid("policy", "required")
-	}
-	return messageSnapshot(ctx, r, func(ctx context.Context, q querier) (MessageContextResult, error) {
-		budget := &resultBudget{}
-		anchor, err := messageProjection(ctx, q, messageKey{chatJID: chat.String(), id: id}, budget)
-		if err != nil {
-			return MessageContextResult{}, err
-		}
-		ok, err := accept(anchor)
-		if err != nil {
-			return MessageContextResult{}, err
-		}
-		if !ok {
-			return MessageContextResult{}, limitErr("reply bytes")
-		}
-		hits, _, err := messageContext(ctx, q, []messageKey{{chatJID: anchor.ChatJID, id: anchor.ID, time: anchor.Time.UnixMilli()}}, counts, budget, accept)
-		if err != nil {
-			return MessageContextResult{}, err
-		}
-		result := MessageContextResult{Message: anchor, Before: hits[0].before.rows, After: hits[0].after.rows,
-			BeforeReduced: hits[0].before.reduced, AfterReduced: hits[0].after.reduced}
-		if result.Before == nil {
-			result.Before = []MessageView{}
-		}
-		if result.After == nil {
-			result.After = []MessageView{}
-		}
-		return result, nil
-	})
+	return r.GetMessageContext(ctx, chatJID, id, counts, accept)
 }
 
 func (r *ToolReader) ListChats(ctx context.Context, query string, sort ChatSort, withLatest bool, p Page) ([]ChatView, error) {

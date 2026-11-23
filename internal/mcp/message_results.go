@@ -226,3 +226,43 @@ func messageReplyLimit() *sdk.CallToolResult {
 	text, _ := json.Marshal(root)
 	return &sdk.CallToolResult{IsError: true, StructuredContent: root, Content: []sdk.Content{&sdk.TextContent{Text: string(text)}}}
 }
+
+func encodeExactMessageContext(result store.MessageContextResult, sizing messageSizing) *sdk.CallToolResult {
+	failure := func() *sdk.CallToolResult {
+		return contextError("resource_limit", "Message reply or stored message exceeds a resource limit", nil)
+	}
+	anchor, ok := messageProjection(result.Message)
+	if !ok {
+		return failure()
+	}
+	value := struct {
+		Messages      []Message `json:"messages"`
+		Before        []Message `json:"before"`
+		After         []Message `json:"after"`
+		BeforeReduced bool      `json:"before_reduced"`
+		AfterReduced  bool      `json:"after_reduced"`
+	}{[]Message{anchor}, make([]Message, 0, len(result.Before)), make([]Message, 0, len(result.After)), result.BeforeReduced, result.AfterReduced}
+	for _, row := range result.Before {
+		m, ok := messageProjection(row)
+		if !ok {
+			return failure()
+		}
+		value.Before = append(value.Before, m)
+	}
+	for _, row := range result.After {
+		m, ok := messageProjection(row)
+		if !ok {
+			return failure()
+		}
+		value.After = append(value.After, m)
+	}
+	structured, err := json.Marshal(value)
+	if err != nil || uint64(len(structured)) > sizing.charge.structured {
+		return failure()
+	}
+	text := safeResultText(structured, int(sizing.charge.text))
+	if text == "" || !resultFrameFits(uint64(len(structured)), uint64(len(text))) {
+		return failure()
+	}
+	return &sdk.CallToolResult{StructuredContent: json.RawMessage(structured), Content: []sdk.Content{&sdk.TextContent{Text: text}}}
+}

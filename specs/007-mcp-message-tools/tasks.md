@@ -58,14 +58,14 @@ description: "Implementation tasks for MCP message tools"
 
 ### Tests
 
-- [ ] T020 [P] [US2] Add exact lookup and neighbour tests in `internal/store/tool_message_context_test.go` for exact-chat no fallback, unique/missing IDs, ambiguity at 2/100/101 chats, timestamp/ID ties, unequal counts, explicit zero, sparse edges and chronological closest neighbours.
-- [ ] T021 [P] [US2] Add SDK context cases in `internal/mcp/message_context_test.go` for defaults 6 per side, 0-20 validation, and structured/text parity. Assert ordered, complete `matching_chats` at 2 and 100 matches; at 101, assert the limit error asks for `chat_jid` and neither representation contains a partial chat list or a selected message. Cover exact lookup with `before: 0` and `after: 0`, complete target or actionable size error, and neighbour-only reductions without previewing the target.
+- [X] T020 [P] [US2] Add exact lookup and neighbour tests in `internal/store/tool_message_context_test.go` for exact-chat no fallback, unique/missing IDs, ambiguity at 2/100/101 chats, timestamp/ID ties, unequal counts, explicit zero, sparse edges and chronological closest neighbours.
+- [X] T021 [P] [US2] Add SDK context cases in `internal/mcp/message_context_test.go` for defaults 6 per side, 0-20 validation, and structured/text parity. Assert ordered, complete `matching_chats` at 2 and 100 matches; at 101, assert the limit error asks for `chat_jid` and neither representation contains a partial chat list or a selected message. Cover exact lookup with `before: 0` and `after: 0`, complete target or actionable size error, and neighbour-only reductions without previewing the target.
 
 ### Implementation
 
-- [ ] T022 [US2] Implement exact-pair and ID-only lookups in `internal/store/tool_message_context.go` using indexed equality and a 101-key sentinel; report all ascending chat addresses only for 2-100 matches, too-many without a partial list above 100, and reuse bounded same-snapshot context selection.
-- [ ] T023 [US2] Register and implement `get_message_context` in `internal/mcp/message_tools.go`, requiring `message_id`, accepting optional exact `chat_jid` and default 6 neighbours per side (0-20); map not-found, ambiguity and reply-size errors without private input or a misleading smaller-context remedy for an oversized target.
-- [ ] T024 [US2] Run the independent context tests in `internal/store/tool_message_context_test.go` and `internal/mcp/message_context_test.go`; record named counts, command, date and exit status in `specs/007-mcp-message-tools/verification.md`.
+- [X] T022 [US2] Implement exact-pair and ID-only lookups in `internal/store/tool_message_context.go` using indexed equality and a 101-key sentinel; report all ascending chat addresses only for 2-100 matches, too-many without a partial list above 100, and reuse bounded same-snapshot context selection.
+- [X] T023 [US2] Register and implement `get_message_context` in `internal/mcp/message_tools.go`, requiring `message_id`, accepting optional exact `chat_jid` and default 6 neighbours per side (0-20); map not-found, ambiguity and reply-size errors without private input or a misleading smaller-context remedy for an oversized target.
+- [X] T024 [US2] Run the independent context tests in `internal/store/tool_message_context_test.go` and `internal/mcp/message_context_test.go`; record named counts, command, date and exit status in `specs/007-mcp-message-tools/verification.md`.
 
 ## Phase 5: User Story 3 - Latest Contact Interaction (P3)
 

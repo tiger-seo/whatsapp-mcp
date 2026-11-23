@@ -329,6 +329,9 @@ func toolSchemas(tool string) (map[string]any, map[string]any) {
 	if tool == "list_messages" {
 		return messageListSchemas()
 	}
+	if tool == "get_message_context" {
+		return messageContextSchemas()
+	}
 	str := func(max int) map[string]any { return map[string]any{"type": "string", "maxLength": max} }
 	props := map[string]any{}
 	required := []string{}

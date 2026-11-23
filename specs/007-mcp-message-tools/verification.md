@@ -100,3 +100,9 @@ The independent review identified oversized-key materialization, malformed UTF-8
 - **Earlier design PASS (`7d150f9`):** Did not clear implementation because feasibility was pending at the time. The row-cap and expansion-heavy Unicode follow-ups were addressed in the subsequent scratch evidence.
 
 - **Implementation gate check (2026-11-23):** Piped a synthetic `PreToolUse` event for `Skill(speckit-implement)` into `.claude/hooks/owner-review-gate.sh` using Git Bash. Exit 0 with no denial or other output. This checked the recorded verdict and committed evidence without starting implementation.
+
+## Phase 4 Context Tests (2026-11-23 UTC)
+
+- Windows/amd64, synthetic fixtures only: `$env:CGO_ENABLED='0'; go test ./internal/store ./internal/mcp -run 'TestMessageContext|TestMessageExact' -v -count=1 -timeout 10m` exited 0. Four named tests passed: `TestMessageContext`, `TestMessageContextLookup`, `TestMessageContextNeighbours`, and `TestMessageContextSDK`. Package times were 0.932 s and 1.659 s respectively.
+- The complete `internal/mcp` regression run with `CGO_ENABLED=0`, `go test ./internal/mcp -json -count=1 -timeout 10m`, exited 0 with 474 passing test events including subtests and zero failures.
+- `gofmt -l` on the Phase 4 Go files printed nothing; `git diff --check` exited 0. Native Linux and macOS controls and the feature-wide gates remain unverified in this phase.
