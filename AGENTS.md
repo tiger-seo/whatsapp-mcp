@@ -166,6 +166,11 @@ the user unlinking the device on the phone, then deleting the directory. Record 
 
 ## Known Issues & Gotchas
 
+### Windows Shell Resolution
+In the PowerShell environment, `bash` resolves to `C:\Windows\system32\bash.exe` and runs WSL2; `sh`
+resolves to Git for Windows' `sh.exe` and runs MSYS. Use `sh` for repository shell scripts that need
+the Windows Git environment and its tools, including `jq`. WSL has its own tool availability and PATH.
+
 ### SDK Middleware Is Too Late for Admission
 **Issue:** Limiting work only in tool handlers does not bound queued requests.
 **Root Cause:** The pinned SDK can dispatch or queue before receiving middleware.
