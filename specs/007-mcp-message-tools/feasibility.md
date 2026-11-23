@@ -53,3 +53,32 @@ On Windows/amd64 with Go 1.27.4, the pinned SQLite and Unicode tables, and `CGO_
 | Isolated heap and cancellation | SQLite process high-water marks did not exceed 9,355,224 bytes during search trials. This was a one-connection probe, not shared-heap evidence; Go measurements were cumulative allocations only. A 15 ms deadline was observed at 17 ms, with the lease still in use until explicit close and a subsequent pool query succeeding. |
 
 The trial values are not production ceilings. Still required: integrated alias merge/deduplication, deep offset and latest group outcomes; a justified upper bound for folding rather than one 3x example; memory high-water under the existing shared heap and writer pressure; and message assembly through the guarded SDK for maximum-size, escape-heavy, continuation and context-row-cap fixtures. The current guarded encoder and WAL regressions are baseline evidence only. This record remains Pending.
+
+## Alias Paging and Guarded Reply Probes (2026-11-23)
+
+Both probes ran on Windows/amd64 with Go 1.27.4, `CGO_ENABLED=0`, `GOPROXY=off`, and `-mod=readonly`. Neither probe registers a production tool or touches an account.
+
+| Check | Result |
+| --- | --- |
+| SQLite alias merge at offset 100,000 | The scratch merge used 256-key batches over separately ordered phone and LID streams with overlapping rows and tied timestamps. It matched an independent SQL reference for all 20 page keys after deduplication: 100,020 unique matches, 80,017 and 80,016 branch visits, 440 ms for merge and page selection. The newest group candidate matched the group reference, and a newer outgoing direct message won. This exercised keys only (no text read or folded matching), hardcoded aliases, and no production admission or shared visit-cap enforcement. An earlier fixture had the direct message tied with the group message but expected it to win; raising the direct timestamp corrected the fixture. |
+| Guarded SDK, ordinary maximum fields | Scratch assembly using the existing size charger, safe text renderer and guarded in-memory SDK transport returned all 50 distinct identities in order over 48 calls and reported reduced context. The initial request took 168 ms; the slowest call took 421 ms. The largest serialized SDK result was 3,147,378 bytes before its JSON-RPC envelope. Both representations matched semantically and were individually below 2 MiB. |
+| Guarded SDK, escape-heavy maximum fields | The same path returned all 50 identities in order over 50 calls, with a marked first-anchor preview and reduced context. Initial request: 80 ms; slowest: 122 ms; largest serialized SDK result: 852,698 bytes before its envelope. An earlier run incorrectly applied the per-request deadline to the entire continuation sequence; the rerun measured each SDK call with a real clock outside the test's virtual clock. |
+
+These guarded fixtures used synthetic in-memory projections and a scratch response schema. They do not establish end-to-end timing with SQLite projection, exact public response shape, native framing, actual context row accounting, or peak live allocations. The gate remains Pending until those checks, the justified folding bound, shared-heap and writer-pressure/cancellation evidence, and fixed production ceilings are complete.
+
+## Admitted Query Under WAL Pressure (2026-11-23)
+
+An external Go test overlay exercised the scratch candidate query through the existing `toolRead` and `Store.read` admission and lease path on Windows/amd64 (Go 1.27.4, pinned SQLite, `CGO_ENABLED=0`, `GOPROXY=off`, `-mod=readonly`). Four runs passed. A read-only snapshot processed 3-5 completed 64-key batches; each completed batch checked 16 MiB of source fields and 16 MiB of folded fields and returned zero hits. Synthetic writes committed eight 16 MiB transactions, moving the WAL from 118,301,712 to 135,201,952 bytes on the crossing transaction. The candidate read returned cancellation while the fixture still held the snapshot and reader lease. A replacement tool was refused and a follow-up writer timed out at the fence. After allowing rollback and connection return, the reader usage was zero and a subsequent write succeeded.
+
+The process-wide SQLite high-water mark was 6,117,392-6,270,256 bytes in these runs. This measures one candidate reader and one synthetic writer for this workload, not an isolated 32 MiB per-tool accounting proof, worst-case process saturation, or Go/SDK live heap. The pressure harness deliberately repeats its batch and delays rollback after cancellation to observe the fence. It does not exercise the production search ledger or the integrated SQLite-to-SDK reply path. Status remains Pending.
+
+## SQLite-to-Guarded-MCP Continuation (2026-11-23)
+
+A scratch overlay seeded the existing SQLite schema with 50 anchors and 500 same-chat neighbours per fixture. Both content and caption were 256 KiB per row. Each request selected fixture anchors and projected anchors and neighbours in one read-only snapshot, returned the snapshot before final encoding, and sent the result through the existing guarded in-memory MCP transport. The client began with the default page size and then used the returned `next_page` and ordinary one-match pagination. It verified all 50 identities, in order and exactly once, followed by an empty page; it also checked same-chat neighbour identity and order, reduction markers, preview metadata presence, and semantic agreement between both renderings.
+
+| Fixture | Initial reply | Slowest call | Calls including empty page | Largest serialized SDK result (before envelope) |
+| --- | ---: | ---: | ---: | ---: |
+| Ordinary maximum-size fields | 202 ms | 215 ms | 49 | 3,147,790 bytes |
+| Escape-heavy maximum-size fields | 69 ms | 82 ms | 51 | 852,942 bytes |
+
+This demonstrates that the default oversized context reply and its continuation can work with real SQLite projection, not just generated in-memory DTOs. It uses a fixture-specific anchor selector and a scratch tool handler rather than the production search ledger and store admission. It does not exercise the non-default 2,000-context-row boundary, establish worst-case shared SQLite or live Go/SDK heap, prove a folded-field bound, or measure native framing. No production ceilings were selected; the feasibility gate remains Pending.
