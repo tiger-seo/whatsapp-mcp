@@ -339,11 +339,7 @@ func searchMessageBatch(ctx context.Context, q querier, f MessageFilter, branch 
 	SELECT n,raw,folded,valid,
 	 CASE WHEN valid=1 AND raw<=?5 AND folded<=?6 THEN coalesce((SELECT json_array(time,hex(CAST(chat_jid AS BLOB)),hex(CAST(id AS BLOB))) FROM keys ORDER BY time,chat_jid,id LIMIT 1),'[]') ELSE '[]' END,
 	 CASE WHEN valid=1 AND raw<=?5 AND folded<=?6 THEN
-	 (SELECT json_array(coalesce(min(CASE WHEN ?7='' THEN 1 WHEN octet_length(m.text)+octet_length(m.caption)+octet_length(m.text_fold)+octet_length(m.caption_fold)>4096
-	 THEN mcp_valid_utf8(CAST(m.text AS BLOB),CAST(m.caption AS BLOB),CAST(m.text_fold AS BLOB),CAST(m.caption_fold AS BLOB))
-	 WHEN m.text NOT GLOB '*[^ -~]*' AND m.caption NOT GLOB '*[^ -~]*' AND m.text_fold NOT GLOB '*[^ -~]*' AND m.caption_fold NOT GLOB '*[^ -~]*'
-	 AND instr(m.text,char(0))=0 AND instr(m.caption,char(0))=0 AND instr(m.text_fold,char(0))=0 AND instr(m.caption_fold,char(0))=0
-	 THEN 1 ELSE mcp_valid_utf8(CAST(m.text AS BLOB),CAST(m.caption AS BLOB),CAST(m.text_fold AS BLOB),CAST(m.caption_fold AS BLOB)) END),1),
+	 (SELECT json_array(coalesce(min(CASE WHEN ?7='' THEN 1 ELSE mcp_valid_utf8(CAST(m.text AS BLOB),CAST(m.caption AS BLOB),CAST(m.text_fold AS BLOB),CAST(m.caption_fold AS BLOB)) END),1),
 	 json(coalesce(json_group_array(json_array(k.time,hex(CAST(k.chat_jid AS BLOB)),hex(CAST(k.id AS BLOB))) ORDER BY k.time DESC,k.chat_jid DESC,k.id DESC) FILTER (WHERE ?7='' OR instr(m.text_fold,?7)>0 OR instr(m.caption_fold,?7)>0),'[]')))
 	 FROM keys k CROSS JOIN messages m ON m.rowid=k.rid) ELSE '[1,[]]' END FROM charge`
 	var count, raw, folded, valid int

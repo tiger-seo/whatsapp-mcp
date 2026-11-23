@@ -23,7 +23,7 @@ func (r *budgetReader) ListMessages(ctx context.Context, f store.MessageFilter, 
 	return result, err
 }
 
-func TestMessageBudgetContinuation(t *testing.T) {
+func TestMCPMessageBudgetContinuation(t *testing.T) {
 	for _, tc := range []struct{ name, fill string }{{"ordinary", "x"}, {"escaped", "\x01"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			const size = 256 << 10
@@ -44,7 +44,7 @@ func TestMessageBudgetContinuation(t *testing.T) {
 				}
 			})
 			c := chatTestServer(t, r.store)
-			args := map[string]any{"chat_jid": "budget@g.us", "query": "anchor", "include_context": true, "limit": 50}
+			args := map[string]any{"chat_jid": "budget@g.us", "query": "anchor", "include_context": true}
 			seen := map[string]bool{}
 			reduced, sides, previews, single := false, false, false, false
 			for calls := 0; calls < 55; calls++ {

@@ -178,6 +178,14 @@ func testMessageStdioNative(t *testing.T, mode string) {
 				t.Fatalf("tool error leaked %q: %s", marker, failure)
 			}
 		}
+		send(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_message_context","arguments":{"message_id":"fixture","chat_jid":"` + pipeJID + `","before":0,"after":0}}}`)
+		if result := reply(4); strings.Contains(string(result), `"isError":true`) || !strings.Contains(string(result), messageSecrets[2]) {
+			t.Fatalf("message context: %s", result)
+		}
+		send(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_last_interaction","arguments":{"jid":"` + pipeJID + `"}}}`)
+		if result := reply(5); strings.Contains(string(result), `"isError":true`) || !strings.Contains(string(result), messageSecrets[2]) {
+			t.Fatalf("last interaction: %s", result)
+		}
 		in.Close()
 	case "cancel":
 		await("entered")
