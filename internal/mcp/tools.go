@@ -122,7 +122,7 @@ func toolErrorResult(code string) *sdk.CallToolResult {
 		"resource_limit": "Result exceeds a limit; use a smaller page or disable latest message detail",
 		"timeout":        "The request timed out",
 		"cancelled":      "The request was cancelled",
-		"unavailable":    "The local store is unavailable",
+		"unavailable":    "The local store is unavailable; check the local session",
 		"low_disk":       "low disk space",
 		"storage_error":  "The local store could not complete the request",
 	}
