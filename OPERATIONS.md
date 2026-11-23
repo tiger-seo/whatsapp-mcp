@@ -342,7 +342,7 @@ stdout is reserved for MCP protocol frames. The command takes the exclusive data
 start if another process holds it. A saved session can still connect at startup under the existing owner policy;
 the tools themselves read the local store and work while the account is disconnected.
 
-**Access and privacy:** launching `stdio` authorizes that client to read all stored chats and contacts. There is
+**Access and privacy:** launching `stdio` authorizes that client to read all stored chats, contacts and messages. There is
 no per-chat restriction or per-read approval. Names, captions and messages are untrusted data, not instructions.
 A prompt-injected client can request unrelated conversations, and the client or its AI provider can retain
 results. Use a client and provider whose data handling you trust. There are no MCP login, QR, pairing, recovery,
@@ -355,12 +355,27 @@ send or media download tools, no HTTP listener and no proxy. `pair` and offline 
 | `search_contacts` | Distinct people matching a literal substring of any locally stored name or the stored phone digits. Default page size: 50. |
 | `get_direct_chat_by_contact` | One exact direct chat. For mapped identities, the phone chat wins; if absent, the exact mapped LID chat is used. An unmapped LID matches only its own chat. No partial-number lookup. |
 | `get_contact_chats` | Distinct stored chats with the person's direct identities or messages from them, with each chat's actual latest message. Default page size: 20. |
+| `list_messages` | Search locally stored messages, optionally with same-chat context. Default page size: 50; context defaults to five neighbours on each side when enabled. |
+| `get_message_context` | Resolve an exact chat and message ID, or a unique ID, and return up to six neighbours on each side by default. An ambiguous ID asks for a chat JID. |
+| `get_last_interaction` | Return the newest local direct or authored group message for a contact and its known alias. The account's own identity considers only self-chat. |
 
 Search is case-insensitive and literal, including punctuation. For a phone substring in `search_contacts`, use
 digits as stored. The two contact lookup tools instead normalize supported formatted phone numbers, phone JIDs
 and LIDs through local mappings. Lists accept 1 to 200 rows; pages start at zero and cannot skip more than
 100,000 rows. Success returns structured data and an equivalent safe JSON text representation. An over-budget
 read returns `resource_limit`, not a partial page. Try fewer rows or omit latest detail where supported.
+
+**Message search limits:** an unfinished search returns a `resource_limit` error with no messages or continuation;
+use narrower filters. A verified context listing may instead shorten its page or neighbours, marking omissions.
+Use `next_page` with the same filters and context options to resume at the first omitted match. If the supported
+offset is exceeded, `narrow_search` advises narrowing the search. A first anchor may contain explicitly marked
+text or caption previews; neighbours, exact targets and last interactions are never previewed. A listing without
+context, an exact target or a last interaction must fit in full or return a size error.
+
+The message tools are implemented but feature 007 verification and owner code review are still in progress.
+Windows synthetic scale searches have timed out under concurrent test load despite passing in isolation near the
+5-second store deadline. Native Linux and macOS message-tool controls are not yet verified; see the
+[feature verification record](specs/007-mcp-message-tools/verification.md).
 
 **Admission and shutdown:** one tool is admitted through completion of its response write, with no waiting tool
 queue. `busy` means the tool credit, store capacity or WAL admission check refused the read; retry later. A WAL
