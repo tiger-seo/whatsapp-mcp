@@ -69,6 +69,9 @@ Add the row it ends with to the "Owner reviews" table in `specs/NNN-*/verificati
   `CLAUDE.md` and the feature's `tasks.md` (heading may carry a suffix; the section runs to the next `##`). So
   documentation fixes on a branch under review belong in those places or wait for a new review. The hook needs
   `bash` and `jq`.
+- A plan with `**Feasibility gate**: required` also needs a committed `feasibility.md` marked `**Status**: Verified`
+  and a current design `PASS` that covers that file. Scratch feasibility work runs separately, not through
+  `/speckit-implement`. A scoped acceptance of `CONCERNS` does not clear this gate.
 
 ## Current state
 
@@ -176,7 +179,9 @@ the user unlinking the device on the phone, then deleting the directory. Record 
 ### Row Limits Do Not Bound Encoded Output
 **Issue:** A valid row count can still yield a response over budget.
 **Root Cause:** The SDK response includes both structured content and escaped text; envelopes and escaping consume additional bytes.
-**Prevention Rule:** Precharge both encodings and check actual final bytes. Return a bounded error, never a truncated successful page. [Source: .specify/archive/006-mcp-stdio-tools/research.md -> R4]
+**Prevention Rule:** Precharge both encodings and check actual final bytes. Never report an unfinished search as a
+successful page. Only shorten a verified reply when the feature contract explicitly permits it and reports the
+omissions and continuation as applicable. [Source: .specify/archive/006-mcp-stdio-tools/research.md -> R4]
 
 ### Live Acknowledgement Does Not Guarantee Replay
 **Issue:** A terminal ingest failure can leave the record incomplete; a history notification may already be acknowledged.
