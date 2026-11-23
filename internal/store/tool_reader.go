@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"time"
@@ -30,6 +31,81 @@ func toolRead[T any](ctx context.Context, s *Store, fn func(context.Context) (T,
 		return zero, err
 	}
 	return result, nil
+}
+
+// messageSnapshot keeps admission through transaction and connection cleanup.
+func messageSnapshot[T any](ctx context.Context, r *ToolReader, fn func(context.Context, querier) (T, error)) (T, error) {
+	return toolRead(ctx, r.store, func(ctx context.Context) (T, error) {
+		var result T
+		err := r.store.read(ctx, "message tool", func(ctx context.Context, conn *sql.Conn) error {
+			tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback()
+			var q querier = tx
+			if r.store.hooks.wrapReader != nil {
+				q = r.store.hooks.wrapReader(tx)
+			}
+			result, err = fn(ctx, q)
+			return err
+		})
+		return result, err
+	})
+}
+
+// MessageContextResult contains an exact message and its chronological neighbours.
+type MessageContextResult struct {
+	Message                     MessageView
+	Before, After               []MessageView
+	BeforeReduced, AfterReduced bool
+}
+
+// GetMessageExact reads one exact chat/ID pair and optional same-chat context.
+// accept is called synchronously, first for the anchor and then for neighbours.
+// It must not serialize, perform I/O, spawn work, reenter the store, or retain
+// rejected messages. A rejected anchor fails the entire read.
+func (r *ToolReader) GetMessageExact(ctx context.Context, chatJID, id string, counts Context, accept func(MessageView) (bool, error)) (MessageContextResult, error) {
+	chat, err := parseChatJID("chat_jid", chatJID)
+	if err != nil {
+		return MessageContextResult{}, err
+	}
+	if err := validateID("id", id); err != nil {
+		return MessageContextResult{}, err
+	}
+	if err := validateContext(counts); err != nil {
+		return MessageContextResult{}, err
+	}
+	if accept == nil {
+		return MessageContextResult{}, invalid("policy", "required")
+	}
+	return messageSnapshot(ctx, r, func(ctx context.Context, q querier) (MessageContextResult, error) {
+		budget := &resultBudget{}
+		anchor, err := messageProjection(ctx, q, messageKey{chatJID: chat.String(), id: id}, budget)
+		if err != nil {
+			return MessageContextResult{}, err
+		}
+		ok, err := accept(anchor)
+		if err != nil {
+			return MessageContextResult{}, err
+		}
+		if !ok {
+			return MessageContextResult{}, limitErr("reply bytes")
+		}
+		hits, _, err := messageContext(ctx, q, []messageKey{{chatJID: anchor.ChatJID, id: anchor.ID, time: anchor.Time.UnixMilli()}}, counts, budget, accept)
+		if err != nil {
+			return MessageContextResult{}, err
+		}
+		result := MessageContextResult{Message: anchor, Before: hits[0].before.rows, After: hits[0].after.rows,
+			BeforeReduced: hits[0].before.reduced, AfterReduced: hits[0].after.reduced}
+		if result.Before == nil {
+			result.Before = []MessageView{}
+		}
+		if result.After == nil {
+			result.After = []MessageView{}
+		}
+		return result, nil
+	})
 }
 
 func (r *ToolReader) ListChats(ctx context.Context, query string, sort ChatSort, withLatest bool, p Page) ([]ChatView, error) {
