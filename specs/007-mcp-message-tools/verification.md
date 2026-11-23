@@ -59,8 +59,10 @@ Not verified. The indexed query and driver-return feasibility checks, actual hea
 | --- | --- | --- | --- | --- |
 | design | 2026-11-22 | 0d4c7fa | CONCERNS | |
 | design | 2026-11-23 | 7d150f9 | PASS | |
+| design | 2026-11-23 | e45dbd6 | PASS | |
 
-- **Scope of the 7d150f9 PASS:** Design only. Feasibility is still Pending, so this verdict does not clear `/speckit-implement`. A fresh PASS must cover committed Verified evidence and the fixed production ceilings. Non-blocking follow-ups: verify reduced-side reporting at non-default sizes above the context-row cap, and include an expansion-heavy Unicode variant in the feasibility review.
+- **Current design PASS (`e45dbd6`):** Covers the committed Verified feasibility evidence and fixed ceilings. At delivery, run the 400,000-row fixtures early on native runners because of limited headroom under the 5-second store deadline. Confirm the production implementation does not retain rejected projections or batch text bodies. Neither observation blocks design approval.
 
-- **Search coverage:** The [preliminary probe](feasibility.md#preliminary-windows-probe-2026-11-23) confirmed the original limits reject representative searches. The [bounded batch probe](feasibility.md#bounded-batch-probe-2026-11-23) met those fixtures' timing on the global query alone. Full verification is still required before selecting production ceilings. The no-continuation policy for unfinished search remains unchanged.
-- **Two-stage gate:** The read-only review does not clear production implementation. Remediation requires a fresh design PASS covering the committed [feasibility record](feasibility.md); the hook refuses even an accepted CONCERNS for this feature. The current record is pending. SQLite plans, latency, heap, connection return and native behavior were not verified in the initial review.
+- **Earlier design PASS (`7d150f9`):** Did not clear implementation because feasibility was pending at the time. The row-cap and expansion-heavy Unicode follow-ups were addressed in the subsequent scratch evidence.
+
+- **Implementation gate check (2026-11-23):** Piped a synthetic `PreToolUse` event for `Skill(speckit-implement)` into `.claude/hooks/owner-review-gate.sh` using Git Bash. Exit 0 with no denial or other output. This checked the recorded verdict and committed evidence without starting implementation.
