@@ -75,14 +75,14 @@ description: "Implementation tasks for MCP message tools"
 
 ### Tests
 
-- [ ] T025 [P] [US3] Add store identity and ordering cases in `internal/store/tool_message_interaction_test.go` for mapped and unmapped identities, outgoing direct messages, group authors, owner self-chat only, unrelated newer activity, tied timestamps, no history and an unfinished group stream that could beat a direct candidate.
-- [ ] T026 [P] [US3] Add SDK interaction cases in `internal/mcp/message_interaction_test.go` for required `jid`, identity forms and validation, disconnected operation, one-message structured/text parity, and not-found. Distinguish an unverified outcome from an oversized verified message: both are `resource_limit` errors with distinct explanations, no partial message or preview, and no advice to use unsupported filters.
+- [X] T025 [P] [US3] Add store identity and ordering cases in `internal/store/tool_message_interaction_test.go` for mapped and unmapped identities, outgoing direct messages, group authors, owner self-chat only, unrelated newer activity, tied timestamps, no history and an unfinished group stream that could beat a direct candidate.
+- [X] T026 [P] [US3] Add SDK interaction cases in `internal/mcp/message_interaction_test.go` for required `jid`, identity forms and validation, disconnected operation, one-message structured/text parity, and not-found. Distinguish an unverified outcome from an oversized verified message: both are `resource_limit` errors with distinct explanations, no partial message or preview, and no advice to use unsupported filters.
 
 ### Implementation
 
-- [ ] T027 [US3] Implement latest-interaction selection in `internal/store/tool_message_interaction.go` using same-snapshot local alias resolution, at most two direct seeks and two ordered sender streams, the shared visit ceiling and descending `(time, chat_jid, id)` comparator; check residual group/author rules after enumeration, skip group scans for own identity and refuse an unverified winner.
-- [ ] T028 [US3] Register and implement `get_last_interaction` in `internal/mcp/message_tools.go`, accepting required locally resolved `jid`, with no network lookup or account capability. Return exactly one complete message or distinguish verified no history, inability to verify the outcome within the work cap, and inability to fit the verified message within the reply cap. Never preview the selected message or suggest unsupported filters.
-- [ ] T029 [US3] Run the independent interaction tests in `internal/store/tool_message_interaction_test.go` and `internal/mcp/message_interaction_test.go`; record named counts, command, date and exit status in `specs/007-mcp-message-tools/verification.md`.
+- [X] T027 [US3] Implement latest-interaction selection in `internal/store/tool_message_interaction.go` using same-snapshot local alias resolution, at most two direct seeks and two ordered sender streams, the shared visit ceiling and descending `(time, chat_jid, id)` comparator; check residual group/author rules after enumeration, skip group scans for own identity and refuse an unverified winner.
+- [X] T028 [US3] Register and implement `get_last_interaction` in `internal/mcp/message_tools.go`, accepting required locally resolved `jid`, with no network lookup or account capability. Return exactly one complete message or distinguish verified no history, inability to verify the outcome within the work cap, and inability to fit the verified message within the reply cap. Never preview the selected message or suggest unsupported filters.
+- [X] T029 [US3] Run the independent interaction tests in `internal/store/tool_message_interaction_test.go` and `internal/mcp/message_interaction_test.go`; record named counts, command, date and exit status in `specs/007-mcp-message-tools/verification.md`.
 
 ## Phase 6: Cross-Cutting Verification
 

@@ -23,6 +23,62 @@ type messageContextReader interface {
 	GetMessageContext(context.Context, string, string, store.Context, func(store.MessageView) (bool, error)) (store.MessageContextResult, error)
 }
 
+type messageInteractionReader interface {
+	GetLastInteraction(context.Context, string, func(store.MessageView) (bool, error)) (store.MessageView, error)
+}
+
+func messageInteractionHandler(reader messageInteractionReader) sdk.ToolHandler {
+	return func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
+		raw := req.Params.Arguments
+		if len(raw) == 0 {
+			raw = json.RawMessage(`{}`)
+		}
+		a, invalid := validateMessageArguments("get_last_interaction", raw)
+		if invalid != nil {
+			return argumentErrorResult(invalid), nil
+		}
+		sizing, _ := newMessageSizing(1024)
+		row, err := reader.GetLastInteraction(ctx, a.JID, sizing.admitRow)
+		if err != nil {
+			var limit *store.ResourceLimitError
+			if errors.As(err, &limit) {
+				if limit.Limit == "reply bytes" {
+					return contextError("resource_limit", "The verified interaction exceeds the reply size limit", nil), nil
+				}
+				return contextError("resource_limit", "The newest stored interaction could not be verified within the work limit", nil), nil
+			}
+			if errors.Is(err, store.ErrNotFound) {
+				return contextError("not_found", "No stored interaction found", nil), nil
+			}
+			return chatReadError(err, "jid"), nil
+		}
+		message, ok := messageProjection(row)
+		if !ok {
+			return contextError("resource_limit", "The verified interaction exceeds the reply size limit", nil), nil
+		}
+		structured, err := json.Marshal(struct {
+			Messages []Message `json:"messages"`
+		}{[]Message{message}})
+		if err != nil || uint64(len(structured)) > sizing.charge.structured {
+			return contextError("resource_limit", "The verified interaction exceeds the reply size limit", nil), nil
+		}
+		text := safeResultText(structured, int(sizing.charge.text))
+		if text == "" || !resultFrameFits(uint64(len(structured)), uint64(len(text))) {
+			return contextError("resource_limit", "The verified interaction exceeds the reply size limit", nil), nil
+		}
+		return &sdk.CallToolResult{StructuredContent: json.RawMessage(structured), Content: []sdk.Content{&sdk.TextContent{Text: text}}}, nil
+	}
+}
+
+func messageInteractionSchemas() (map[string]any, map[string]any) {
+	_, output := messageListSchemas()
+	plain := output["oneOf"].([]any)[0].(map[string]any)
+	array := plain["properties"].(map[string]any)["messages"].(map[string]any)
+	array["minItems"], array["maxItems"] = 1, 1
+	input := map[string]any{"type": "object", "additionalProperties": false, "required": []string{"jid"}, "properties": map[string]any{"jid": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}}}
+	return input, map[string]any{"type": "object", "oneOf": []any{plain, output["oneOf"].([]any)[2]}}
+}
+
 func messageContextHandler(reader messageContextReader) sdk.ToolHandler {
 	return func(ctx context.Context, req *sdk.CallToolRequest) (*sdk.CallToolResult, error) {
 		raw := req.Params.Arguments

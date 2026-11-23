@@ -49,6 +49,7 @@ const (
 	DiagnosticContactChats
 	DiagnosticListMessages
 	DiagnosticMessageContext
+	DiagnosticLastInteraction
 )
 
 const (
@@ -224,7 +225,7 @@ func (d *Diagnostics) ReportAudit(event DiagnosticEvent, tool DiagnosticTool, ca
 	if event != DiagnosticDenied && event != DiagnosticFailed {
 		event = DiagnosticFailed
 	}
-	tools := [...]string{"unknown", "list_chats", "get_chat", "search_contacts", "get_direct_chat_by_contact", "get_contact_chats", "list_messages", "get_message_context"}
+	tools := [...]string{"unknown", "list_chats", "get_chat", "search_contacts", "get_direct_chat_by_contact", "get_contact_chats", "list_messages", "get_message_context", "get_last_interaction"}
 	categories := [...]string{"unknown", "invalid_input", "not_found", "busy", "unavailable", "resource_limit", "internal"}
 	if int(tool) >= len(tools) {
 		tool = DiagnosticToolUnknown
