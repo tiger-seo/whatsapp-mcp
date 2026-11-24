@@ -325,9 +325,10 @@ func searchMessageBatch(ctx context.Context, q querier, f MessageFilter, branch 
 	}
 	keySQL := `SELECT time,CASE WHEN octet_length(chat_jid)<=256 THEN chat_jid END AS chat_jid,
 	 CASE WHEN octet_length(id)<=256 THEN id END AS id,rowid AS rid FROM messages INDEXED BY ` + index + " WHERE " + strings.Join(where, " AND ") + " ORDER BY " + order + " LIMIT ?4"
-	// Aggregate the bounded batch in the first SQLite step; no iterator retains a snapshot.
-	query := `WITH keys AS MATERIALIZED (` + keySQL + `), lengths AS MATERIALIZED (
-	 SELECT k.*, CASE WHEN ?7='' THEN 0 ELSE octet_length(m.text)+octet_length(m.caption) END AS raw,
+	// Aggregate the bounded batch in the first SQLite step. Only the keys need
+	// storage; the length checks feed the charge aggregate directly.
+	query := `WITH keys AS MATERIALIZED (` + keySQL + `), lengths AS NOT MATERIALIZED (
+	 SELECT CASE WHEN ?7='' THEN 0 ELSE octet_length(m.text)+octet_length(m.caption) END AS raw,
 	 CASE WHEN ?7='' THEN 0 ELSE octet_length(m.text_fold)+octet_length(m.caption_fold) END AS folded,
 	 octet_length(k.chat_jid)<=256 AND octet_length(k.id)<=256 AND typeof(k.chat_jid)='text' AND typeof(k.id)='text' AND typeof(k.time)='integer'
 	 AND (?7='' OR (typeof(m.text)='text' AND typeof(m.caption)='text' AND typeof(m.text_fold)='text' AND typeof(m.caption_fold)='text'

@@ -94,6 +94,9 @@ The independent review identified oversized-key materialization, malformed UTF-8
 | design | 2026-11-22 | 0d4c7fa | CONCERNS | |
 | design | 2026-11-23 | 7d150f9 | PASS | |
 | design | 2026-11-23 | e45dbd6 | PASS | |
+| code | 2026-11-24 | ab8555e | BLOCK | |
+
+- **Code BLOCK (`ab8555e`):** The native macOS named suite did not return the required sparse search result within the 5-second store deadline. The judge reviewed the committed diff and verification record; its local Go commands were denied, so the verdict relies on the recorded CI evidence and source review, not a judge rerun. It also flagged the one-result first-page search's one-row refills as an unverified scale risk, not a separate blocker. The unrelated local `.gitignore` change was excluded from this committed review.
 
 - **Current design PASS (`e45dbd6`):** Covers the committed Verified feasibility evidence and fixed ceilings. At delivery, run the 400,000-row fixtures early on native runners because of limited headroom under the 5-second store deadline. Confirm the production implementation does not retain rejected projections or batch text bodies. Neither observation blocks design approval.
 
@@ -164,3 +167,7 @@ The full `go test -timeout 30m ./...` command exited 0 on Windows and Linux and 
 | macOS/arm64, 00:48:34 | Exit 1, 34 top-level and 32 subtest passes; 1 top-level and 1 subtest failure | `timeout` at 5.003 s / correct empty reply in 3.344 s | 209.375 ms / 134.951 ms |
 
 On macOS `go test -count=1 -p 1 -timeout 30m ./...` passed; the native pipe, shutdown, and integrated controls passed. The separate unsafe-run summary step was skipped in this run after named acceptance failed; it passed on macOS in attempt 1 at `ba3b26f` with identical Go test and production code. Windows and Linux full regressions and the CI check job passed. **T033 remains open:** the exact named command ran on all three platforms, but the macOS sparse fixture did not return a valid result under that command. No other OS/architecture received native acceptance coverage.
+
+### Search Aggregation Follow-up
+
+On Windows/amd64 (2026-11-24 UTC, `CGO_ENABLED=0`), `go test -count=1 -timeout 5m -v ./internal/mcp -run '^TestMCPMessageAcceptanceScale$'` exited 1 on `ab8555e` (sparse timed out at 5.002 s; empty passed in 4.421 s). Removing the intermediate SQLite table for the length checks, while retaining bounded key materialization and checking the aggregate charge before UTF-8 validation and matching, gave exit 0 on the same command (one top-level test, both subtests passed; sparse 2.866 s, empty 3.007 s). These are individual observations, not a throughput guarantee.
