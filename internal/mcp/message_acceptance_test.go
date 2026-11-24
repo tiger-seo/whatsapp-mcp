@@ -119,7 +119,8 @@ func TestMCPMessageAcceptanceClosedStore(t *testing.T) {
 	}
 }
 
-func TestMCPMessageAcceptanceScale(t *testing.T) {
+func seedMessageScale(t *testing.T) (*store.Store, string) {
+	t.Helper()
 	dir := filepath.Join(t.TempDir(), "data")
 	if err := private.MkdirAll(dir); err != nil {
 		t.Fatal(err)
@@ -156,6 +157,11 @@ func TestMCPMessageAcceptanceScale(t *testing.T) {
 			t.Fatalf("seed %d: %v", start, err)
 		}
 	}
+	return st, dir
+}
+
+func TestMCPMessageAcceptanceScale(t *testing.T) {
+	st, _ := seedMessageScale(t)
 	c := chatTestServer(t, st.ToolReader())
 	for _, tc := range []struct {
 		query string

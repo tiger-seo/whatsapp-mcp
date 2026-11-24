@@ -153,6 +153,10 @@ jobs:
           if [[ -s "$profile" ]]; then
             go tool pprof -top -cum -focus=searchMessageBatch -nodecount=45 "$binary" "$profile"
           fi
+      - name: Compare macOS message search backing reads
+        if: ${{ !cancelled() && runner.os == 'macOS' && github.ref == 'refs/heads/007-mcp-message-tools' }}
+        shell: bash
+        run: CGO_ENABLED=0 go test -count=1 -timeout 8m -v -tags messageiodiagnostic ./internal/mcp -run '^TestSQLiteScaleBackingReads$'
       - name: Native stdio diagnostic shutdown evidence
         if: ${{ !cancelled() && (runner.os == 'Linux' || runner.os == 'macOS') }}
         shell: bash
