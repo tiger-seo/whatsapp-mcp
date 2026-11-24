@@ -141,4 +141,16 @@ All runs used `CGO_ENABLED=0` and synthetic fixtures. No real account was used.
 
 The strengthened native pipe fixture checks fake-owner pairing calls, data-directory entries between initialization and live replies, and the final file names and hashes across offline, cancellation and stalled-output cases. These observations cover the fixture's data directory; they are not a system-wide filesystem trace. The earlier scale timeouts remain relevant: even the passing Windows full run left less than half a second before the 5-second store deadline in the empty case.
 
-The new `Native message tool acceptance` CI step runs the named quickstart command and verifies passing test names in all three packages. The strengthened tests and named acceptance have not yet run on native Linux or macOS (T033). An owner-judge code verdict on a committed implementation and verification record is still required (T036).
+## Native Acceptance (2026-11-24 UTC)
+
+[CI run 45296592563, attempt 1](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/45296592563/attempts/1) tested `ba3b26ff5c82c1bf122e85f0ec018e9885979746` with `CGO_ENABLED=0` and synthetic fixtures only. The named command was `go test -count=1 -timeout 5m -v ./internal/store ./internal/mcp ./cmd/whatsapp-mcp -run '^Test(MCPMessage|ToolMessage)'`. Each passing named run confirmed 30 store, four MCP and one command top-level test, plus 33 passing subtests (no skips). These included actual WAL drain, guarded SDK scale and context continuation, and native stdio offline, cancellation and stalled-output cases.
+
+| Native runner (UTC start) | Named command | Guarded 400,000-row replies (sparse / empty) | First default-context replies (ordinary / escape-heavy) |
+| --- | --- | --- | --- |
+| Windows/amd64, 00:28:53 | Exit 0, 35 top-level passes | 2.225 s / 2.189 s | 243.559 ms / 170.858 ms |
+| Linux/amd64, 00:26:14 | Exit 0, 35 top-level passes | 2.051 s / 1.777 s | 238.540 ms / 138.871 ms |
+| macOS/arm64 | Skipped after the full-suite failure | Full-suite attempt returned `timeout` at 5.002 s / 5.001 s; neither was a valid reply | Not measured by the named command in this attempt |
+
+The full `go test -timeout 30m ./...` command exited 0 on Windows and Linux and exited 1 on macOS (`TestMCPMessageAcceptanceScale`, both subcases). The separate native diagnostic-shutdown, integrated pipe, and unsafe-run controls still passed on macOS. CI's check job passed formatting, vet, module verification, the vulnerability scan, the Unix privacy check and all five cross-builds. Cross-builds are not native runtime evidence. No real account was used.
+
+[Attempt 2](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/45296592563/attempts/2) repeated the macOS full-suite failure on the same commit: exit 1, with guarded sparse and empty requests returning `timeout` at 5.002 s and 5.002 s. Named acceptance was again skipped. The workflow now runs named acceptance even after a full-suite failure and serializes package execution for macOS full regression; it does not change the named acceptance command, within-package concurrency tests, fixtures or production deadlines.
