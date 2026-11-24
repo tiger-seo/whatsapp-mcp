@@ -141,6 +141,18 @@ jobs:
           for name in TestToolMessageLifecycleActualWALDrain TestMCPMessageAcceptanceScale TestMCPMessageBudgetContinuation TestMCPMessageStdioNative; do
             grep -q "^--- PASS: $name (" "$results" || { echo "::error::missing passing native evidence for $name"; exit 1; }
           done
+      - name: Profile failed macOS message acceptance
+        if: ${{ failure() && runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          profile="$RUNNER_TEMP/message-search.cpu"
+          binary="$RUNNER_TEMP/message-search.test"
+          status=0
+          go test -count=1 -v -timeout 5m -cpuprofile "$profile" -o "$binary" ./internal/mcp -run '^TestMCPMessageAcceptanceScale$' || status=$?
+          echo "profiled_test_exit=$status"
+          if [[ -s "$profile" ]]; then
+            go tool pprof -top -cum -focus=searchMessageBatch -nodecount=45 "$binary" "$profile"
+          fi
       - name: Native stdio diagnostic shutdown evidence
         if: ${{ !cancelled() && (runner.os == 'Linux' || runner.os == 'macOS') }}
         shell: bash

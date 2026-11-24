@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -85,6 +87,85 @@ func TestToolMessageSearchRejectsMalformedUTF8(t *testing.T) {
 		if !errors.Is(err, ErrResourceLimit) || len(keys) != 0 {
 			t.Fatalf("malformed search field: %v %v", keys, err)
 		}
+	}
+}
+
+func TestToolMessageSearchBatchGuardsBeforeBody(t *testing.T) {
+	f := newToolMessageFixture(t)
+	if _, err := f.store.writer.ExecContext(t.Context(), `UPDATE messages SET text=?,text_fold=? WHERE chat_jid=? AND id='direct'`, "\xff", "\xff", f.phone); err != nil {
+		t.Fatal(err)
+	}
+	filt := MessageFilter{ChatJID: f.phone, Query: "absent"}
+	_, err := messageSnapshot(t.Context(), f.reader, func(ctx context.Context, q querier) (int, error) {
+		keys, _, count, raw, folded, err := searchMessageBatch(ctx, q, filt, senderBranch{}, messageKey{time: math.MaxInt64}, 1, filt.Query, 0, 0)
+		if !errors.Is(err, errSearchBatchBytes) || count != 1 || len(keys) != 0 || raw != 0 || folded != 0 {
+			t.Errorf("over-budget batch: keys=%v count=%d raw=%d folded=%d err=%v", keys, count, raw, folded, err)
+		}
+		keys, _, _, _, _, err = searchMessageBatch(ctx, q, filt, senderBranch{}, messageKey{time: math.MaxInt64}, 1, filt.Query, 2*messageSearchField, 2*messageSearchFieldFold)
+		if !errors.Is(err, ErrResourceLimit) || len(keys) != 0 {
+			t.Errorf("reserved batch accepted malformed field: keys=%v err=%v", keys, err)
+		}
+		return 0, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+type capturedSearchQuery struct {
+	querier
+	sql  string
+	args []any
+}
+
+func (q *capturedSearchQuery) QueryRowContext(ctx context.Context, sql string, args ...any) *sql.Row {
+	q.sql, q.args = sql, args
+	return q.querier.QueryRowContext(ctx, sql, args...)
+}
+
+func TestToolMessageSearchReservedSeekPlans(t *testing.T) {
+	f := newToolMessageFixture(t)
+	for _, tc := range []struct {
+		chat   string
+		branch senderBranch
+		index  string
+	}{
+		{"", senderBranch{}, "messages_time"},
+		{f.phone, senderBranch{}, "messages_chat_time"},
+		{"", senderBranch{column: "sender_phone", value: "491511111111"}, "messages_sender_time"},
+		{"", senderBranch{column: "sender_jid", value: f.alias}, "messages_sender_jid"},
+		{f.phone, senderBranch{column: "sender_phone", value: "491511111111"}, "messages_chat_sender_phone"},
+		{f.phone, senderBranch{column: "sender_jid", value: f.alias}, "messages_chat_sender_jid"},
+	} {
+		t.Run(tc.index, func(t *testing.T) {
+			q := &capturedSearchQuery{querier: f.store.reader}
+			filter := MessageFilter{ChatJID: tc.chat, Query: "needle", After: at(1), Before: at(20)}
+			cursor := messageKey{time: at(10).UnixMilli(), chatJID: f.phone, id: "z"}
+			if _, _, _, _, _, err := searchMessageBatch(t.Context(), q, filter, tc.branch, cursor, 32, filter.Query, messageSearchRawBytes, messageSearchFoldBytes); err != nil {
+				t.Fatal(err)
+			}
+			rows, err := q.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+q.sql, q.args...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			var plan []string
+			for rows.Next() {
+				var id, parent, unused int
+				var detail string
+				if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+					t.Fatal(err)
+				}
+				plan = append(plan, detail)
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+			joined := strings.Join(plan, "\n")
+			if !strings.Contains(joined, "SEARCH messages USING INDEX "+tc.index+" (") || strings.Contains(joined, "SEARCH m USING INTEGER PRIMARY KEY") {
+				t.Fatalf("expected one indexed table walk: %s", joined)
+			}
+		})
 	}
 }
 

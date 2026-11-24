@@ -135,9 +135,11 @@ func (r *ToolReader) ListMessages(ctx context.Context, f MessageFilter, counts C
 const (
 	messageSearchVisits    = 400001
 	messageSearchBatch     = 256
+	messageSearchField     = 256 << 10
 	messageSearchRawBytes  = 80 << 20
 	messageSearchFoldBytes = 320 << 20
 	messageSearchFieldFold = 2621440
+	minReservedSearchRows  = 16
 )
 
 type searchCandidate struct {
@@ -225,6 +227,10 @@ func searchMessageKeys(ctx context.Context, q querier, f MessageFilter, p Page) 
 				n := min(messageSearchBatch, remaining)
 				if p.Limit == 1 && p.Offset == 0 {
 					n = 1
+				} else if needle != "" {
+					if reserved := reservedSearchRows(messageSearchRawBytes-raw, messageSearchFoldBytes-folded); reserved >= minReservedSearchRows {
+						n = min(n, reserved)
+					}
 				}
 				var candidates []searchCandidate
 				var next messageKey
@@ -293,6 +299,10 @@ func searchKeyGreater(a, b messageKey) bool {
 	return a.id > b.id
 }
 
+func reservedSearchRows(rawLeft, foldLeft int) int {
+	return min(rawLeft/(2*messageSearchField), foldLeft/(2*messageSearchFieldFold))
+}
+
 func searchMessageBatch(ctx context.Context, q querier, f MessageFilter, branch senderBranch, cursor messageKey, limit int, needle string, rawLeft, foldLeft int) ([]searchCandidate, messageKey, int, int, int, error) {
 	index, order, boundary := "messages_time", "messages.time DESC,messages.chat_jid DESC,messages.id DESC", "(time,chat_jid,id)<(?1,?2,?3)"
 	var where []string
@@ -323,26 +333,46 @@ func searchMessageBatch(ctx context.Context, q querier, f MessageFilter, branch 
 	if !f.Before.IsZero() {
 		where = append(where, "time<?11")
 	}
-	keySQL := `SELECT time,CASE WHEN octet_length(chat_jid)<=256 THEN chat_jid END AS chat_jid,
-	 CASE WHEN octet_length(id)<=256 THEN id END AS id,rowid AS rid FROM messages INDEXED BY ` + index + " WHERE " + strings.Join(where, " AND ") + " ORDER BY " + order + " LIMIT ?4"
-	// Aggregate the bounded batch in the first SQLite step. Only the keys need
-	// storage; the length checks feed the charge aggregate directly.
-	query := `WITH keys AS MATERIALIZED (` + keySQL + `), lengths AS NOT MATERIALIZED (
-	 SELECT CASE WHEN ?7='' THEN 0 ELSE octet_length(m.text)+octet_length(m.caption) END AS raw,
-	 CASE WHEN ?7='' THEN 0 ELSE octet_length(m.text_fold)+octet_length(m.caption_fold) END AS folded,
-	 octet_length(k.chat_jid)<=256 AND octet_length(k.id)<=256 AND typeof(k.chat_jid)='text' AND typeof(k.id)='text' AND typeof(k.time)='integer'
-	 AND (?7='' OR (typeof(m.text)='text' AND typeof(m.caption)='text' AND typeof(m.text_fold)='text' AND typeof(m.caption_fold)='text'
-	 AND octet_length(m.text)<=262144 AND octet_length(m.caption)<=262144 AND octet_length(m.text_fold)<=2621440 AND octet_length(m.caption_fold)<=2621440)) AS valid
-	 FROM keys k CROSS JOIN messages m ON m.rowid=k.rid
-	), charge AS MATERIALIZED (
-	 SELECT count(*) AS n,coalesce(sum(raw),0) AS raw,coalesce(sum(folded),0) AS folded,coalesce(min(valid),1) AS valid FROM lengths
+	// Materialize only bounded keys and metadata, not message bodies.
+	keySQL := `SELECT time,CASE WHEN octet_length(chat_jid)<=256 AND typeof(chat_jid)='text' THEN chat_jid END AS chat_jid,
+	 CASE WHEN octet_length(id)<=256 AND typeof(id)='text' THEN id END AS id,rowid AS rid,
+	 CASE WHEN ?7='' THEN 0 ELSE octet_length(text) END AS text_bytes,
+	 CASE WHEN ?7='' THEN 0 ELSE octet_length(caption) END AS caption_bytes,
+	 CASE WHEN ?7='' THEN 0 ELSE octet_length(text_fold) END AS text_fold_bytes,
+	 CASE WHEN ?7='' THEN 0 ELSE octet_length(caption_fold) END AS caption_fold_bytes`
+	seek := ` FROM messages INDEXED BY ` + index + " WHERE " + strings.Join(where, " AND ") + " ORDER BY " + order + " LIMIT ?4"
+	validation := `mcp_valid_utf8(CAST(text AS BLOB),CAST(caption AS BLOB),CAST(text_fold AS BLOB),CAST(caption_fold AS BLOB))`
+	fieldGuards := `typeof(text)='text' AND typeof(caption)='text' AND typeof(text_fold)='text' AND typeof(caption_fold)='text'
+	 AND octet_length(text)<=262144 AND octet_length(caption)<=262144 AND octet_length(text_fold)<=2621440 AND octet_length(caption_fold)<=2621440`
+	reserved := needle != "" && limit <= reservedSearchRows(rawLeft, foldLeft)
+	validSQL := `chat_jid IS NOT NULL AND id IS NOT NULL AND typeof(time)='integer'`
+	if reserved {
+		// The entire worst-case batch fits. CASE guards each body before it is
+		// read, so validation and matching need no second table lookup.
+		keySQL += `, CASE WHEN ` + fieldGuards + ` THEN CASE WHEN ` + validation + `=1
+		 THEN CASE WHEN instr(text_fold,?7)>0 OR instr(caption_fold,?7)>0 THEN 1 ELSE 0 END
+		 ELSE -1 END ELSE -1 END AS match`
+		validSQL += ` AND match>=0`
+	} else {
+		keySQL += `, CASE WHEN ?7='' THEN 1 ELSE typeof(text)='text' AND typeof(caption)='text' AND typeof(text_fold)='text' AND typeof(caption_fold)='text' END AS fields_valid`
+		validSQL += ` AND fields_valid AND text_bytes<=262144 AND caption_bytes<=262144 AND text_fold_bytes<=2621440 AND caption_fold_bytes<=2621440`
+	}
+	keySQL += seek
+	query := `WITH keys AS MATERIALIZED (` + keySQL + `), charge AS MATERIALIZED (
+	 SELECT count(*) AS n,coalesce(sum(text_bytes+caption_bytes),0) AS raw,coalesce(sum(text_fold_bytes+caption_fold_bytes),0) AS folded,
+	 coalesce(min(` + validSQL + `),1) AS valid FROM keys
 	)
 	SELECT n,raw,folded,valid,
 	 CASE WHEN valid=1 AND raw<=?5 AND folded<=?6 THEN coalesce((SELECT json_array(time,hex(CAST(chat_jid AS BLOB)),hex(CAST(id AS BLOB))) FROM keys ORDER BY time,chat_jid,id LIMIT 1),'[]') ELSE '[]' END,
 	 CASE WHEN valid=1 AND raw<=?5 AND folded<=?6 THEN
-	 (SELECT json_array(coalesce(min(CASE WHEN ?7='' THEN 1 ELSE mcp_valid_utf8(CAST(m.text AS BLOB),CAST(m.caption AS BLOB),CAST(m.text_fold AS BLOB),CAST(m.caption_fold AS BLOB)) END),1),
-	 json(coalesce(json_group_array(json_array(k.time,hex(CAST(k.chat_jid AS BLOB)),hex(CAST(k.id AS BLOB))) ORDER BY k.time DESC,k.chat_jid DESC,k.id DESC) FILTER (WHERE ?7='' OR instr(m.text_fold,?7)>0 OR instr(m.caption_fold,?7)>0),'[]')))
-	 FROM keys k CROSS JOIN messages m ON m.rowid=k.rid) ELSE '[1,[]]' END FROM charge`
+	`
+	matchCheck, matchFilter, matchSource := `CASE WHEN ?7='' THEN 1 ELSE `+validation+` END`, `?7='' OR instr(text_fold,?7)>0 OR instr(caption_fold,?7)>0`, `keys k CROSS JOIN messages m ON m.rowid=k.rid`
+	if reserved {
+		matchCheck, matchFilter, matchSource = `1`, `match=1`, `keys k`
+	}
+	query += `(SELECT json_array(coalesce(min(` + matchCheck + `),1),
+	 json(coalesce(json_group_array(json_array(k.time,hex(CAST(k.chat_jid AS BLOB)),hex(CAST(k.id AS BLOB))) ORDER BY k.time DESC,k.chat_jid DESC,k.id DESC) FILTER (WHERE ` + matchFilter + `),'[]')))
+	 FROM ` + matchSource + `) ELSE '[1,[]]' END FROM charge`
 	var count, raw, folded, valid int
 	var encoded, cursorJSON string
 	err := q.QueryRowContext(ctx, query, cursor.time, cursor.chatJID, cursor.id, limit, rawLeft, foldLeft, needle, f.ChatJID, branch.value, f.After.UnixMilli(), beforeMillis(f.Before)).Scan(&count, &raw, &folded, &valid, &cursorJSON, &encoded)
