@@ -154,3 +154,13 @@ The strengthened native pipe fixture checks fake-owner pairing calls, data-direc
 The full `go test -timeout 30m ./...` command exited 0 on Windows and Linux and exited 1 on macOS (`TestMCPMessageAcceptanceScale`, both subcases). The separate native diagnostic-shutdown, integrated pipe, and unsafe-run controls still passed on macOS. CI's check job passed formatting, vet, module verification, the vulnerability scan, the Unix privacy check and all five cross-builds. Cross-builds are not native runtime evidence. No real account was used.
 
 [Attempt 2](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/45296592563/attempts/2) repeated the macOS full-suite failure on the same commit: exit 1, with guarded sparse and empty requests returning `timeout` at 5.002 s and 5.002 s. Named acceptance was again skipped. The workflow now runs named acceptance even after a full-suite failure and serializes package execution for macOS full regression; it does not change the named acceptance command, within-package concurrency tests, fixtures or production deadlines.
+
+[CI run 45298905633](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/45298905633) tested `eb0657a8dba00d86a2c25d2860d200bd71adf7c3` under the same synthetic, CGO-free acceptance command:
+
+| Native runner (UTC start) | Named command | Guarded 400,000-row replies (sparse / empty) | First default-context replies (ordinary / escape-heavy) |
+| --- | --- | --- | --- |
+| Linux/amd64, 00:43:17 | Exit 0, 35 top-level and 33 subtest passes | 2.120 s / 1.875 s | 242.206 ms / 136.348 ms |
+| Windows/amd64, 00:46:07 | Exit 0, 35 top-level and 33 subtest passes | 2.090 s / 2.074 s | 252.966 ms / 156.106 ms |
+| macOS/arm64, 00:48:34 | Exit 1, 34 top-level and 32 subtest passes; 1 top-level and 1 subtest failure | `timeout` at 5.003 s / correct empty reply in 3.344 s | 209.375 ms / 134.951 ms |
+
+On macOS `go test -count=1 -p 1 -timeout 30m ./...` passed; the native pipe, shutdown, and integrated controls passed. The separate unsafe-run summary step was skipped in this run after named acceptance failed; it passed on macOS in attempt 1 at `ba3b26f` with identical Go test and production code. Windows and Linux full regressions and the CI check job passed. **T033 remains open:** the exact named command ran on all three platforms, but the macOS sparse fixture did not return a valid result under that command. No other OS/architecture received native acceptance coverage.

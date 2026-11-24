@@ -372,9 +372,9 @@ offset is exceeded, `narrow_search` advises narrowing the search. A first anchor
 text or caption previews; neighbours, exact targets and last interactions are never previewed. A listing without
 context, an exact target or a last interaction must fit in full or return a size error.
 
-The synthetic full suite passed in CI on Windows, Linux and macOS at `b92520c`. The strengthened, named message
-acceptance suite passed on Windows; native Linux and macOS runs of that suite and the owner code review remain pending.
-Large searches can still time out near the 5-second store deadline. See the
+The strengthened, named message acceptance suite passed on Windows and Linux. The serialized full regression passed
+on macOS, but its separate named acceptance run hit the 5-second store deadline on the sparse search fixture.
+Native acceptance and the owner code gate remain open. See the
 [feature verification record](specs/007-mcp-message-tools/verification.md) for fixture results and limits.
 
 **Admission and shutdown:** one tool is admitted through completion of its response write, with no waiting tool
