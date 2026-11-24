@@ -195,3 +195,24 @@ The [native macOS job at `594425c`](https://github.com/tiger-seo/whatsapp-mcp/ac
 | macOS/arm64 | Exit 1; 36 top-level and 38 subtest passes | `timeout` at 5.002 s / correct empty reply in 3.994 s | Exit 1; sparse guarded search timed out at 5.003 s |
 
 CI's check job passed. On the same macOS runner, the separate `go test -count=1 -v -timeout 5m -cpuprofile "$profile" -o "$binary" ./internal/mcp -run '^TestMCPMessageAcceptanceScale$'` exited 0 (one top-level and two subtest passes, 4.491 s sparse, 2.827 s empty). `go tool pprof -top -cum -focus=searchMessageBatch` showed 2.92 of 3.19 sampled search CPU seconds in the SQLite `pread` stack. This identifies the dominant sampled operation in the isolated diagnostic, not the wall-time breakdown of the failed acceptance or whether most reads came from the database or WAL. No deadline or acceptance limit changed. T033 and T036 remain open.
+
+### Backing-File Diagnostic (2026-11-24 UTC)
+
+[Native macOS/arm64 job 138176239366](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/45313981225/job/138176239366) ran at `252045ca8a37c7f8a1b1e61c8e2da6c34eec079b`. The opt-in command `CGO_ENABLED=0 go test -count=1 -timeout 8m -v -tags messageiodiagnostic ./internal/mcp -run '^TestSQLiteScaleBackingReads$'` exited 0 (one top-level test, four subtests, eight measured requests). Each subtest independently seeded 400,000 synthetic rows via the same writer as acceptance, then issued the same guarded SDK query twice. Only the diagnostic checkpointed copy ran `PRAGMA wal_checkpoint(TRUNCATE)`. The hook counted actual bytes returned by VFS `pread` through reply receipt; it does not count memory-mapped reads or distinguish physical disk I/O from OS cache hits. A timed-out row is a partial read ledger, not a successful search.
+
+| Search / setup | Trial | Reply | Main reads / bytes | WAL reads / bytes |
+| --- | --- | --- | --- | --- |
+| Sparse / post-ingest | First | Exact, 4.547 s | 25,655 / 105,082,880 | 141 / 577,536 |
+| Sparse / post-ingest | Repeat | Exact, 2.690 s | 25,650 / 105,062,400 | 140 / 573,440 |
+| Sparse / checkpointed | First | Exact, 4.771 s | 25,796 / 105,660,416 | 0 / 0 |
+| Sparse / checkpointed | Repeat | Exact, 4.203 s | 25,790 / 105,635,840 | 0 / 0 |
+| Empty / checkpointed | First | Exact, 4.855 s | 25,742 / 105,439,232 | 0 / 0 |
+| Empty / checkpointed | Repeat | Timeout, 5.003 s | 20,449 / 83,759,104 | 0 / 0 |
+| Empty / post-ingest | First | Timeout, 5.002 s | 24,421 / 100,028,416 | 139 / 569,344 |
+| Empty / post-ingest | Repeat | Timeout, 5.001 s | 16,337 / 66,916,352 | 138 / 565,248 |
+
+There were no unattributed reads. Main-database reads accounted for more than 99.4% of read bytes in the completed post-ingest cases. Checkpointing eliminated measured WAL reads, did not reduce the completed sparse request's total bytes, and did not reliably prevent timeouts. This is evidence against changing checkpoint policy for this fixture. Run-to-run variance and diagnostic-hook overhead limit timing comparisons; first and repeat requests were not forced into cold/warm OS cache states.
+
+The same tagged diagnostic passed under WSL2 Linux/amd64 (`-buildvcs=false`, `TMPDIR=/var/tmp`, exit 0, one top-level/four subtest passes; seven exact replies and one checkpointed timeout). Its completed requests also read roughly 105 MB from the main database, with less than 0.6 MB from WAL or none after checkpointing. Tagged `go vet` on WSL2 and the `CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go test -tags messageiodiagnostic -c` cross-build both exited 0. The latter was compile-only.
+
+The unchanged native named acceptance in this CI run still failed on macOS (exit 1; sparse `timeout` at 5.002 s, exact empty reply in 3.990 s); full regression failed there too. Windows and Linux passed their CI jobs. The diagnostic is not acceptance evidence. Production code, fixture inputs and deadlines were unchanged; T033 and T036 remain open. The next candidate should reduce main-database page reads or their overhead within the existing resource bounds, measured against this baseline before changing production policy.
