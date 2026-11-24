@@ -127,10 +127,6 @@ jobs:
           echo 'TMP=D:\wa-tmp' >> "$GITHUB_ENV"
       # The store's tests include concurrency and crash tests; the default 10 min is too tight for the slowest runner (Windows needs more than 15 min for the limit and memory tests).
       - run: go test -timeout 30m ./...
-        if: runner.os != 'macOS'
-      # Keep the full-suite SQLite fixtures in separate package runs on the shared macOS runner.
-      - run: go test -count=1 -p 1 -timeout 30m ./...
-        if: runner.os == 'macOS'
       - name: Native message tool acceptance
         if: ${{ !cancelled() }}
         shell: bash

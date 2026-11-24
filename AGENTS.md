@@ -86,8 +86,8 @@ read facade and the existing owner/lock lifecycle. Owner launch allows all store
 not grant account actions. Its native pipe evidence covers Windows/amd64, Linux/amd64 and macOS/arm64 with no real
 account. Delivery and owner review are recorded in the archived [feature 006 tasks](.specify/archive/006-mcp-stdio-tools/tasks.md#current-state).
 Feature 007 implements three local message reads. The strengthened named acceptance suite passed on Windows and
-Linux. On macOS, the serialized full regression passed, but the sparse SDK search hit the 5-second store deadline
-in the named acceptance suite. Native acceptance and the owner code gate remain open; see
+Linux. On macOS, the sparse SDK search repeatedly hit the 5-second store deadline and serializing full regression
+did not reliably help. Native acceptance and the owner code gate remain open; see
 `specs/007-mcp-message-tools/verification.md` for the recorded evidence.
 Since 2026-11-13 `go.mod` replaces whatsmeow with the owner's fork `github.com/tiger-seo/whatsmeow` at `bedcf01`
 (branch `receive-bounds`), which enforces the receive bounds, sends nothing to the user's phone on another account's

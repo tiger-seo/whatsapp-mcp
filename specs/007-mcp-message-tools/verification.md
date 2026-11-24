@@ -171,3 +171,13 @@ On macOS `go test -count=1 -p 1 -timeout 30m ./...` passed; the native pipe, shu
 ### Search Aggregation Follow-up
 
 On Windows/amd64 (2026-11-24 UTC, `CGO_ENABLED=0`), `go test -count=1 -timeout 5m -v ./internal/mcp -run '^TestMCPMessageAcceptanceScale$'` exited 1 on `ab8555e` (sparse timed out at 5.002 s; empty passed in 4.421 s). Removing the intermediate SQLite table for the length checks, while retaining bounded key materialization and checking the aggregate charge before UTF-8 validation and matching, gave exit 0 on the same command (one top-level test, both subtests passed; sparse 2.866 s, empty 3.007 s). These are individual observations, not a throughput guarantee.
+
+[CI run 45301552497](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/45301552497) tested `b23357c165ebd1709f24b8da2622a196d1f8990a` with the same named command, `CGO_ENABLED=0`, and synthetic fixtures:
+
+| Native runner (UTC start) | Named command | Guarded 400,000-row replies (sparse / empty) | First default-context replies (ordinary / escape-heavy) |
+| --- | --- | --- | --- |
+| Linux/amd64, 01:03:32 | Exit 0, 35 top-level and 33 subtest passes | 1.791 s / 1.553 s | 238.917 ms / 130.660 ms |
+| Windows/amd64, 01:03:52 | Exit 0, 35 top-level and 33 subtest passes | 0.940 s / 0.889 s | 136.924 ms / 94.063 ms |
+| macOS/arm64, 01:09:57 | Exit 1, 34 top-level and 32 subtest passes; 1 top-level and 1 subtest failure | `timeout` at 5.002 s / correct empty reply in 2.314 s | 188.179 ms / 94.340 ms |
+
+Windows and Linux full regressions and CI's check job passed. The macOS serialized full regression also failed: sparse and empty requests timed out at 5.002 s and 5.002 s. CI restores the standard regression command because serializing packages did not reliably clear this failure, and still runs named acceptance independently. T033 and T036 remain open. A synthetic PR-create hook event on 2026-11-24 returned `deny` for the recorded code BLOCK; no actual PR operation was performed.

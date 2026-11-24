@@ -372,8 +372,8 @@ offset is exceeded, `narrow_search` advises narrowing the search. A first anchor
 text or caption previews; neighbours, exact targets and last interactions are never previewed. A listing without
 context, an exact target or a last interaction must fit in full or return a size error.
 
-The strengthened, named message acceptance suite passed on Windows and Linux. The serialized full regression passed
-on macOS, but its separate named acceptance run hit the 5-second store deadline on the sparse search fixture.
+The strengthened, named message acceptance suite passed on Windows and Linux. On macOS, repeated runs hit the
+5-second store deadline on the sparse search fixture, including after reducing SQLite aggregation work.
 Native acceptance and the owner code gate remain open. See the
 [feature verification record](specs/007-mcp-message-tools/verification.md) for fixture results and limits.
 
