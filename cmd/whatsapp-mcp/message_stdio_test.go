@@ -3,13 +3,16 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -94,6 +97,32 @@ func testMessageStdioNative(t *testing.T, mode string) {
 	if closeErr := st.Close(ctx); err != nil || closeErr != nil {
 		t.Fatalf("seed: %v / %v", err, closeErr)
 	}
+	requireReleasedLock(t, dir) // Include the normal lock file in the baseline.
+	entryNames := func() []string {
+		t.Helper()
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		return names
+	}
+	snapshot := func() map[string][sha256.Size]byte {
+		t.Helper()
+		files := make(map[string][sha256.Size]byte)
+		for _, name := range entryNames() {
+			b, err := os.ReadFile(filepath.Join(dir, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			files[name] = sha256.Sum256(b)
+		}
+		return files
+	}
+	baseline := snapshot()
 	deadline, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(deadline, os.Args[0], "-test.run=^TestMCPMessageStdioNative$")
@@ -146,6 +175,17 @@ func testMessageStdioNative(t *testing.T, mode string) {
 		if err != nil || json.Unmarshal(b, &frame) != nil || frame.JSONRPC != "2.0" || frame.ID != id || len(frame.Result) == 0 {
 			t.Fatalf("invalid protocol reply id=%d: %q (%v)", id, b, err)
 		}
+		var result struct{ IsError bool }
+		if err := json.Unmarshal(frame.Result, &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.IsError {
+			for _, marker := range messageSecrets {
+				if strings.Contains(string(frame.Result), marker) {
+					t.Fatalf("tool error leaked %q", marker)
+				}
+			}
+		}
 		return frame.Result
 	}
 	await := func(name string) {
@@ -160,6 +200,7 @@ func testMessageStdioNative(t *testing.T, mode string) {
 	}
 	send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`)
 	reply(1)
+	liveNames := entryNames()
 	send(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
 	send(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_messages","arguments":{}}}`)
 	switch mode {
@@ -173,11 +214,6 @@ func testMessageStdioNative(t *testing.T, mode string) {
 		if !strings.Contains(string(failure), `"isError":true`) {
 			t.Fatalf("expected tool error: %s", failure)
 		}
-		for _, marker := range messageSecrets {
-			if strings.Contains(string(failure), marker) {
-				t.Fatalf("tool error leaked %q: %s", marker, failure)
-			}
-		}
 		send(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_message_context","arguments":{"message_id":"fixture","chat_jid":"` + pipeJID + `","before":0,"after":0}}}`)
 		if result := reply(4); strings.Contains(string(result), `"isError":true`) || !strings.Contains(string(result), messageSecrets[2]) {
 			t.Fatalf("message context: %s", result)
@@ -185,6 +221,9 @@ func testMessageStdioNative(t *testing.T, mode string) {
 		send(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_last_interaction","arguments":{"jid":"` + pipeJID + `"}}}`)
 		if result := reply(5); strings.Contains(string(result), `"isError":true`) || !strings.Contains(string(result), messageSecrets[2]) {
 			t.Fatalf("last interaction: %s", result)
+		}
+		if names := entryNames(); !slices.Equal(names, liveNames) {
+			t.Fatalf("live data directory changed: before=%v after=%v", liveNames, names)
 		}
 		in.Close()
 	case "cancel":
@@ -231,6 +270,9 @@ func testMessageStdioNative(t *testing.T, mode string) {
 		await("writes-2-1")
 	} else if b, err := io.ReadAll(reader); err != nil || len(b) != 0 {
 		t.Fatalf("extra stdout: %q (%v)", b, err)
+	}
+	if after := snapshot(); !maps.Equal(baseline, after) {
+		t.Fatalf("data directory changed: before=%v after=%v", slices.Sorted(maps.Keys(baseline)), slices.Sorted(maps.Keys(after)))
 	}
 	requireReleasedLock(t, dir)
 	st, err = store.Open(ctx, dir, slog.New(slog.DiscardHandler))

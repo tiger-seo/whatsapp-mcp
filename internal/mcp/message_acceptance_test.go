@@ -53,6 +53,20 @@ func TestMCPMessageAcceptanceDiscoveryAndJourneys(t *testing.T) {
 	if hit["id"] != "journey-07" || len(hit["before"].([]any)) != 5 || len(hit["after"].([]any)) != 5 {
 		t.Fatalf("search context: %v", hit)
 	}
+	root = chatCall(t, c, "list_messages", map[string]any{
+		"after": "2026-03-01T00:05:00Z", "before": "2026-03-01T00:09:00Z",
+		"chat_jid": "journey@g.us", "sender_phone_number": fixtureJID(0), "query": "ORDINARY",
+		"limit": 1, "page": 1, "include_context": true, "context_before": 0, "context_after": 1,
+	}, false)
+	rows = root["messages"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("explicit search: %v", root)
+	}
+	hit = rows[0].(map[string]any)
+	after := hit["after"].([]any)
+	if hit["id"] != "journey-06" || len(hit["before"].([]any)) != 0 || len(after) != 1 || after[0].(map[string]any)["id"] != "journey-07" {
+		t.Fatalf("explicit search context: %v", hit)
+	}
 	root = chatCall(t, c, "get_message_context", map[string]any{"message_id": "journey-07"}, true)
 	if root["error"].(map[string]any)["code"] != "ambiguous_id" {
 		t.Fatalf("duplicate: %v", root)
@@ -60,6 +74,10 @@ func TestMCPMessageAcceptanceDiscoveryAndJourneys(t *testing.T) {
 	root = chatCall(t, c, "get_message_context", map[string]any{"message_id": "journey-07", "chat_jid": "journey@g.us"}, false)
 	if len(root["before"].([]any)) != 6 || len(root["after"].([]any)) != 6 {
 		t.Fatalf("context: %v", root)
+	}
+	root = chatCall(t, c, "get_message_context", map[string]any{"message_id": "journey-07", "chat_jid": "journey@g.us", "before": 1, "after": 0}, false)
+	if len(root["before"].([]any)) != 1 || len(root["after"].([]any)) != 0 {
+		t.Fatalf("explicit context: %v", root)
 	}
 	root = chatCall(t, c, "get_last_interaction", map[string]any{"jid": fixtureJID(0)}, false)
 	if root["messages"].([]any)[0].(map[string]any)["id"] != "journey-14" {

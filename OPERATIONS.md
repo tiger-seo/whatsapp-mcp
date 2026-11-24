@@ -372,10 +372,10 @@ offset is exceeded, `narrow_search` advises narrowing the search. A first anchor
 text or caption previews; neighbours, exact targets and last interactions are never previewed. A listing without
 context, an exact target or a last interaction must fit in full or return a size error.
 
-The message tools are implemented but feature 007 verification and owner code review are still in progress.
-Windows synthetic scale searches have timed out under concurrent test load despite passing in isolation near the
-5-second store deadline. Native Linux and macOS message-tool controls are not yet verified; see the
-[feature verification record](specs/007-mcp-message-tools/verification.md).
+The synthetic full suite passed in CI on Windows, Linux and macOS at `b92520c`. The strengthened, named message
+acceptance suite passed on Windows; native Linux and macOS runs of that suite and the owner code review remain pending.
+Large searches can still time out near the 5-second store deadline. See the
+[feature verification record](specs/007-mcp-message-tools/verification.md) for fixture results and limits.
 
 **Admission and shutdown:** one tool is admitted through completion of its response write, with no waiting tool
 queue. `busy` means the tool credit, store capacity or WAL admission check refused the read; retry later. A WAL

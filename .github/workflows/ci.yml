@@ -127,6 +127,19 @@ jobs:
           echo 'TMP=D:\wa-tmp' >> "$GITHUB_ENV"
       # The store's tests include concurrency and crash tests; the default 10 min is too tight for the slowest runner (Windows needs more than 15 min for the limit and memory tests).
       - run: go test -timeout 30m ./...
+      - name: Native message tool acceptance
+        shell: bash
+        run: |
+          echo "commit=$(git rev-parse HEAD) date=$(date -u +%FT%TZ) native=$(go env GOOS GOARCH | xargs)"
+          results="$RUNNER_TEMP/message-acceptance.log"
+          status=0
+          go test -count=1 -timeout 5m -v ./internal/store ./internal/mcp ./cmd/whatsapp-mcp -run '^Test(MCPMessage|ToolMessage)' > "$results" || status=$?
+          cat "$results"
+          echo "go_test_exit=$status"
+          if [ "$status" -ne 0 ]; then exit "$status"; fi
+          for name in TestToolMessageLifecycleActualWALDrain TestMCPMessageAcceptanceScale TestMCPMessageBudgetContinuation TestMCPMessageStdioNative; do
+            grep -q "^--- PASS: $name (" "$results" || { echo "::error::missing passing native evidence for $name"; exit 1; }
+          done
       - name: Native stdio diagnostic shutdown evidence
         if: ${{ !cancelled() && (runner.os == 'Linux' || runner.os == 'macOS') }}
         shell: bash
