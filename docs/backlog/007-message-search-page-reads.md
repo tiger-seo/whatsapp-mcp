@@ -2,13 +2,15 @@
 
 **Created**: 2026-11-26
 
-**Status**: Open; design revision proposed, awaiting the owner's decision. Blocks tasks T033 and T036 of feature 007.
+**Status**: Open; the proposed covering index failed its bar on 2026-11-26. Awaiting the owner's decision on the
+requirement or the evidence for it. Blocks tasks T033 and T036 of feature 007.
 
 ## Problem
 
 On the 400,000-row acceptance fixture, a default `list_messages` search on the macOS/arm64 CI runner often reaches the
 5-second store deadline. Windows and Linux pass. Measurements are in the feature 007
-[verification record](../../specs/007-mcp-message-tools/verification.md#mapped-read-candidate-2026-11-26-utc).
+[verification record](../../specs/007-mcp-message-tools/verification.md#covering-index-under-the-acceptance-load-2026-11-26-utc)
+and the sections above it.
 
 - An unfiltered search walks `messages_time` and looks up each row in `messages`. It reads about 25,700 pages of
   4 KiB (105 MB), which is both B-trees once.
@@ -18,7 +20,26 @@ On the 400,000-row acceptance fixture, a default `list_messages` search on the m
 - `messages_time` is declared newest-first while messages mostly arrive in ascending time, so in the fixture its
   pages are about half empty (21.6 MB of content in 46.8 MB).
 
-## Proposed revision: a covering search index
+## Decision needed
+
+No tested change gives repeatable headroom on the GitHub macOS runner, so what remains is a choice about the evidence
+or the requirement. Only the owner can make it.
+
+| Choice | What it changes | What is unknown |
+| --- | --- | --- |
+| Run the unchanged acceptance command on a physical Apple Silicon Mac, by hand or as a self-hosted runner (**suggested first**) | No product, test or requirement. The quickstart asks for native CI runners; a run outside CI needs the owner's acceptance. | Whether real hardware passes with margin. Not measured. |
+| Keep the deadline and fixture and record a macOS limitation at 400,000 messages | The success criterion and task T033 for macOS; needs a new design review. A slow search keeps returning a timeout error, never a partial or empty page. | How large a history macOS serves reliably. |
+| Lower the seeded size in the success criterion | What the feature promises, on one platform or all. | The size that passes with margin. |
+| Raise the 5-second store deadline | An inherited safety limit. Not suggested. | Cost to ingest and shutdown. |
+
+Why hardware first: across runs on one runner image, today's code took from 1.4 s to a timeout on the same fixture
+even with nothing else running, and time per file read ranged from about 2 to 350 µs. This points to the runner as a
+large factor; it does not prove that a physical Mac is fast enough.
+
+Cleanup owed whichever way it goes: the opt-in diagnostic's CI step adds about 7 minutes to the macOS job on this
+branch and should be removed before the code review.
+
+## Rejected: a covering search index
 
 Add, by a versioned migration, an ascending index on `(time, chat_jid, id, text, caption, text_fold, caption_fold)`
 and use it for the unfiltered search. SQLite walks it backwards for newest-first order, reads one B-tree, and keeps
@@ -34,7 +55,13 @@ At the per-read times seen on macOS (58-200 µs), 10,512 reads would take about 
 not change, a request would take roughly 2.8-4.5 s. **This is arithmetic, not a measurement**, and the slow end leaves
 little margin. Removing the row lookups should also save some CPU time; the amount is unmeasured.
 
-### Prototype results (2026-11-26)
+### Result under the acceptance load (2026-11-26)
+
+With the other acceptance packages running, today's schema timed out on all six first searches over short messages.
+With the index, four of six met the 4.0 s bar, one took 4.56 s and one timed out. **It is not adopted.** The sections
+below are the proposal and the earlier measurements as they stood.
+
+### Prototype results on an idle runner (2026-11-26)
 
 Measured in the opt-in diagnostic with the index in place of `messages_time`; details are in the verification record.
 
@@ -57,11 +84,10 @@ Measured in the opt-in diagnostic with the index in place of `messages_time`; de
 - **Design work.** The feature 007 plan assumes no migration. The revision changes the plan, research, store contract,
   feasibility evidence and tasks, and needs a new design review before implementation.
 
-### Gate before adopting
+### Gate before adopting (applied: failed)
 
-Prototype the index and its query in an opt-in diagnostic and compare it with the current search on native macOS:
-first and repeat requests, reads, time, memory, database size and ingest time. Include the large-field fixtures.
-Adopt it only if first requests pass repeatably with margin.
+Every first request with the index exact in 4.0 s or less over at least three rounds, in a run where today's schema
+misses that bar.
 
 ### Open question
 
@@ -73,10 +99,9 @@ other newest-first read would then walk the wider entries, which is not measured
 | Option | State |
 | --- | --- |
 | Map the database for reads (`mmap_size`) | Measured and rejected: first requests did not improve, resident memory rose by more than 300 MB, and a read error would fault the process. |
-| Query changes without a schema change | Not prototyped. Could reduce the 2.2-2.4 s outside `pread`, not the read set. May be needed together with the index. |
+| Query changes without a schema change | Not prototyped; optimisation stopped. Could reduce time outside `pread`, not the read set. |
 | Larger database page size | Not measured. Fewer, larger reads, but applies only to new or rebuilt databases and to the device store too. |
-| Change the deadline, fixture or success criterion | Not proposed. Only the owner can change them. |
 
 ## Review trigger
 
-The owner's decision on this revision; feature 007 cannot complete native acceptance without one.
+The owner's decision above; feature 007 cannot complete native acceptance without one.

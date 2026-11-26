@@ -316,3 +316,31 @@ A local scratch overlay test on Windows/amd64 also counted pages by arrival orde
 The mix of live and history arrival in a real database was not measured.
 
 **Next measurement, criterion set before it runs:** the diagnostic step now runs while a loop repeats the named command's other two packages (`./internal/store ./cmd/whatsapp-mcp`, same `-run` pattern) on the same runner. The same 4.0 s bar applies to the index, and a run counts as evidence for it only if today's schema misses the bar. T033 and T036 remain open.
+
+### Covering Index Under the Acceptance Load (2026-11-26 UTC)
+
+[CI run 45902588798](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/45902588798) tested `921ab1263445fd567648f5afdc13cc4a2da88b96`. On native macOS/arm64 (3 CPUs, 7.5 GB, the same image version) the diagnostic command exited 0 while the load loop completed 16 runs of the other two acceptance packages, all exit 0. All 24 cases ran; every exact reply held the expected IDs.
+
+| First request, rounds 1 / 2 / 3 | Today | Covering index |
+| --- | --- | --- |
+| Sparse | timeout / timeout / timeout | 3.512 / 3.500 / 3.258 s |
+| Empty | timeout / timeout / timeout | **4.560** / 2.297 s / **timeout** |
+| Large ASCII (range) | 0.247-0.405 s | 0.270-0.618 s |
+| Large expanding (range) | 0.825-1.257 s | 1.375-1.753 s |
+
+- **The run counts, and the index fails the bar.** Today's schema missed it in all six short first requests. With the index, one empty search took 4.560 s and another timed out.
+- Repeat requests on short rows: today returned 2 of 6 exact (3.325 and 4.942 s); with the index all 6 were exact (1.411-3.848 s).
+- With the index, time per main `pread` in short first requests ranged from 98 to 347 µs. The timed-out one spent 3.284 s in `pread` for 9,457 of about 10,400 reads.
+- Large messages with the index: ingest took 1.87-4.16 s against 1.05-1.26 s (ASCII) and 6.32-7.56 s against 2.69-2.99 s (expanding).
+
+| Native runner (UTC start) | Named command | Guarded 400,000-row replies (sparse / empty) | Full regression |
+| --- | --- | --- | --- |
+| Windows/amd64, 22:11:26 | Exit 0; 37 top-level and 39 subtest passes | 1.528 s / 1.537 s | Exit 0 |
+| Linux/amd64, 22:10:28 | Exit 0; 37 top-level and 39 subtest passes | 1.369 s / 1.355 s | Exit 0 |
+| macOS/arm64, 22:10:31 | Exit 1; 36 top-level and 38 subtest passes, 1 top-level and 1 subtest failure | `timeout` at 5.002 s / correct empty reply in 3.550 s | Exit 1; both guarded searches timed out |
+
+In the same macOS job the isolated profile rerun, with no other package running, also failed: both searches timed out at 5.002 s (exit 1). CI's check job passed.
+
+Across runs on one image version, today's schema ranged from 1.4 s to a timeout on the same fixture. Running the search alone helps on some runners but did not on this one.
+
+**Decision under the agreed plan: the covering index is not adopted, and optimisation stops.** Production schema, queries, limits and deadlines are unchanged. Native macOS acceptance is not met. The next step is the owner's requirement-level decision, listed in the [backlog item](../../docs/backlog/007-message-search-page-reads.md). T033 and T036 remain open.
