@@ -344,3 +344,9 @@ In the same macOS job the isolated profile rerun, with no other package running,
 Across runs on one image version, today's schema ranged from 1.4 s to a timeout on the same fixture. Running the search alone helps on some runners but did not on this one.
 
 **Decision under the agreed plan: the covering index is not adopted, and optimisation stops.** Production schema, queries, limits and deadlines are unchanged. Native macOS acceptance is not met. The next step is the owner's requirement-level decision, listed in the [backlog item](../../docs/backlog/007-message-search-page-reads.md). T033 and T036 remain open.
+
+### macOS Runner Survey: Criterion (2026-11-27)
+
+The owner has no Apple Silicon Mac and directed the next step to GitHub's CI. A temporary `macos-survey` job runs on the standard runners `macos-26`, `macos-15`, `macos-26-intel` and `macos-15-intel`, three separate machines each. Every machine runs `go test -timeout 30m ./...` and then the unchanged named acceptance command three times, with `CGO_ENABLED=0` and synthetic data. The covering-index diagnostic step was removed from the workflow; its file stays behind its build tag. Product code, tests, fixtures and deadlines are unchanged.
+
+Set before the first run: a runner type qualifies only if on all three machines the full tests exit 0, all nine acceptance runs exit 0, and every guarded 400,000-row reply takes 4.0 s or less. A qualifying type is a candidate, not an accepted gate: which runner provides the macOS evidence is the owner's decision, and the survey says nothing about slower machines than those it ran on.
