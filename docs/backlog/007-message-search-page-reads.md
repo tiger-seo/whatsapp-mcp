@@ -2,14 +2,15 @@
 
 **Created**: 2026-11-26
 
-**Status**: Open; no tested change and no standard GitHub macOS runner meets the bar (2026-11-26). Awaiting the
-owner's decision on the requirement. Blocks tasks T033 and T036 of feature 007.
+**Status**: Open; at 400,000 messages no tested change or standard GitHub macOS runner meets the bar, while 100,000
+messages meets it on both Apple Silicon runners (2026-11-26). Awaiting the owner's decision on the requirement. Blocks
+tasks T033 and T036 of feature 007.
 
 ## Problem
 
 On the 400,000-row acceptance fixture, a default `list_messages` search on the macOS/arm64 CI runner often reaches the
 5-second store deadline. Windows and Linux pass. Measurements are in the feature 007
-[verification record](../../specs/007-mcp-message-tools/verification.md#macos-runner-survey-results-2026-11-26-utc)
+[verification record](../../specs/007-mcp-message-tools/verification.md#smaller-macos-sizes-results-2026-11-26-utc)
 and the sections above it.
 
 - An unfiltered search walks `messages_time` and looks up each row in `messages`. It reads about 25,700 pages of
@@ -22,25 +23,32 @@ and the sections above it.
 
 ## Decision needed
 
-The owner has no Apple Silicon Mac. A survey of the four standard GitHub macOS runner types, three machines each, found
-none that passes the unchanged acceptance command every time with replies of 4.0 s or less. What remains is a choice
-about the requirement. Only the owner can make it.
+The owner has no Apple Silicon Mac. At 400,000 messages, none of the four standard GitHub macOS runner types passes
+the unchanged acceptance command every time with replies of 4.0 s or less. What remains is a choice about the
+requirement. Only the owner can make it.
 
 | Choice | What it changes | What is unknown |
 | --- | --- | --- |
-| Keep the 5-second deadline and set the macOS timing guarantee at a smaller, measured size (**suggested**) | The success criterion and task T033 for macOS, and the macOS size in the scale tests; needs a new design review. Windows and Linux keep 400,000 messages. | The size that passes with margin. It needs measuring first. |
+| Keep the 5-second deadline and set the macOS timing guarantee at **100,000 messages** (**suggested**) | The success criterion, quickstart and task T033 for macOS, and the macOS size in the two scale tests; needs a new design review. Windows and Linux keep 400,000. | Intel macOS and physical Macs at this size. |
 | Keep the deadline and fixture; on macOS require exact results or a timeout error, and record timing without gating it | The success criterion, T033 and the macOS assertions in the scale tests; needs a new design review. | What history size macOS users can rely on. |
-| Make `macos-15-intel` the macOS gate | The CI matrix. Not suggested: it passed 8 of 9 runs, so it fails the bar, and Apple Silicon would be unverified. | How often it fails over many runs. |
 | Raise the 5-second store deadline | An inherited safety limit. Not suggested. | Cost to ingest and shutdown. |
 
-| Runner | Named runs passing | Notes |
-| --- | --- | --- |
-| `macos-26` (arm64) | 1 of 9 | The sparse search almost always times out. |
-| `macos-15` (arm64) | 0 of 9 | Same. |
-| `macos-26-intel` | 6 of 9 | One machine failed every run. |
-| `macos-15-intel` | 8 of 9 | Two machines stayed at 3.3 s or less; the third was slow. |
+Measured on `macos-26` and `macos-15` (arm64), three machines for each size and runner; a size qualifies only if every
+full test run and all nine acceptance runs pass with replies of 4.0 s or less:
 
-These are shared virtual machines. The results do not show how a physical Mac behaves.
+| Size | Result | Slowest reply |
+| --- | --- | --- |
+| 100,000 | Qualifies on both | 2.14 s |
+| 200,000 | Fails on both | Timeout (`macos-26`), 4.33 s (`macos-15`) |
+| 400,000 (control, same machines) | 1 of 12 runs passed | Timeout |
+
+At 400,000, `macos-15-intel` came closest in the earlier survey (8 of 9 runs); it is not suggested as the macOS gate,
+because it fails the bar and would leave Apple Silicon unverified. Sizes between 100,000 and 200,000 were not
+measured. These are shared virtual machines and do not show how a physical Mac behaves.
+
+**Also open:** `TestMCPMessageStdioNative/cancel` failed once in 84 macOS acceptance runs (server exit 1 with a
+transport failure after the replies passed; cause not established). It is independent of the search size and needs a
+look before the code review.
 
 Cleanup owed before the code review: the opt-in diagnostic `internal/mcp/message_io_diagnostic_test.go` now holds the
 rejected covering-index comparison and no CI step runs it; remove it or keep it deliberately.

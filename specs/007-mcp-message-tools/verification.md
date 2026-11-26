@@ -377,3 +377,25 @@ The temporary survey job was removed afterwards. Native macOS acceptance is not 
 With the owner's agreement, a temporary `macos-size-survey` job measures 100,000 and 200,000 messages on `macos-26` and `macos-15` (both arm64), three separate machines for each size and runner. `.github/scripts/scale_variant.py` generates copies of `TestMCPMessageAcceptanceScale` and `TestToolMessageSearchScale` at that size, keeping 12 sparse matches at the same relative positions, and `go test -overlay` substitutes them. The store copy drops its closing work-limit check, which needs more rows than one search may visit. Repository tests, product code and deadlines are unchanged. Each machine runs `go test ./... -count=1 -timeout 30m` and the named acceptance command three times with the overlay, then the unchanged command once at 400,000 messages for context. Both variants passed on Windows/amd64 before the push (100,000: the whole named command, exit 0; 200,000: the two scale tests, exit 0), which is not macOS evidence.
 
 Set before the first run: a size qualifies on a runner type only if on all three machines the full tests exit 0, all three named runs at that size exit 0, and every guarded SDK reply at that size takes 4.0 s or less. A size is proposed to the owner only if it qualifies on both runner types. The 400,000-message run does not count either way.
+
+### Smaller macOS Sizes: Results (2026-11-26 UTC)
+
+[CI run 45909879856](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/45909879856) tested `28310b3033b2a4917f494a204e24eabce75974bf`. All twelve survey machines ran both commands at their size; none of the ten packages of any full run reused a cached result. Images were `macos26` 20261117.0516.1 and `macos15` 20261118.0550.1 (one 200,000 machine 20261123.0558.1). Reply times are the guarded SDK searches of nine named runs per row.
+
+| Size | Runner | Machines passing full tests | Named runs passing | Sparse replies | Empty replies | Qualifies |
+| --- | --- | --- | --- | --- | --- | --- |
+| 100,000 | `macos-26` | 3 of 3 | 9 of 9 | 0.559-2.137 s | 0.462-0.968 s | **Yes** |
+| 100,000 | `macos-15` | 3 of 3 | 9 of 9 | 0.349-1.113 s | 0.459-1.119 s | **Yes** |
+| 200,000 | `macos-26` | 2 of 3 | 8 of 9 | 1.079-4.120 s and one timeout | 0.792-2.742 s | No |
+| 200,000 | `macos-15` | 2 of 3 | 8 of 9 | 1.528-4.327 s | 1.129-2.881 s | No |
+
+- **100,000 messages meets the criterion on both arm64 runner types.** The store-level searches at that size took 0.26-0.88 s.
+- At 200,000, each runner type had one machine whose full tests timed out in `TestMCPMessageAcceptanceScale`, and a reply over 4.0 s in a named run.
+- The unchanged 400,000-message run on the same machines passed once in 6 on `macos-26` and never in 6 on `macos-15`; its sparse search timed out in 11 of 12. The machines were therefore not unusually fast.
+- Not measured: sizes between 100,000 and 200,000, either size on Intel macOS, and any physical Mac.
+
+**A second, unrelated failure.** On the second 200,000 `macos-15` machine, `TestMCPMessageStdioNative/cancel` failed in one named run: the reply checks passed, then the server exited 1 where the test expects 0. Its diagnostics show the expected `busy` refusal, a `list_messages` failure of category `internal`, `shutting down` 5 ms later and a `transport_failure`. The cause is not established. It was the only failure of that test among the 84 macOS named runs of the two surveys.
+
+The same run's standard jobs: the check job passed; Windows/amd64 (23:22:27) and Linux/amd64 (23:19:44) passed full regression and the named command (exit 0; 37 top-level and 39 subtest passes; sparse / empty 1.533 / 1.523 s and 1.453 / 1.370 s). macOS/arm64 (23:19:49) failed both: the named command exited 1 (36 top-level and 37 subtest passes, both searches timed out) and the full tests timed out the sparse search.
+
+The temporary survey job and its script were removed afterwards. No repository test, product code or requirement changed. T033 and T036 remain open, pending the owner's [decision](../../docs/backlog/007-message-search-page-reads.md#decision-needed).
