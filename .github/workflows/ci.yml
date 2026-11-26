@@ -156,7 +156,33 @@ jobs:
       - name: Compare macOS message search backing reads
         if: ${{ !cancelled() && runner.os == 'macOS' && github.ref == 'refs/heads/007-mcp-message-tools' }}
         shell: bash
-        run: CGO_ENABLED=0 go test -count=1 -timeout 20m -v -tags messageiodiagnostic ./internal/mcp -run '^TestSQLiteScaleBackingReads$'
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          echo "commit=$(git rev-parse HEAD) date=$(date -u +%FT%TZ) native=$(go env GOOS GOARCH | xargs) cpus=$(sysctl -n hw.ncpu) memory=$(sysctl -n hw.memsize)"
+          # The named acceptance runs these two packages beside the timed search, so repeat them meanwhile. They
+          # are built first: compiling is not part of the load.
+          load=(go test -count=1 ./internal/store ./cmd/whatsapp-mcp -run '^Test(MCPMessage|ToolMessage)')
+          go test -run '^$' ./internal/store ./cmd/whatsapp-mcp
+          go test -run '^$' -tags messageiodiagnostic ./internal/mcp
+          stop="$RUNNER_TEMP/load.stop"
+          log="$RUNNER_TEMP/load.log"
+          rm -f "$stop" "$log"
+          (
+            while [[ ! -e "$stop" ]]; do
+              run=0
+              "${load[@]}" >> "$log" 2>&1 || run=$?
+              echo "load_run_exit=$run" >> "$log"
+            done
+          ) &
+          status=0
+          go test -count=1 -timeout 20m -v -tags messageiodiagnostic ./internal/mcp -run '^TestSQLiteScaleBackingReads$' || status=$?
+          touch "$stop"
+          wait
+          echo "diagnostic_exit=$status"
+          echo "load_runs=$(grep -c '^load_run_exit=' "$log" || true) load_failures=$(grep -c '^load_run_exit=[1-9]' "$log" || true)"
+          grep -E '^(ok|FAIL|load_run_exit)' "$log" || true
+          exit "$status"
       - name: Native stdio diagnostic shutdown evidence
         if: ${{ !cancelled() && (runner.os == 'Linux' || runner.os == 'macOS') }}
         shell: bash
