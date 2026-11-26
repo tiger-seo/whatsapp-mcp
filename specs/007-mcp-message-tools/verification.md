@@ -216,3 +216,52 @@ There were no unattributed reads. Main-database reads accounted for more than 99
 The same tagged diagnostic passed under WSL2 Linux/amd64 (`-buildvcs=false`, `TMPDIR=/var/tmp`, exit 0, one top-level/four subtest passes; seven exact replies and one checkpointed timeout). Its completed requests also read roughly 105 MB from the main database, with less than 0.6 MB from WAL or none after checkpointing. Tagged `go vet` on WSL2 and the `CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go test -tags messageiodiagnostic -c` cross-build both exited 0. The latter was compile-only.
 
 The unchanged native named acceptance in this CI run still failed on macOS (exit 1; sparse `timeout` at 5.002 s, exact empty reply in 3.990 s); full regression failed there too. Windows and Linux passed their CI jobs. The diagnostic is not acceptance evidence. Production code, fixture inputs and deadlines were unchanged; T033 and T036 remain open. The next candidate should reduce main-database page reads or their overhead within the existing resource bounds, measured against this baseline before changing production policy.
+
+### Mapped-Read Candidate (2026-11-26 UTC)
+
+The candidate sets `PRAGMA mmap_size=536870912` on read-only connections through a connection hook that exists only under `-tags messageiodiagnostic`. Production connection settings, queries, fixtures and deadlines are unchanged. The diagnostic now compares it with the current settings over three rounds of the sparse and empty searches, alternating which arm runs first. Each of the twelve cases seeds its own 400,000 synthetic rows and issues the same guarded SDK request twice. It records time spent inside `pread`, process fault, block and CPU counters, resident memory (`ps`) and the SQLite heap peak. The earlier checkpointed arm was removed.
+
+Local checks before the push, `CGO_ENABLED=0`: `gofmt -l .`, tagged `go vet` and `go test -c` for darwin/arm64, darwin/amd64, linux/amd64 and linux/arm64 exited 0. The first WSL2 Linux/amd64 run exited 1 because the harness expected all four reader connections to be open after startup; the pool opens them on demand. After that correction, tagged vet for darwin/arm64 and linux/amd64, untagged vet of `./internal/mcp` on Windows, and one WSL2 round (`-run '^TestSQLiteScaleBackingReads$/.*/round-1'`) exited 0.
+
+[CI run 45893820917](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/45893820917) tested `23610eb123bfe94d28fa519cfa4013cc7ee913c7`. On native macOS/arm64 (image `macos-26-arm64` 20261117.0516.1, Go 1.27.4) the command `CGO_ENABLED=0 go test -count=1 -timeout 8m -v -tags messageiodiagnostic ./internal/mcp -run '^TestSQLiteScaleBackingReads$'` exited 0: one top-level test, twelve subtests, 24 measured requests. Every exact reply held the expected IDs in order. A passing diagnostic subtest permits a `timeout` reply.
+
+| Query | Round | Trial | Baseline reply | Baseline main reads / MB | Baseline time in main `pread` | Mapped reply | Mapped major faults |
+| --- | ---: | ---: | --- | --- | ---: | --- | ---: |
+| Sparse | 1 | 1 | timeout, 5.004 s | 18,984 / 77.8 | 2.596 s | timeout, 5.003 s | 11,982 |
+| Sparse | 2 | 1 | exact, 4.541 s | 25,655 / 105.1 | 2.105 s | exact, 4.474 s | 7,176 |
+| Sparse | 3 | 1 | exact, 3.971 s | 25,655 / 105.1 | 1.619 s | exact, 4.198 s | 7,218 |
+| Sparse | 1 | 2 | timeout, 5.002 s | 16,922 / 69.3 | 3.388 s | exact, 2.470 s | 789 |
+| Sparse | 2 | 2 | exact, 4.184 s | 25,650 / 105.1 | 1.784 s | exact, 2.190 s | 10 |
+| Sparse | 3 | 2 | exact, 3.916 s | 25,650 / 105.1 | 1.493 s | exact, 2.645 s | 13 |
+| Empty | 1 | 1 | timeout, 5.004 s | 23,720 / 97.2 | 2.862 s | timeout, 5.001 s | 9,802 |
+| Empty | 2 | 1 | timeout, 5.005 s | 20,313 / 83.2 | 3.256 s | timeout, 5.010 s | 10,404 |
+| Empty | 3 | 1 | exact, 4.960 s | 25,603 / 104.9 | 2.761 s | exact, 4.899 s | 10,915 |
+| Empty | 1 | 2 | timeout, 5.004 s | 20,530 / 84.1 | 3.228 s | exact, 3.015 s | 2,434 |
+| Empty | 2 | 2 | timeout, 5.001 s | 22,237 / 91.1 | 3.066 s | exact, 2.596 s | 1,451 |
+| Empty | 3 | 2 | timeout, 5.002 s | 19,732 / 80.8 | 3.268 s | exact, 1.946 s | 0 |
+
+- **First requests did not improve.** Each arm returned three exact replies and three timeouts. Exact first replies took 3.971-4.960 s with the current settings and 4.198-4.899 s mapped. The named acceptance's sparse request is a first request.
+- **Repeat requests improved.** Mapped repeats were all exact (6 of 6, 1.946-3.015 s); current-setting repeats returned 2 of 6 (3.916-4.184 s).
+- **Read calls.** The mapped arm made no main-database `pread` calls during measured requests. WAL reads were unchanged on first requests.
+- **Memory.** Resident size was 36-49 MB with the current settings. A mapped request raised it to 352-394 MB, retained while that connection stayed open (one connection was mapped in each case). The SQLite heap peak fell from 4.5-5.1 MB to 3.1-3.6 MB; the mapping is outside the SQLite heap limit.
+- **Time in `pread`.** This is the first wall-clock measurement of it: 1.493-2.761 s, or 38-56%, of exact baseline requests. The other 2.2-2.4 s of those requests was outside `pread`. In timed-out requests it averaged 121-200 µs per read; at the rate of the slowest one, the full read set would need about 5.1 s. That figure is an extrapolation, and wall time inside a call includes any scheduling delay. The block-input counter read 0 for every request, so these counters do not show whether reads reached storage.
+- **Page set.** `dbstat` reported 14,323 pages for `messages` and 11,415 for `messages_time`, 25,738 together. Exact baseline requests made 25,603-25,655 main and 139-141 WAL reads, so each reads about both B-trees once.
+
+**Decision: the mapped-read candidate is rejected and was not applied to production.** It gives no headroom on a first request, raises resident memory by more than 300 MB, and would turn a read error on a mapped page into a process fault (SQLite's documented behaviour; not tested here).
+
+The same CI run's unchanged named acceptance command:
+
+| Native runner (UTC start) | Named command | Guarded 400,000-row replies (sparse / empty) | Full regression |
+| --- | --- | --- | --- |
+| Windows/amd64, 20:56:40 | Exit 0; 37 top-level and 39 subtest passes | 2.819 s / 2.711 s | Exit 0 |
+| Linux/amd64, 20:53:46 | Exit 0; 37 top-level and 39 subtest passes | 2.292 s / 2.005 s | Exit 0 |
+| macOS/arm64, 20:54:08 | Exit 1; 36 top-level and 38 subtest passes, 1 top-level and 1 subtest failure | `timeout` at 5.005 s / correct empty reply in 4.905 s | Exit 1; both guarded searches timed out (5.002 s and 5.004 s) |
+
+CI's check job passed. The macOS native shutdown and integrated pipe steps passed, and the post-failure profile rerun passed (3.480 s sparse, 2.654 s empty).
+
+Two local observations, neither acceptance evidence:
+
+- A WSL2 Linux/amd64 CPU profile of `TestMCPMessageAcceptanceScale` at `23610eb` (exit 0; 2.29 s and 2.23 s) attributed 3.62 of 4.30 sampled search seconds to SQLite's statement execution (`_sqlite3VdbeExec` cumulative) and 0.22 s to page fetching. In the WSL2 diagnostic, time inside main-database `pread` was 66-82 ms per request.
+- A scratch overlay test on Windows/amd64 (`go test -overlay`, exit 0, one test, 28.4 s; file kept outside the repository) created two covering indexes in a temporary database before seeding the same rows. The `messages` and `messages_time` page counts matched macOS exactly. An index on `(time, chat_jid, id)` plus the four text fields took 10,512 pages in ascending key order and 18,971 in descending order; SQLite planned both as covering seeks. No timing was measured and nothing in the project changed.
+
+No small candidate tested within the current design gives repeatable macOS headroom. A design revision is proposed in the [backlog item](../../docs/backlog/007-message-search-page-reads.md) and awaits the owner's decision. T033 and T036 remain open.
