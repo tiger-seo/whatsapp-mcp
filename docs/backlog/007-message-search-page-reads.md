@@ -2,14 +2,14 @@
 
 **Created**: 2026-11-26
 
-**Status**: Open; the proposed covering index failed its bar on 2026-11-26. Awaiting the owner's decision on the
-requirement or the evidence for it. Blocks tasks T033 and T036 of feature 007.
+**Status**: Open; no tested change and no standard GitHub macOS runner meets the bar (2026-11-26). Awaiting the
+owner's decision on the requirement. Blocks tasks T033 and T036 of feature 007.
 
 ## Problem
 
 On the 400,000-row acceptance fixture, a default `list_messages` search on the macOS/arm64 CI runner often reaches the
 5-second store deadline. Windows and Linux pass. Measurements are in the feature 007
-[verification record](../../specs/007-mcp-message-tools/verification.md#covering-index-under-the-acceptance-load-2026-11-26-utc)
+[verification record](../../specs/007-mcp-message-tools/verification.md#macos-runner-survey-results-2026-11-26-utc)
 and the sections above it.
 
 - An unfiltered search walks `messages_time` and looks up each row in `messages`. It reads about 25,700 pages of
@@ -22,22 +22,28 @@ and the sections above it.
 
 ## Decision needed
 
-No tested change gives repeatable headroom on the GitHub macOS runner, so what remains is a choice about the evidence
-or the requirement. Only the owner can make it.
+The owner has no Apple Silicon Mac. A survey of the four standard GitHub macOS runner types, three machines each, found
+none that passes the unchanged acceptance command every time with replies of 4.0 s or less. What remains is a choice
+about the requirement. Only the owner can make it.
 
 | Choice | What it changes | What is unknown |
 | --- | --- | --- |
-| Run the unchanged acceptance command on a physical Apple Silicon Mac, by hand or as a self-hosted runner (**suggested first**) | No product, test or requirement. The quickstart asks for native CI runners; a run outside CI needs the owner's acceptance. | Whether real hardware passes with margin. Not measured. |
-| Keep the deadline and fixture and record a macOS limitation at 400,000 messages | The success criterion and task T033 for macOS; needs a new design review. A slow search keeps returning a timeout error, never a partial or empty page. | How large a history macOS serves reliably. |
-| Lower the seeded size in the success criterion | What the feature promises, on one platform or all. | The size that passes with margin. |
+| Keep the 5-second deadline and set the macOS timing guarantee at a smaller, measured size (**suggested**) | The success criterion and task T033 for macOS, and the macOS size in the scale tests; needs a new design review. Windows and Linux keep 400,000 messages. | The size that passes with margin. It needs measuring first. |
+| Keep the deadline and fixture; on macOS require exact results or a timeout error, and record timing without gating it | The success criterion, T033 and the macOS assertions in the scale tests; needs a new design review. | What history size macOS users can rely on. |
+| Make `macos-15-intel` the macOS gate | The CI matrix. Not suggested: it passed 8 of 9 runs, so it fails the bar, and Apple Silicon would be unverified. | How often it fails over many runs. |
 | Raise the 5-second store deadline | An inherited safety limit. Not suggested. | Cost to ingest and shutdown. |
 
-Why hardware first: across runs on one runner image, today's code took from 1.4 s to a timeout on the same fixture
-even with nothing else running, and time per file read ranged from about 2 to 350 µs. This points to the runner as a
-large factor; it does not prove that a physical Mac is fast enough.
+| Runner | Named runs passing | Notes |
+| --- | --- | --- |
+| `macos-26` (arm64) | 1 of 9 | The sparse search almost always times out. |
+| `macos-15` (arm64) | 0 of 9 | Same. |
+| `macos-26-intel` | 6 of 9 | One machine failed every run. |
+| `macos-15-intel` | 8 of 9 | Two machines stayed at 3.3 s or less; the third was slow. |
 
-Cleanup owed whichever way it goes: the opt-in diagnostic's CI step adds about 7 minutes to the macOS job on this
-branch and should be removed before the code review.
+These are shared virtual machines. The results do not show how a physical Mac behaves.
+
+Cleanup owed before the code review: the opt-in diagnostic `internal/mcp/message_io_diagnostic_test.go` now holds the
+rejected covering-index comparison and no CI step runs it; remove it or keep it deliberately.
 
 ## Rejected: a covering search index
 

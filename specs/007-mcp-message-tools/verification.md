@@ -350,3 +350,23 @@ Across runs on one image version, today's schema ranged from 1.4 s to a timeout 
 The owner has no Apple Silicon Mac and directed the next step to GitHub's CI. A temporary `macos-survey` job runs on the standard runners `macos-26`, `macos-15`, `macos-26-intel` and `macos-15-intel`, three separate machines each. Every machine runs `go test -timeout 30m ./...` and then the unchanged named acceptance command three times, with `CGO_ENABLED=0` and synthetic data. The covering-index diagnostic step was removed from the workflow; its file stays behind its build tag. Product code, tests, fixtures and deadlines are unchanged.
 
 Set before the first run: a runner type qualifies only if on all three machines the full tests exit 0, all nine acceptance runs exit 0, and every guarded 400,000-row reply takes 4.0 s or less. A qualifying type is a candidate, not an accepted gate: which runner provides the macOS evidence is the owner's decision, and the survey says nothing about slower machines than those it ran on.
+
+### macOS Runner Survey: Results (2026-11-26 UTC)
+
+[CI run 45905237579](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/45905237579) tested `d559031a73cb63522f4f636f1a2b5caad0a1ab1b`. All twelve survey machines completed both steps. Each named run is `go test -count=1 -timeout 5m -v ./internal/store ./internal/mcp ./cmd/whatsapp-mcp -run '^Test(MCPMessage|ToolMessage)'` with `CGO_ENABLED=0`; no run skipped a test. Reply times are the guarded 400,000-row SDK searches over nine runs per runner type; ranges cover the replies under 5 s.
+
+| Runner (image) | Hardware | Machines with passing full tests | Named runs passing | Sparse replies | Empty replies |
+| --- | --- | --- | --- | --- | --- |
+| `macos-26` (20261117.0516.1) | arm64, 3 CPUs, 7.5 GB | 0 of 3 | 1 of 9 | 8 timeouts; one at 4.712 s | 3 timeouts; 1.783-4.921 s |
+| `macos-15` (20261118.0550.1, one 20261123.0558.1) | arm64, 3 CPUs, 7.5 GB | 0 of 3 | 0 of 9 | 9 timeouts | 1 timeout; 1.759-4.183 s |
+| `macos-26-intel` (20260824.0517.1) | amd64, 4 CPUs, 15 GB | 1 of 3 | 6 of 9 | 3 timeouts; 2.928-4.538 s | 2 timeouts; 2.917-4.457 s |
+| `macos-15-intel` (20260824.0482.1) | amd64, 4 CPUs, 15 GB | 3 of 3 | 8 of 9 | 2.462-4.953 s, 2 over 4.0 s | 2.496-4.923 s, 2 over 4.0 s |
+
+- **No runner type qualifies** under the criterion set beforehand.
+- `macos-15-intel` came closest. Two of its machines passed all runs with replies of at most 3.274 s. The third failed one run at the store-level sparse search (5.00 s) and answered between 4.4 and 5.0 s in that run and the next.
+- On the arm64 runners the sparse SDK search, the first timed request after seeding, timed out in 17 of 18 runs. The store-level sparse search of the same size passed in 17 of those 18. The cause of that difference is not established.
+- One `macos-26-intel` machine also failed `TestToolMessageContextRowCap` in two runs, besides both scale tests.
+
+The same run's standard jobs: the check job passed; Windows/amd64 (22:36:22) and Linux/amd64 (22:34:40) passed full regression and the named command (exit 0; 37 top-level and 39 subtest passes; sparse / empty 1.557 / 1.524 s and 1.129 / 0.878 s). macOS/arm64 (`macos-latest`, 22:35:05) failed both: the named command exited 1 (36 top-level and 38 subtest passes; sparse timeout at 5.008 s, empty 4.485 s) and full regression timed out both searches. Its isolated profile rerun passed (2.894 / 2.058 s).
+
+The temporary survey job was removed afterwards. Native macOS acceptance is not met on any standard GitHub runner surveyed. T033 and T036 remain open, pending the owner's [decision](../../docs/backlog/007-message-search-page-reads.md#decision-needed).
