@@ -34,11 +34,23 @@ At the per-read times seen on macOS (58-200 µs), 10,512 reads would take about 
 not change, a request would take roughly 2.8-4.5 s. **This is arithmetic, not a measurement**, and the slow end leaves
 little margin. Removing the row lookups should also save some CPU time; the amount is unmeasured.
 
+### Prototype results (2026-11-26)
+
+Measured in the opt-in diagnostic with the index in place of `messages_time`; details are in the verification record.
+
+- On a fast macOS runner, first searches over short messages took 1.1-1.7 s with the index and 1.4-3.4 s without.
+  Today's schema also met the agreed 4.0 s bar there, so this does not show that the index gives headroom.
+- **The page saving depends on arrival order.** Oldest-first arrival, as in the acceptance fixture, saves 59% of the
+  pages read. Newest-first arrival saves only 8% (18,971 against 20,674 pages), because the index then fills about
+  half of each page while today's index fills them fully. The mix in real databases is unmeasured.
+- **Long messages get worse.** With 256 KiB fields the database doubles, ingest takes 1.5-2.1 times as long, a search
+  reads 38-51% more bytes and the first request is somewhat slower.
+
 ### What it costs
 
-- **Storage and writes.** The index repeats text, caption and both folded forms. The fixture grows by about 10%
-  (43 MB on 433 MB). Long messages grow it much more: the message text is stored twice, and large entries spill into
-  overflow pages. Every insert and edit writes one more index.
+- **Storage and writes.** The index repeats text, caption and both folded forms. Added to today's schema it would
+  grow the short fixture by about 10% (43 MB on 433 MB); in place of `messages_time` the fixture is slightly smaller.
+  Long messages grow it much more: see above. Every insert and edit writes the larger entries.
 - **Migration.** Existing databases build the index at the next start, and older binaries then refuse the database.
 - **Coverage.** Only the unfiltered search changes. A chat-filtered or sender-filtered search over a very large chat
   or author still reads two B-trees, and no acceptance fixture measures it.
@@ -53,8 +65,8 @@ Adopt it only if first requests pass repeatably with margin.
 
 ### Open question
 
-Whether the new index should replace `messages_time` instead of being added to it. In the fixture that would make the
-database slightly smaller than today, but every other newest-first read would walk the wider entries. Not measured.
+Whether the new index should replace `messages_time` instead of being added to it. The prototype replaced it; every
+other newest-first read would then walk the wider entries, which is not measured.
 
 ## Other options
 

@@ -265,3 +265,54 @@ Two local observations, neither acceptance evidence:
 - A scratch overlay test on Windows/amd64 (`go test -overlay`, exit 0, one test, 28.4 s; file kept outside the repository) created two covering indexes in a temporary database before seeding the same rows. The `messages` and `messages_time` page counts matched macOS exactly. An index on `(time, chat_jid, id)` plus the four text fields took 10,512 pages in ascending key order and 18,971 in descending order; SQLite planned both as covering seeks. No timing was measured and nothing in the project changed.
 
 No small candidate tested within the current design gives repeatable macOS headroom. A design revision is proposed in the [backlog item](../../docs/backlog/007-message-search-page-reads.md) and awaits the owner's decision. T033 and T036 remain open.
+
+### Covering-Index Prototype (2026-11-26 UTC)
+
+The owner agreed to a diagnostic-only prototype with a bar set beforehand: every first request with the index returns exact results in 4.0 s or less, over at least three rounds. The diagnostic replaces `messages_time` in each temporary database with an ascending index on `(time, chat_jid, id, text, caption, text_fold, caption_fold)` under the same name, before seeding, and confirms through `EXPLAIN QUERY PLAN` that the search shape uses it as a covering index. Production schema and queries are unchanged, and the mapped-read arm was removed. It runs three rounds of four fixtures (sparse and empty on 400,000 short rows; one old match behind 128 newer rows with 256 KiB ASCII or expanding Unicode text and caption) under both schemas: 24 cases, 48 requests. The large rows go through the ordinary writer, so these are not the store test fixtures.
+
+Local checks, `CGO_ENABLED=0`: `gofmt -l .`, `git diff --check`, tagged `go vet` for darwin/arm64, darwin/amd64, linux/amd64 and linux/arm64 and untagged vet of `./internal/mcp` on Windows exited 0. The full diagnostic passed on WSL2 Linux/amd64 (exit 0, 48 exact replies; not native evidence).
+
+[CI run 45899617254](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/45899617254) tested `a80f368896d60ca73b2f713b2a34c080406f2681`. On native macOS/arm64 the diagnostic command (now with `-timeout 20m`), run alone after the acceptance steps, exited 0 with 48 exact replies.
+
+| First request, three rounds each | Today | Covering index |
+| --- | --- | --- |
+| Sparse | 1.370 / 1.625 / 1.877 s | 1.292 / 1.156 / 1.232 s |
+| Empty | 1.420 / 3.427 / 1.456 s | 1.057 / 1.747 / 1.173 s |
+| Large ASCII (range) | 0.221-0.312 s | 0.244-0.390 s |
+| Large expanding (range) | 0.774-0.913 s | 0.810-1.064 s |
+
+| Cost or resource | Today | Covering index |
+| --- | --- | --- |
+| Main reads, short rows | 25,598-25,655 | 10,425-10,482 |
+| Time in main `pread`, short first requests | 0.130-1.352 s | 0.032-0.390 s |
+| Main bytes read, large ASCII / expanding, first request | 234.0 / 567.0 MB | 353.8 / 782.7 MB |
+| Database size, short rows | 433.4 MB | 428.7 MB |
+| Database size, large ASCII / expanding | 133.6 / 267.2 MB | 267.4 / 538.3 MB |
+| Ingest, short rows | 10.8-11.7 s | 10.5-12.7 s |
+| Ingest, large ASCII | 0.97-1.30 s | 1.84-2.20 s |
+| Ingest, large expanding | 2.44-2.77 s | 4.19-5.10 s |
+| SQLite heap peak | 4.6-8.2 MB | 4.6-10.0 MB |
+| Resident memory after requests | 73 MB at most | 73 MB at most |
+
+**The bar was met, but the run cannot show that the index gives headroom: today's schema met it too** (slowest first request 3.427 s). This runner was far faster than the one in run 45893820917, where today's schema needed 3.9 s or timed out, on the same image version.
+
+The same job's unchanged named acceptance command, which runs three packages at once, still failed:
+
+| Native runner (UTC start) | Named command | Guarded 400,000-row replies (sparse / empty) | Full regression |
+| --- | --- | --- | --- |
+| Windows/amd64, 21:44:26 | Exit 0; 37 top-level and 39 subtest passes | 1.116 s / 0.986 s | Exit 0 |
+| Linux/amd64, 21:43:07 | Exit 0; 37 top-level and 39 subtest passes | 1.131 s / 0.972 s | Exit 0 |
+| macOS/arm64, 21:43:25 | Exit 1; 36 top-level and 38 subtest passes, 1 top-level and 1 subtest failure | `timeout` at 5.002 s / correct empty reply in 3.264 s | Exit 1; sparse guarded search timed out at 5.001 s |
+
+In that job the isolated profile rerun of the same scale test passed at 1.712 s (sparse) and 2.081 s (empty), and CI's check job passed. The difference points to load from the packages running beside the search; it does not separate CPU from disk contention.
+
+A local scratch overlay test on Windows/amd64 also counted pages by arrival order for 400,000 short rows (not committed, no timing). It exited 1 at its 9-minute timeout during the third, shuffled order; the first two orders completed:
+
+| Arrival order | `messages` + `messages_time` today | Covering index | Saving |
+| --- | ---: | ---: | ---: |
+| Oldest first (the acceptance fixture) | 25,738 | 10,512 | 59% |
+| Newest first | 20,674 | 18,971 | 8% |
+
+The mix of live and history arrival in a real database was not measured.
+
+**Next measurement, criterion set before it runs:** the diagnostic step now runs while a loop repeats the named command's other two packages (`./internal/store ./cmd/whatsapp-mcp`, same `-run` pattern) on the same runner. The same 4.0 s bar applies to the index, and a run counts as evidence for it only if today's schema misses the bar. T033 and T036 remain open.
