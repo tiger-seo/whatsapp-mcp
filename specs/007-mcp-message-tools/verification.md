@@ -360,13 +360,20 @@ Set before the first run: a runner type qualifies only if on all three machines 
 | `macos-26` (20261117.0516.1) | arm64, 3 CPUs, 7.5 GB | 0 of 3 | 1 of 9 | 8 timeouts; one at 4.712 s | 3 timeouts; 1.783-4.921 s |
 | `macos-15` (20261118.0550.1, one 20261123.0558.1) | arm64, 3 CPUs, 7.5 GB | 0 of 3 | 0 of 9 | 9 timeouts | 1 timeout; 1.759-4.183 s |
 | `macos-26-intel` (20260824.0517.1) | amd64, 4 CPUs, 15 GB | 1 of 3 | 6 of 9 | 3 timeouts; 2.928-4.538 s | 2 timeouts; 2.917-4.457 s |
-| `macos-15-intel` (20260824.0482.1) | amd64, 4 CPUs, 15 GB | 3 of 3 | 8 of 9 | 2.462-4.953 s, 2 over 4.0 s | 2.496-4.923 s, 2 over 4.0 s |
+| `macos-15-intel` (20260824.0482.1) | amd64, 4 CPUs, 15 GB | 2 of 2 (see correction) | 8 of 9 | 2.462-4.953 s, 2 over 4.0 s | 2.496-4.923 s, 2 over 4.0 s |
 
 - **No runner type qualifies** under the criterion set beforehand.
 - `macos-15-intel` came closest. Two of its machines passed all runs with replies of at most 3.274 s. The third failed one run at the store-level sparse search (5.00 s) and answered between 4.4 and 5.0 s in that run and the next.
 - On the arm64 runners the sparse SDK search, the first timed request after seeding, timed out in 17 of 18 runs. The store-level sparse search of the same size passed in 17 of those 18. The cause of that difference is not established.
 - One `macos-26-intel` machine also failed `TestToolMessageContextRowCap` in two runs, besides both scale tests.
+- **Correction (2026-11-27):** this row first read 3 of 3. On the third `macos-15-intel` machine, `go test ./...` reported cached results for `internal/mcp`, `internal/store` and four small packages from the restored build cache, so those tests did not run there. The named runs use `-count=1` and are unaffected. The other survey machines and the standard jobs of runs 45893820917, 45899617254, 45902588798 and 45905237579 ran `internal/mcp`, `internal/store`, `internal/wa` and `cmd/whatsapp-mcp` rather than reusing results. The conclusion is unchanged.
 
 The same run's standard jobs: the check job passed; Windows/amd64 (22:36:22) and Linux/amd64 (22:34:40) passed full regression and the named command (exit 0; 37 top-level and 39 subtest passes; sparse / empty 1.557 / 1.524 s and 1.129 / 0.878 s). macOS/arm64 (`macos-latest`, 22:35:05) failed both: the named command exited 1 (36 top-level and 38 subtest passes; sparse timeout at 5.008 s, empty 4.485 s) and full regression timed out both searches. Its isolated profile rerun passed (2.894 / 2.058 s).
 
 The temporary survey job was removed afterwards. Native macOS acceptance is not met on any standard GitHub runner surveyed. T033 and T036 remain open, pending the owner's [decision](../../docs/backlog/007-message-search-page-reads.md#decision-needed).
+
+### Smaller macOS Sizes: Criterion (2026-11-27)
+
+With the owner's agreement, a temporary `macos-size-survey` job measures 100,000 and 200,000 messages on `macos-26` and `macos-15` (both arm64), three separate machines for each size and runner. `.github/scripts/scale_variant.py` generates copies of `TestMCPMessageAcceptanceScale` and `TestToolMessageSearchScale` at that size, keeping 12 sparse matches at the same relative positions, and `go test -overlay` substitutes them. The store copy drops its closing work-limit check, which needs more rows than one search may visit. Repository tests, product code and deadlines are unchanged. Each machine runs `go test ./... -count=1 -timeout 30m` and the named acceptance command three times with the overlay, then the unchanged command once at 400,000 messages for context. Both variants passed on Windows/amd64 before the push (100,000: the whole named command, exit 0; 200,000: the two scale tests, exit 0), which is not macOS evidence.
+
+Set before the first run: a size qualifies on a runner type only if on all three machines the full tests exit 0, all three named runs at that size exit 0, and every guarded SDK reply at that size takes 4.0 s or less. A size is proposed to the owner only if it qualifies on both runner types. The 400,000-message run does not count either way.
