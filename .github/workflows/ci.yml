@@ -208,6 +208,55 @@ jobs:
           echo "passed: $(grep -cE '^\s*--- PASS' run-guard.log)  skipped: $(grep -cE '^\s*--- SKIP' run-guard.log)  failed: $(grep -cE '^\s*--- FAIL' run-guard.log)"
           grep -E '^\s*--- SKIP' -B2 run-guard.log | grep -vE '^--$' | head -60 || true
 
+  # Temporary, for feature 007: how many messages the Apple Silicon runners search within the deadline. The two
+  # message-search scale tests are rebuilt at a smaller size and run by the same commands, so the load matches.
+  macos-size-survey:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/007-mcp-message-tools'
+    name: size (${{ matrix.size }}, ${{ matrix.runner }}, machine ${{ matrix.machine }})
+    strategy:
+      fail-fast: false
+      matrix:
+        size: [100000, 200000]
+        runner: [macos-26, macos-15]
+        machine: [1, 2, 3]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: runner facts and smaller scale tests
+        run: |
+          echo "commit=$(git rev-parse HEAD) date=$(date -u +%FT%TZ) runner=${{ matrix.runner }} size=${{ matrix.size }} image=${ImageOS:-} ${ImageVersion:-} native=$(go env GOOS GOARCH | xargs) cpus=$(sysctl -n hw.ncpu) memory=$(sysctl -n hw.memsize)"
+          python3 .github/scripts/scale_variant.py "${{ matrix.size }}" "$RUNNER_TEMP/variant"
+      - name: full tests at this size
+        run: go test -overlay "$RUNNER_TEMP/variant/overlay.json" ./... -count=1 -timeout 30m
+      - name: message tool acceptance at this size, three runs
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          failures=0
+          for attempt in 1 2 3; do
+            results="$RUNNER_TEMP/acceptance-$attempt.log"
+            status=0
+            go test -overlay "$RUNNER_TEMP/variant/overlay.json" -count=1 -timeout 5m -v ./internal/store ./internal/mcp ./cmd/whatsapp-mcp -run '^Test(MCPMessage|ToolMessage)' > "$results" || status=$?
+            cat "$results"
+            echo "attempt=$attempt go_test_exit=$status top_pass=$(grep -c '^--- PASS: ' "$results" || true) sub_pass=$(grep -cE '^ +--- PASS: ' "$results" || true) top_fail=$(grep -c '^--- FAIL: ' "$results" || true) sub_fail=$(grep -cE '^ +--- FAIL: ' "$results" || true) skip=$(grep -cE -e '--- SKIP: ' "$results" || true)"
+            if [[ "$status" -ne 0 ]]; then failures=$((failures + 1)); fi
+          done
+          echo "failed_attempts=$failures"
+          [[ "$failures" -eq 0 ]]
+      # Context only: shows how this machine does at the unchanged 400,000 messages. It does not fail the job.
+      - name: unchanged acceptance, one run
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          results="$RUNNER_TEMP/control.log"
+          status=0
+          go test -count=1 -timeout 5m -v ./internal/store ./internal/mcp ./cmd/whatsapp-mcp -run '^Test(MCPMessage|ToolMessage)' > "$results" || status=$?
+          cat "$results"
+          echo "control go_test_exit=$status"
+
   # The tests that take minutes on a slow disk: a 500 MiB listing and a 400,000-message memory check. They show that
   # a limit holds and are not needed on every push, so they run on Linux only, at night, and only if main has a
   # commit from the last 25 hours. Start the job by hand to run them on any branch.
