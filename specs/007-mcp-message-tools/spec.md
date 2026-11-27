@@ -20,6 +20,10 @@
 
 - Q: How should ID-only lookup report more than 100 matching chats? → A: Under the owner-approved S6 amendment in the [project specification](../../docs/specification.md#85-storage), list all matching chats for 2–100; at 101 or more, return a bounded error asking for `chat_jid` with no chat list or selected message.
 
+### Session 2026-11-27
+
+- Q: What history size must a default search complete on macOS? → A: 100,000 seeded short messages on macOS; 400,000 on Windows and Linux. The owner decided this after no standard hosted macOS runner met the 400,000-message fixture reliably within the unchanged 5-second store cancellation trigger.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Find messages in stored history (Priority: P1)
@@ -74,6 +78,7 @@ As an account owner, I want to find the most recent stored interaction with a co
 - Reaching the start/end of a chat or explicitly requesting zero neighbours is not budget trimming. A sparse chat is not padded with unrelated messages.
 - A nonempty context listing at `page: 100000`, `limit: 1` cannot be advanced by `page + 1`. If the base page is complete, keep it marked complete and advise narrowing the search to browse further, without claiming that another match exists.
 - Malformed arguments, out-of-range counts, unsafe page offsets and unavailable storage give distinct, actionable errors; none is reported as an empty successful search.
+- A search stopped by the store's time limit, for example over a history larger than the sizes in SC-005, returns the timeout error with no matches or continuation. It is never reported as an empty or short page, or as a storage failure.
 
 ## Requirements *(mandatory)*
 
@@ -90,7 +95,7 @@ As an account owner, I want to find the most recent stored interaction with a co
 - **FR-009**: The tools MUST respect the existing 2,000 context rows and 32 MiB result-data ceilings per call, as well as the tighter local reply limits of 2 MiB per representation and 8 MiB for the whole reply. Once `list_messages` has verified a nonempty base page under FR-012, a default-size call with context enabled MUST return a nonempty result even if a full reply with maximum-size messages would exceed those ceilings. This guarantee covers reply-size limits, not cancellation, storage errors or unfinished searches. Prefer a contiguous newest-first prefix of matches over keeping extra neighbours. If fewer neighbours fit, keep the closest ones on each side, keep their order, and explicitly identify each reduced side. Do not label genuinely missing neighbours as reduced.
 - **FR-010**: Whenever the budget shortens the base page of a listing with context, the result MUST say it was shortened and provide explicit next `page` and `limit` values that resume at the first unreturned match with the same filters and context options. A continuation may use `limit: 1` and the absolute match offset as `page`; for such a one-match page, the next ordinary page is `page + 1`. If the next offset is outside the supported range, state that the caller must narrow the search instead. No shortened page with matches may return zero anchors. If even the first valid match cannot fit in full in a listing with context enabled (including a one-match continuation), return that anchor with explicitly marked, shortened text/caption as necessary, preserving its identity and other fields; matching still uses the full stored values. Never silently shorten text or caption or change stored data. A listing without context MUST return a complete page or an actionable size error. Exact lookup and last-interaction calls MUST return the complete selected message or an actionable size error; exact context MAY shorten only neighbours with the same visibly reduced-side semantics.
 - **FR-011**: Each new tool MUST have an offline acceptance case through the existing in-memory client/server test path, including schema defaults and every argument, the duplicate-ID and no-result cases, and the maximum-size default-context page. Existing chat/contact tool behaviour and all five supported build targets MUST remain intact. No acceptance step requires a real WhatsApp account.
-- **FR-012**: If `list_messages` reaches a search-work limit before verifying the base page's membership, order or end, it MUST return a limit error suggesting narrower filters, with no matches or continuation. This applies whether or not context is requested. The successful shortening rule in FR-009–FR-010 applies to a verified base page whose reply would exceed a result budget, not to an unfinished search.
+- **FR-012**: If `list_messages` reaches a search-work limit before verifying the base page's membership, order or end, it MUST return a limit error suggesting narrower filters, with no matches or continuation. This applies whether or not context is requested. A search stopped by the store's time limit MUST return the timeout error, likewise with no matches or continuation. The successful shortening rule in FR-009–FR-010 applies to a verified base page whose reply would exceed a result budget, not to an unfinished search.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -107,7 +112,7 @@ As an account owner, I want to find the most recent stored interaction with a co
 - **SC-002**: In all duplicate-ID fixtures, the caller either gets the requested chat's message or an actionable ambiguity error; zero calls return another chat's message as the selected result.
 - **SC-003**: On a seeded 50-match maximum-size page, a default-size context request returns at least one match within the existing 10-second request budget, with any omissions disclosed. On unchanged data, continuing to the end of the fixture recovers all 50 match identities exactly once, including in the escape-heavy variant.
 - **SC-004**: A reviewer can complete all three user journeys from the local assistant on the offline fixture, with zero WhatsApp connections or writes to conversation or account records. Structured and readable outputs agree on matches, order and completeness.
-- **SC-005**: On 400,000 seeded short messages, a default search with 12 matches spread across history and a separate default search with no match both complete with exact results within the existing 10-second request budget. On a separate history with 128 newer maximum-size nonmatching messages followed by an older match, a default search finds that match. These fixtures do not guarantee a complete search for an arbitrarily large history.
+- **SC-005**: On seeded short messages (400,000 on Windows and Linux, 100,000 on macOS), a default search with 12 matches spread across history and a separate default search with no match both complete with exact results within the existing 10-second request budget. On a separate history with 128 newer maximum-size nonmatching messages followed by an older match, a default search finds that match on every platform. These fixtures do not guarantee a complete search for an arbitrarily large history.
 
 ## Assumptions
 

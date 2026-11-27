@@ -370,7 +370,7 @@ Set before the first run: a runner type qualifies only if on all three machines 
 
 The same run's standard jobs: the check job passed; Windows/amd64 (22:36:22) and Linux/amd64 (22:34:40) passed full regression and the named command (exit 0; 37 top-level and 39 subtest passes; sparse / empty 1.557 / 1.524 s and 1.129 / 0.878 s). macOS/arm64 (`macos-latest`, 22:35:05) failed both: the named command exited 1 (36 top-level and 38 subtest passes; sparse timeout at 5.008 s, empty 4.485 s) and full regression timed out both searches. Its isolated profile rerun passed (2.894 / 2.058 s).
 
-The temporary survey job was removed afterwards. Native macOS acceptance is not met on any standard GitHub runner surveyed. T033 and T036 remain open, pending the owner's [decision](../../docs/backlog/007-message-search-page-reads.md#decision-needed).
+The temporary survey job was removed afterwards. Native macOS acceptance is not met on any standard GitHub runner surveyed. T033 and T036 remain open, pending the owner's [decision](../../docs/backlog/007-message-search-page-reads.md#decision-2026-11-27-the-first-choice-below).
 
 ### Smaller macOS Sizes: Criterion (2026-11-27)
 
@@ -398,4 +398,16 @@ Set before the first run: a size qualifies on a runner type only if on all three
 
 The same run's standard jobs: the check job passed; Windows/amd64 (23:22:27) and Linux/amd64 (23:19:44) passed full regression and the named command (exit 0; 37 top-level and 39 subtest passes; sparse / empty 1.533 / 1.523 s and 1.453 / 1.370 s). macOS/arm64 (23:19:49) failed both: the named command exited 1 (36 top-level and 37 subtest passes, both searches timed out) and the full tests timed out the sparse search.
 
-The temporary survey job and its script were removed afterwards. No repository test, product code or requirement changed. T033 and T036 remain open, pending the owner's [decision](../../docs/backlog/007-message-search-page-reads.md#decision-needed).
+The temporary survey job and its script were removed afterwards. No repository test, product code or requirement changed. T033 and T036 remain open, pending the owner's [decision](../../docs/backlog/007-message-search-page-reads.md#decision-2026-11-27-the-first-choice-below).
+
+### Owner Decision and Pre-Amendment Measurements (2026-11-27)
+
+The owner approved a macOS guarantee of 100,000 messages (spec clarification, 2026-11-27). While preparing the amendment, these defects were measured on Windows/amd64 at `743e188` with `CGO_ENABLED=0` and scratch overlay tests kept outside the repository; all data synthetic. None of this is native acceptance evidence.
+
+| Check | Result |
+| --- | --- |
+| First page of one match, `searchMessageKeys` on a checkpointed table of short rows | At 20,000 rows 1.46-2.07 s against 0.10-0.17 s for page sizes 2 and 50. At 100,000 rows all four one-match runs ended at the 5-second trigger (three with the deadline error, one with a storage I/O error) while sizes 2 and 50 took 0.52-0.60 s. |
+| Errors at the deadline: 1,500 searches per page size with deadlines of 0.2-20 ms, raw error logged | Page size 1: 1,454 deadline, 46 storage I/O errors. Page size 50: 1,481 and 19. The raw cause of the storage errors was `sql: statement is closed`; no keys were returned. |
+| `TestMCPMessageStdioNative/cancel` failure in CI run 45909879856 | Read from code and the recorded diagnostics, not reproduced: on end of input the framed reader closes the connection, and a write whose acknowledgment is not yet received returns a closed-connection error that the guard records as a transport failure. The test closes input as soon as it has read the last reply. This path is unchanged from feature 006. |
+
+The amendment (spec, plan, research R5, contracts, quickstart, feasibility, tasks T037-T041) needs a new design review before any of it is implemented.

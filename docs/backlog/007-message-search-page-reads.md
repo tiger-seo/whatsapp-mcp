@@ -2,9 +2,9 @@
 
 **Created**: 2026-11-26
 
-**Status**: Open; at 400,000 messages no tested change or standard GitHub macOS runner meets the bar, while 100,000
-messages meets it on both Apple Silicon runners (2026-11-26). Awaiting the owner's decision on the requirement. Blocks
-tasks T033 and T036 of feature 007.
+**Status**: Open; the owner set the macOS guarantee at 100,000 messages on 2026-11-27 and the feature 007 design was
+amended (tasks T037-T041). Blocks tasks T033 and T036 until implemented and verified. Faster search over larger
+histories on macOS stays deferred.
 
 ## Problem
 
@@ -21,7 +21,7 @@ and the sections above it.
 - `messages_time` is declared newest-first while messages mostly arrive in ascending time, so in the fixture its
   pages are about half empty (21.6 MB of content in 46.8 MB).
 
-## Decision needed
+## Decision (2026-11-27: the first choice below)
 
 The owner has no Apple Silicon Mac. At 400,000 messages, none of the four standard GitHub macOS runner types passes
 the unchanged acceptance command every time with replies of 4.0 s or less. What remains is a choice about the

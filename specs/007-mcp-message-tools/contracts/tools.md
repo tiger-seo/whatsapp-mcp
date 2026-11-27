@@ -36,6 +36,7 @@ Use MCP tool errors, not successful empty lists or internal exceptions, for inva
 | Missing exact/unique message or no last interaction | Identify what was not found without returning a different match. An explicit chat never falls back. |
 | ID in 2–100 chats | Distinct `ambiguous_id` error; bounded structured `matching_chats` strings in ascending order, plus the same safe list in readable text. Ask for `chat_jid`. |
 | ID in more than 100 chats | Limit error explaining there were too many matching chats; ask for `chat_jid`. Do not list a subset. |
+| Search stopped by the store's time limit | `timeout` in both renderings. No matches, page metadata or continuation; not a storage failure. |
 | Listing work cap prevents page verification | `resource_limit` with a search-specific explanation and narrower-filter advice. No matches, page metadata or continuation. |
 | Interaction work cap prevents winner or no-history verification | `resource_limit` explaining that the newest stored interaction could not be verified. No selected message, not-found claim, or advice to use unsupported filters. |
 | Reply size cannot be recovered by the permitted shaping | `resource_limit` with a reply-specific explanation and an applicable remedy, such as a smaller list limit or narrower context where that can help. No misleading claim that an oversize exact anchor can fit with fewer neighbours. |

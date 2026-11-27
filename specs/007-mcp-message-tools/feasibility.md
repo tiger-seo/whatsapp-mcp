@@ -6,7 +6,7 @@ T001-T003 use synthetic scratch data outside `/speckit-implement`. This is neith
 
 | Required fixture or check | Acceptance evidence |
 | --- | --- |
-| 400,000 short messages | Default filtered searches return all 12 expected sparse matches or a proven empty result, within the inherited cancellation deadlines. Spread matches throughout history, including beyond the former 100,200-visit window. |
+| 400,000 short messages (100,000 for the timed fixtures on macOS since 2026-11-27) | Default filtered searches return all 12 expected sparse matches or a proven empty result, within the inherited cancellation deadlines. Spread matches throughout history, including beyond the former 100,200-visit window. |
 | Larger source-field volume | Retrieve a match older than 128 nonmatching rows with 256 KiB each of text and caption, without treating skipped or unverified rows as nonmatches. Record actual original and folded lengths. |
 | Verified wide reply and hard work cap | Default context on the 50-match maximum-size and escape-heavy fixtures succeeds, and unchanged continuations recover all identities; an unfinished search instead returns no data or continuation. |
 | Context row cap independent of reply bytes | With non-default counts and small fields, exhaust available context row credits before any byte ceiling binds. Record positive probes, point projections (including rejected ones if any), and the final ledger. Verify closest-neighbour order and both renderings' flags against the seeded history: a known omitted key marks a side reduced; an empty, exhausted or fully requested side does not. No read may exceed the 2,000-row ceiling just to decide a flag. |
@@ -119,3 +119,17 @@ Use 400,001 visits, 256 keys per batch, 80 MiB original and 320 MiB folded bytes
 | Reply and lifecycle | With the same scratch heap guard the 100 continuation requests recovered both sets of 50 IDs; the slowest ordinary and escape-heavy calls took 379 and 163 ms. The separate row-cap and cancellation/fence probes above cover their respective boundaries without requiring all three tools in the scratch build. |
 
 **Allocation basis.** Keep bodies out of key, length, cursor, match and sort intermediates. With 256-byte ID and chat fields, at most 712 retained keys (two 256-key streams and 200 page keys) hold at most 364,544 raw key-string bytes; a 256-key aggregate with sixfold byte escaping, fixed fields and framing is below 1 MiB. Decode into the fixed key shape and discard each aggregate after its refill. SQLite only inspects one admitted row's bodies at a time, not all the bytes debited to the cumulative ledger. The projection path holds the precharged reply and one bounded scratch projection, not every projected or rejected row. The reply's raw strings cannot outgrow their charged representations; marshal once after lease return, keep each representation within 2 MiB and keep the entire encoded frame within 8 MiB. Only one reply-producing tool is admitted through transport retirement. These storage and buffer bounds, plus the reduced-hard-cap run with writer overlap, are the design evidence; sampled Go heap (55,202,736 bytes peak for ordinary replies on the last run) is an observation, not a runtime heap quota. Verify these shapes and actual allocations in the implementation checks. No production path, native framing, Linux or macOS was verified by these probes. A current design `PASS` is still required.
+
+## Native macOS Measurement and Platform Sizes (2026-11-27)
+
+The evidence above is from Windows. The delivered search was then measured on hosted native runners; commands, revisions, counts and logs are in the [verification record](verification.md#smaller-macos-sizes-results-2026-11-26-utc).
+
+| Check | Result |
+| --- | --- |
+| 400,000 short rows, Windows/amd64 and Linux/amd64 | Exact sparse and empty replies in every recorded CI acceptance run. Some earlier local Windows runs under concurrent load timed out, on earlier search code. |
+| 400,000 short rows, macOS | No standard runner type (`macos-26`, `macos-15`, `macos-26-intel`, `macos-15-intel`) passed all runs within a 4.0 s bar on three machines each; many searches reached the 5-second store trigger. |
+| 100,000 short rows, macOS/arm64 | `macos-26` and `macos-15`: all full test runs and all 18 named runs passed with exact results; slowest guarded reply 2.14 s. Store-level searches took 0.26-0.88 s. |
+| 200,000 short rows, macOS/arm64 | Failed on both runner types. |
+| Other fixtures on macOS/arm64 | The large-field search, 50-anchor continuation, context row-cap and lifecycle fixtures passed in the runs that recorded them; the failures were the 400,000- and 200,000-row searches and one native stdio cancellation run, analysed in research R5. |
+
+By the owner's decision the short-row criterion is 100,000 on macOS; the other criteria are unchanged. Intel macOS at 100,000, sizes between 100,000 and 200,000, and physical Macs were not measured. The corrections in [research R5](research.md) change no ceiling. With growing refills a one-match first page may read up to one batch past its match, as other page sizes already do; all visits and bytes stay charged to the same ledger.
