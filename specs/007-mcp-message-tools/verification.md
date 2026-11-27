@@ -431,3 +431,45 @@ The review noted that Intel macOS and physical Macs are unmeasured at 100,000 me
 ### Repeated macOS Acceptance on the Final Code: Criterion (2026-11-27)
 
 A temporary `macos-repeat` job runs the implementation of T037-T040 on `macos-26`, `macos-15`, `macos-26-intel` and `macos-15-intel`, three machines each: `go test ./... -count=1 -timeout 30m`, the named acceptance command three times, and `go test -count=50` of `TestMCPMessageStdioNative/cancel`. Set before the run: native macOS acceptance counts as repeatable only if on all six arm64 machines every full test, named run and cancellation repeat exits 0 and every guarded short-message reply takes 4.0 s or less. The six Intel machines are reported separately; they are outside the recorded evidence scope unless they meet the same rule.
+
+### Implementation of T037-T041 (2026-11-27)
+
+Commits: `ab6a455` (growing refills), `2a611dc` (ended reads report cancellation), `4302c8e` (write finishes at end of input), `d27a4b3` (platform sizes), `a397cb1` (diagnostic removed). All local runs Windows/amd64, `CGO_ENABLED=0`, synthetic data.
+
+| Check | Result |
+| --- | --- |
+| New tests against the unfixed code | `TestToolMessageSearchFirstPageOfOneBatches` failed with 2,000 and 2,001 statements; `TestToolMessageReadReportsEndedContext` closed-statement and finished-transaction cases returned the storage I/O error; `TestFramingEndOfInputDuringCompletingWrite`, `TestFramingEndOfInputDuringStuckWrite` and `TestFramingAcknowledgedWriteSurvivesClose` failed. The stop-at-top, classified-error, time-limit and malformed-input tests describe unchanged behaviour and passed. |
+| The same tests after the fixes | Exit 0. Fast new store and transport tests also passed 100 repeats; `TestMCPMessageStdioNative/cancel` passed 30. Two earlier 100-repeat commands exited 1 on their own 8-minute timeout because their patterns included tests that take 5 real seconds. |
+| One-match first page after the fix (scratch measurement) | At 100,000 rows 0.49-0.52 s, as page sizes 2 and 50. |
+| Forced deadlines after the fix (scratch measurement) | 3,000 of 3,000 reported the deadline, none a storage error. A first rerun still showed storage errors because it overlaid the pre-fix `ops.go`; it was repeated with the fixed file. |
+| macOS size branch forced on Windows (scratch overlay) | Both scale tests exit 0 at 100,000 rows, including the walk past the visit ceiling. |
+| Gates at `a397cb1`, 00:38-00:45 UTC | `gofmt -l .` empty; `go vet ./...`, `go mod verify`, session-check vet and test, five CGO-free builds and `govulncheck@v1.9.0` (no vulnerabilities) exit 0; `go test ./... -count=1 -timeout 30m` exit 0: 10 packages, 2,142 passing test events, 32 skips, no failures. Guarded 400,000-row replies 2.837 / 2.581 s; first 50-anchor replies 330 / 241 ms. |
+| Named command on Windows before the diagnostic commit | Exit 0; 40 top-level and 46 subtest passes, no skips; replies 2.799 / 2.438 s. |
+
+### Repeated macOS Acceptance: First Run (2026-11-27 UTC)
+
+[CI run 45918663954](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/45918663954) tested `87b13e058f30358344300540658c4c54b901c36a`. Each named run had 40 top-level tests. No `internal/mcp`, `internal/store`, `internal/wa` or `cmd/whatsapp-mcp` result was cached.
+
+| Runner | Machines passing full tests | Named runs passing | Guarded replies (18 per row) | Cancellation repeats |
+| --- | --- | --- | --- | --- |
+| `macos-26` arm64 | 3 of 3 | 7 of 9 | 0.360-0.824 s | 150 of 150 |
+| `macos-15` arm64 | 3 of 3 | 9 of 9 | 0.348-0.757 s | 150 of 150 |
+| `macos-26-intel` | 2 of 3 | 9 of 9 | 0.957-1.597 s | 150 of 150 |
+| `macos-15-intel` | 1 of 3 | 9 of 9 | 1.054-2.686 s | 150 of 150 |
+
+Standard jobs: the check job passed; Windows/amd64 passed full tests and the named command (400,000-row replies 2.338 / 1.687 s); `macos-latest` arm64 passed every step (0.891 / 0.836 s); Linux/amd64 passed full tests and **failed the named command** (1.349 / 1.121 s).
+
+- **The criterion was not met.** Two arm64 named runs, and the Linux one, failed only in `TestMCPMessageStdioNative/offline`: a tool call sent immediately after the previous tool reply was answered `busy`.
+- **Intel:** three of six machines failed their full tests only in `TestMessageBudgetContextRows`: a `list_messages` call that expands 2,000 context rows reached the 5-second store trigger. Neither that test nor the context code was changed by T037-T041. Intel macOS stays outside the recorded evidence scope.
+
+**Cause of the `busy` failure.** A WSL2 Linux/amd64 comparison ran only that subtest from the pre-change `6977a32` and from `87b13e0`, both at once on three CPUs with four busy loops, up to the 9-minute test timeout:
+
+| Revision | Completed runs | Failures | `busy` replies | Exit 1 after the replies (transport failure) |
+| --- | ---: | ---: | ---: | ---: |
+| `6977a32` | 119 | 52 | 48 | 4 |
+| `87b13e0` | 116 | 41 | 41 | 0 |
+
+The old code fails the same way, so the failure is in the test: the client can read a reply before the server has finished its write and released the single tool slot, and the contract then requires `busy`. The comparison also reproduces, on the old code, the transport failure that T040 corrects; the earlier entry that it was not reproduced is superseded.
+
+`169cba8` makes the native test repeat a tool call answered `busy`, with a 5 ms pause, within its existing 20-second deadline. The intended `busy` assertion while a call is held is unchanged. `go test -count=20 ./cmd/whatsapp-mcp -run '^TestMCPMessageStdioNative$'` exited 0 on Windows. A WSL2 repeat of the load comparison for the fixed test produced no result: commands inside WSL crashed with segmentation faults, so that check is not verified. A second repeated run on `169cba8` uses the same criterion.
+
