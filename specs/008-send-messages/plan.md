@@ -81,7 +81,13 @@ See [quickstart.md](quickstart.md).
 
 Then align the contracts and tasks, and request a fresh owner design `PASS` on that commit.
 
-**Post-design re-check**: The contracts add no deviation. The one stricter-than-spec behaviour (a link into another allowed directory is refused, R4) is stated in [tools.md](contracts/tools.md#paths) and is within FR-006's intent.
+**Post-design re-check**: The contracts add no deviation. Feasibility changed three details, all within the spec:
+
+- Paths are resolved before the confined open, so a link between allowed directories is accepted as FR-006 says.
+- The converter's output goes through a counted pipe.
+- Junction paths fail closed on Windows.
+
+See [feasibility.md](feasibility.md).
 
 ## Project Structure
 

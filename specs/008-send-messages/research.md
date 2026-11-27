@@ -13,6 +13,8 @@ These findings come from reading the code at `163b114` and the pinned whatsmeow 
 
 Each call is admitted only while the owner is connected, its current generation is not retiring and the owner is not stopping. An admitted call runs under a context derived from that generation's work context. The owner counts admitted send calls, as it tracks the repair pass. Retirement cancels the work context, then waits for admitted send calls to return (bounded by the existing drain bound) before `Retire` blocks storage. Every network path of the call already runs through the generation's fence.
 
+**Evidence:** On the simulator, a send held at any step returned as soon as retirement cancelled the work context: before `Disconnect`, the fence and the storage barrier. The quiet-stop check then passed with no library work left ([feasibility.md](feasibility.md#item-1-simulator-send)).
+
 **Rationale:** The owner is the only component that knows whether the generation is usable, and the stop order (work cancel → `Disconnect` → fence → storage barrier → library context) is a safety invariant. Admitting sends like the repair pass keeps them inside that order. No reconnect, pairing or recovery path is reachable from the port.
 
 **Alternatives considered:**
@@ -48,14 +50,18 @@ Each call is admitted only while the owner is connected, its current generation 
 **Decision:** At startup, each `send_allowed_dirs` entry is resolved to an absolute real path, symlinks included, and must be an existing directory. At call time:
 
 - `media_path` must be absolute and pass a syntactic check that refuses UNC, device and `\\?\` paths, alternate data streams (`:` after the volume), NUL and empty components.
-- The allowed root that contains the resolved path is chosen, and the file is opened with the standard library's confined open (`os.Root` on that root, relative name). It follows links only while they stay inside the root and refuses escapes, including a link swapped after resolution.
+- The path is resolved with its links followed (`filepath.EvalSymlinks`). The allowed root that contains the resolved path is chosen, and the resolved name relative to that root is opened with the standard library's confined open (`os.Root`). A link or junction swapped in after resolution makes the confined open fail ("path escapes from parent"), so the open can never leave the root. On Unix the open adds `O_NONBLOCK`, so a FIFO swapped in cannot block it. On Windows, `os.Root` refuses reserved device names (`CON`, `NUL.txt`).
 - The open handle must be a regular file with exactly one link, and its size must be 1 byte to 100 MiB.
 
-All later reads come from this one handle. The feasibility work runs the abuse list from the spec natively on Windows (junctions, symlinks, hard links, alternate data streams, UNC, case aliases), Linux and macOS.
+All later reads come from this one handle. Feasibility ran the abuse list on Windows, WSL2 and the native CI runners ([feasibility.md](feasibility.md#item-3-containment)).
 
-**Rationale:** A check on the path string alone is racy (security review F05). `os.Root` (Go 1.24+, available with the pinned Go 1.27) is the standard library's race-resistant confined open on every target. It needs no new dependency.
+**Rationale:** A check on the path string alone is racy (security review F05). `os.Root` (Go 1.24+, available with the pinned Go 1.27) is the standard library's race-resistant confined open on every target. It needs no new dependency. Resolving first means a link from one allowed directory into another is accepted, as FR-006 says.
 
-**Consequence:** A link inside one allowed directory that points into a different allowed directory is refused, because each open is confined to one root. This is stricter than the spec's "resolves inside one of the directories", and the contract states it.
+**Fail-closed consequences:**
+
+- On Windows, a path through a junction does not resolve with the pinned Go, so it is refused, even when the junction points inside the root.
+- An allow-list entry whose path contains such a junction fails at startup.
+- A trailing dot or space on a Windows file name opens the same file inside the root, which is harmless.
 
 **Alternatives considered:**
 
@@ -85,21 +91,26 @@ The waveform is the synthetic 64-byte placeholder seeded by the duration. The pa
 - **Lookup:** At startup, `ffmpeg` must be an absolute path to an existing executable file, or startup fails. At call time, an unset setting means `exec.LookPath("ffmpeg")`; the standard library refuses results relative to the current directory. Not found is the explicit "ffmpeg missing" tool error.
 - **Input:** The validated content is copied, under the size limit, into a private per-send working directory. The converter reads that copy only.
 - **Invocation:** It runs directly, with an argument list and no shell:
-  - `-nostdin -hide_banner -loglevel error`, and `-protocol_whitelist file` so the input cannot reach the network or other protocols;
-  - an explicit demuxer chosen from the extension (mp3, wav, mov for m4a, aac, flac, ogg for ogg and opus, amr), with the input named by a fixed file name, never the user's;
-  - `-map 0:a:0 -vn -c:a libopus -b:a 32k -ar 48000 -application voip -vbr on -frame_duration 60 -f ogg` to a fixed output name in the same directory.
-- **Limits:** One conversion at a time, 60 s, output at most 100 MiB (checked while it runs and after), cancellation through the send context, then `Kill` with a short `WaitDelay`. The working directory is removed on every exit path.
+  - `-nostdin -hide_banner -loglevel error`, and `-protocol_whitelist file,pipe` so the input cannot reach the network or other protocols;
+  - an explicit demuxer chosen from the extension (mp3, wav, mov for m4a, aac, flac, ogg for ogg and opus, amr), with the input named `input`, never the user's name;
+  - `-map 0:a:0 -vn -c:a libopus -b:a 32k -ar 48000 -application voip -vbr on -frame_duration 60 -f ogg pipe:1`.
+- **Process:** The converter runs in the working directory, with an empty environment (on Windows only `SystemRoot`). It runs as a process tree that is stopped as a whole:
+  - On Windows it is started suspended, placed in a job object that kills every process in it when terminated or closed, and then resumed (`golang.org/x/sys/windows`, already a module dependency).
+  - On Unix it gets its own process group, which is killed as a group.
+
+  Feasibility found that a package-manager launcher (the Chocolatey `ffmpeg.exe` shim on the Windows runner) does not pass a kill on. With a plain process kill, the real converter outlived every limit and kept the working directory open. The configured or found `ffmpeg` may be such a launcher, so the tree handling is required, not optional.
+- **Limits:**
+  - one conversion at a time, for at most 60 s;
+  - the output, read from the converter's stdout, is counted as it arrives and stopped at 100 MiB;
+  - cancellation through the send context, then `Kill` with a 2-second `WaitDelay`;
+  - the working directory is removed on every exit path.
+
+  Feasibility found that polling the size of an output file does not work on Windows (the reported size lags while ffmpeg writes), so the output goes through the counted pipe.
 - **Output:** It is then parsed by R5 and sent as a voice note.
 
-Feasibility runs the real ffmpeg on Windows, Linux and macOS with these inputs:
+Feasibility ran the real ffmpeg with every allowed input, disguised playlist and concat files, and the time, output and cancellation limits ([feasibility.md](feasibility.md#item-4-converter)).
 
-- mp3, wav, m4a (including the index at the end of the file), aac, flac, amr and non-Opus ogg;
-- a playlist or concat file disguised as `.mp3` that references another local file, which must be refused;
-- a stall and an oversized output.
-
-It records the ffmpeg versions.
-
-**Rationale:** F06 asks for a trusted executable, no shell, restricted protocols and demuxers, time, size and concurrency limits, private working files and cleanup. A copy (rather than a pipe) lets demuxers that need seeking (m4a) work, while the converter still sees only validated bytes under a fixed name.
+**Rationale:** F06 asks for a trusted executable, no shell, restricted protocols and demuxers, time, size and concurrency limits, private working files and cleanup. An input copy (rather than a stdin pipe) lets demuxers that need seeking (m4a with its index at the end) work, while the converter still sees only validated bytes under a fixed name. The Ogg muxer streams, so the output can use a pipe.
 
 **Alternatives considered:**
 
@@ -144,6 +155,8 @@ A send counts toward the limit when it is handed to WhatsApp (step 8 begins), wh
 - **Local record:** On success, the message is built with ingest's existing extraction from the sent protobuf (text, caption, media type and media metadata, including the upload's direct path, key and hashes). It is stored with `from_me = true` under the normalized chat and the account's own phone JID, using the ordinary store write, with a short bounded context that retirement waits for.
 - **Record failure:** A failed record write reports success with `local_record: "missing"` and logs a warning. A later history sync of the same `(chat_jid, id)` updates the same row.
 
+- **Recipient addressing:** The pinned library sends a direct message to the recipient's LID. For a phone recipient without a stored LID mapping, it first runs its own user-info lookup inside `SendMessage`, and refuses an unregistered number itself ("not on WhatsApp"). The registration lookup of R8 step 6 stores the LID mapping as a side effect, so the send that follows does not repeat it. Because that library lookup would otherwise run only after the upload, the early lookup still saves a useless upload. The local record uses the normalized phone chat (spec FR-002), not the LID.
+
 **Rationale:** One extraction path keeps stored sent and received messages identical in shape. The write happens before retirement continues (R1), so it never races the storage barrier.
 
 ## R10. Settings
@@ -164,7 +177,10 @@ Validation runs at startup (C4). The default outbox is created with `private.Mkd
 
 - the device-list query, the prekey fetch and the registration (usync) query;
 - the media-connection query, with a local upload endpoint reached through the test media transport;
-- message acknowledgements.
+- message acknowledgements;
+- the user-info lookup that returns a LID (`<lid val=…>`), with the registration lookup answering `jid` = LID and `pn_jid` = phone for a registered number.
+
+The feasibility scratch test answered all of these from a test IQ handler and a routed upload endpoint, without changing `internal/wasim` ([feasibility.md](feasibility.md#item-1-simulator-send)). Implementation moves them into the simulator.
 
 Feasibility shows, on the simulator:
 

@@ -37,7 +37,8 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 ## Paths
 
-- The path is matched against the allowed directories resolved at startup. It is opened confined to the one directory that contains it. Links are followed only while they stay inside that directory, so a link into another allowed directory is refused too.
+- The path is resolved with its links followed and must land inside one of the allowed directories (resolved at startup). The resolved file is then opened confined to that directory, so a link or junction swapped in after resolution is refused rather than followed. A link from one allowed directory into another is accepted.
+- On Windows, a path through a junction is refused, because it does not resolve. So are reserved device names (`CON`, `NUL.txt`).
 - These are refused: relative paths; UNC, device and `\\?\` paths; alternate data streams; anything that is not a regular file; files with more than one link; empty files; files over 100 MiB (also enforced on the bytes read).
 - A refusal because of the allow-list names `send_allowed_dirs`.
 

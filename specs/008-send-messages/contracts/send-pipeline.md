@@ -39,7 +39,7 @@ The whole call runs under a 2-minute deadline from its start. The conversion has
 
 - **Network:** All requests go through the generation's fence. The upload request gets a deadline equal to the remaining send budget. Download requests keep their 10-second limit and 16 MiB response limit.
 - **Upload:** It streams from the validated handle through a counting reader (≤ 100 MiB). The encrypted temporary file lives in the per-send private working directory.
-- **Converter:** It reads a size-checked private copy under a fixed name, with `-protocol_whitelist file` and an explicit demuxer. It runs one at a time, for at most 60 s, and its output is checked against 100 MiB. The send context cancels it, then `Kill`. The working directory is removed on every exit, and leftovers are removed at startup.
+- **Converter:** It reads a size-checked private copy under a fixed name, with `-protocol_whitelist file` and an explicit demuxer. It runs one at a time, for at most 60 s, and its output is checked against 100 MiB. The send context cancels it by stopping its whole process tree (a Windows job object, a Unix process group), so a launcher's child cannot outlive it. The working directory is removed on every exit, and leftovers are removed at startup.
 - **Concurrency:** One send per process. One tool call per MCP session, with a 2 min + 5 s guard deadline for the send tools.
 
 ## Diagnostics
