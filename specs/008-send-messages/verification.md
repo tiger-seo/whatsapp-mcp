@@ -14,6 +14,7 @@
 | Stage | Date | Commit | Verdict | Owner decision |
 | --- | --- | --- | --- | --- |
 | design | 2026-11-27 | 3254097 | BLOCK | |
+| design | 2026-11-27 | 2596af3 | BLOCK | |
 
 ## Design review of `3254097` (BLOCK): handling
 
