@@ -95,6 +95,7 @@ The independent review identified oversized-key materialization, malformed UTF-8
 | design | 2026-11-23 | 7d150f9 | PASS | |
 | design | 2026-11-23 | e45dbd6 | PASS | |
 | code | 2026-11-24 | ab8555e | BLOCK | |
+| design | 2026-11-27 | 35b447d | PASS | |
 
 - **Code BLOCK (`ab8555e`):** The native macOS named suite did not return the required sparse search result within the 5-second store deadline. The judge reviewed the committed diff and verification record; its local Go commands were denied, so the verdict relies on the recorded CI evidence and source review, not a judge rerun. It also flagged the one-result first-page search's one-row refills as an unverified scale risk, not a separate blocker. The unrelated local `.gitignore` change was excluded from this committed review.
 
@@ -411,3 +412,18 @@ The owner approved a macOS guarantee of 100,000 messages (spec clarification, 20
 | `TestMCPMessageStdioNative/cancel` failure in CI run 45909879856 | Read from code and the recorded diagnostics, not reproduced: on end of input the framed reader closes the connection, and a write whose acknowledgment is not yet received returns a closed-connection error that the guard records as a transport failure. The test closes input as soon as it has read the last reply. This path is unchanged from feature 006. |
 
 The amendment (spec, plan, research R5, contracts, quickstart, feasibility, tasks T037-T041) needs a new design review before any of it is implemented.
+
+### Amended Design Review (2026-11-27)
+
+The `owner-judge` design review of `35b447d` returned PASS (row in the Owner reviews table). It checked the amendment against the code at that commit and ran no code. Low observations, none blocking, and what happens to them:
+
+| Observation | Handling |
+| --- | --- |
+| The end-of-input wait must cover the write's return, and a ready acknowledgment should win over closing; a response that starts writing between the close and the guard's stop can still be reported as a failure | T040 waits on the writer's lock, which a write holds until it returns, and prefers a ready acknowledgment. The narrower window for a response that was not yet being written is unchanged. |
+| A read preempted by the store reports `cancelled` where the inherited contract uses `busy` | Unchanged behaviour in the usual case; left for the owner. |
+| The `timeout` error gives no advice to narrow the search | Left for the owner; changing it is a contract change. |
+| A feasibility criterion mentions matches beyond 100,200 visits, which a 100,000-row fixture cannot hold | Windows and Linux cover it; wording left to avoid staling this review. |
+| T034 and T035 stay ticked although their gates run again | Fresh gate results and the T041 documentation are recorded with T033. |
+| The cause of the macOS cancellation failure is inferred, and one `internal` diagnostic was unexplained | The `internal` line is the cancelled request's result: the server logs the `cancelled` code in that category. T033 repeats the native cancellation test on macOS. |
+
+The review noted that Intel macOS and physical Macs are unmeasured at 100,000 messages, and that macOS users with larger histories may receive `timeout`; both are recorded in the plan and are the owner's to accept.
