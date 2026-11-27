@@ -109,6 +109,8 @@ func (s *Store) read(ctx context.Context, name string, fn func(ctx context.Conte
 	}()
 	if err == nil {
 		err = opCtx.Err()
+	} else if cause := opCtx.Err(); cause != nil && unexplained(err) {
+		err = cause
 	}
 	return s.report(op, err)
 }

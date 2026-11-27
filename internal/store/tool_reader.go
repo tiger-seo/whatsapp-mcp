@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"time"
@@ -30,6 +31,45 @@ func toolRead[T any](ctx context.Context, s *Store, fn func(context.Context) (T,
 		return zero, err
 	}
 	return result, nil
+}
+
+// messageSnapshot keeps admission through transaction and connection cleanup.
+func messageSnapshot[T any](ctx context.Context, r *ToolReader, fn func(context.Context, querier) (T, error)) (T, error) {
+	return toolRead(ctx, r.store, func(ctx context.Context) (T, error) {
+		var result T
+		err := r.store.read(ctx, "message tool", func(ctx context.Context, conn *sql.Conn) error {
+			tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback()
+			var q querier = tx
+			if r.store.hooks.wrapReader != nil {
+				q = r.store.hooks.wrapReader(tx)
+			}
+			result, err = fn(ctx, q)
+			return err
+		})
+		return result, err
+	})
+}
+
+// MessageContextResult contains an exact message and its chronological neighbours.
+type MessageContextResult struct {
+	Message                     MessageView
+	Before, After               []MessageView
+	BeforeReduced, AfterReduced bool
+}
+
+// GetMessageExact reads one exact chat/ID pair and optional same-chat context.
+// accept is called synchronously, first for the anchor and then for neighbours.
+// It must not serialize, perform I/O, spawn work, reenter the store, or retain
+// rejected messages. A rejected anchor fails the entire read.
+func (r *ToolReader) GetMessageExact(ctx context.Context, chatJID, id string, counts Context, accept func(MessageView) (bool, error)) (MessageContextResult, error) {
+	if chatJID == "" {
+		return MessageContextResult{}, invalid("chat_jid", "required")
+	}
+	return r.GetMessageContext(ctx, chatJID, id, counts, accept)
 }
 
 func (r *ToolReader) ListChats(ctx context.Context, query string, sort ChatSort, withLatest bool, p Page) ([]ChatView, error) {

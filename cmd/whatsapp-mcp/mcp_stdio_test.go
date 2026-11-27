@@ -366,10 +366,10 @@ func checkStdioDiscovery(t *testing.T, p *stdioPeer, init json.RawMessage) {
 			InputSchema, OutputSchema map[string]any
 		}
 	}
-	if err := json.Unmarshal(p.reply(t, 10), &list); err != nil || len(list.Tools) != 5 {
-		t.Fatalf("expected five discovered tools: %+v (%v)", list, err)
+	if err := json.Unmarshal(p.reply(t, 10), &list); err != nil || len(list.Tools) != 8 {
+		t.Fatalf("expected eight discovered tools: %+v (%v)", list, err)
 	}
-	want := map[string]bool{"get_chat": true, "list_chats": true, "search_contacts": true, "get_direct_chat_by_contact": true, "get_contact_chats": true}
+	want := map[string]bool{"get_chat": true, "list_chats": true, "search_contacts": true, "get_direct_chat_by_contact": true, "get_contact_chats": true, "list_messages": true, "get_message_context": true, "get_last_interaction": true}
 	for _, tool := range list.Tools {
 		if !want[tool.Name] || tool.InputSchema["type"] != "object" || tool.InputSchema["additionalProperties"] != false || tool.OutputSchema["type"] != "object" {
 			t.Fatalf("unexpected tool: %+v", tool)

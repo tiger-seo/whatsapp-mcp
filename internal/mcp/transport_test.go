@@ -767,6 +767,109 @@ func TestFramingWriteCompletionAndGuardStop(t *testing.T) {
 	}
 }
 
+// endOfInputSession reads one request and starts its response on a writer that holds the bytes until released.
+func endOfInputSession(t *testing.T) (*guardedConnection, *io.PipeWriter, *blockedWriter, <-chan error) {
+	t.Helper()
+	in, input := io.Pipe()
+	t.Cleanup(func() { _ = in.Close(); _ = input.Close() })
+	out := &blockedWriter{make(chan struct{}), make(chan struct{})}
+	c, err := newFramedTransport(in, out).Connect(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := newGuardedConnection(c)
+	go func() { _, _ = io.WriteString(input, `{"jsonrpc":"2.0","method":"ping","id":1}`+"\n") }()
+	m, err := g.Read(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	written := make(chan error, 1)
+	go func() {
+		written <- g.Write(context.Background(), &jsonrpc.Response{ID: m.(*jsonrpc.Request).ID, Result: []byte(`{}`)})
+	}()
+	<-out.entered
+	return g, input, out, written
+}
+
+func TestFramingEndOfInputDuringCompletingWrite(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		g, input, out, written := endOfInputSession(t)
+		defer g.Close()
+		// The client has the bytes and closes its input before the writer returns.
+		if err := input.Close(); err != nil {
+			t.Fatal(err)
+		}
+		// Read the framed input directly, as the guard's reader does, so that only the write can close the guard.
+		ended := make(chan error, 1)
+		go func() { _, err := g.inner.Read(context.Background()); ended <- err }()
+		time.Sleep(50 * time.Millisecond)
+		close(out.release)
+		if err := <-written; err != nil {
+			t.Fatalf("delivered response: %v", err)
+		}
+		if err := <-ended; !errors.Is(err, io.EOF) {
+			t.Fatalf("end of input: %v", err)
+		}
+		if g.closeFailed || g.transportFailed() {
+			t.Fatal("a delivered response was reported as a transport failure")
+		}
+	})
+}
+
+func TestFramingEndOfInputDuringStuckWrite(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		g, input, out, written := endOfInputSession(t)
+		defer close(out.release)
+		defer g.Close()
+		start := time.Now()
+		if err := input.Close(); err != nil {
+			t.Fatal(err)
+		}
+		ended := make(chan error, 1)
+		go func() { _, err := g.Read(context.Background()); ended <- err }()
+		if err := <-written; err == nil {
+			t.Fatal("unfinished write reported success")
+		}
+		<-ended
+		if waited := time.Since(start); waited != 250*time.Millisecond {
+			t.Fatalf("end of input waited %v", waited)
+		}
+	})
+}
+
+func TestFramingMalformedInputDoesNotWaitForWrite(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		g, input, out, written := endOfInputSession(t)
+		defer close(out.release)
+		defer g.Close()
+		start := time.Now()
+		go func() { _, _ = io.WriteString(input, "{not json}\n") }()
+		if _, err := g.Read(t.Context()); err == nil {
+			t.Fatal("malformed input accepted")
+		}
+		<-written
+		if waited := time.Since(start); waited != 0 || !g.closeFailed {
+			t.Fatalf("malformed input waited %v, failed=%t", waited, g.closeFailed)
+		}
+	})
+}
+
+func TestFramingAcknowledgedWriteSurvivesClose(t *testing.T) {
+	// The acknowledgment and the close are often both ready before the writer looks; repeat to cover the choice.
+	for range 200 {
+		c := &framedConnection{done: make(chan struct{}), write: make(chan writeFrame), lock: make(chan struct{}, 1)}
+		c.lock <- struct{}{}
+		go func() {
+			f := <-c.write
+			f.ack <- writeFrameAck{at: time.Now()}
+			_ = c.Close()
+		}()
+		if err := c.Write(t.Context(), &jsonrpc.Response{Result: []byte(`"ok"`)}); err != nil {
+			t.Fatalf("acknowledged write: %v", err)
+		}
+	}
+}
+
 func (w *blockedWriter) Write(b []byte) (int, error) {
 	close(w.entered)
 	<-w.release

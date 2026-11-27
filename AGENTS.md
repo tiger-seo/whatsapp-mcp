@@ -9,13 +9,14 @@ compiler. The WhatsApp client is whatsmeow, pinned in `go.mod`. One Go module; c
 a new setting is one descriptor in `setting.go` plus one `Config` field), `internal/store` (the one SQLite file
 `whatsapp.db`: whatsmeow device schema, message schema, the unsafe-run marker, repair markers, offline recovery),
 `internal/wa` (the connection owner, the pinned session adapter, the network fence and the quiet-stop check),
-`internal/mcp` (five read-only tools, guarded SDK transport, bounded stdio and diagnostics),
+`internal/mcp` (eight read-only tools, guarded SDK transport, bounded stdio and diagnostics),
 `internal/wasim` (a simulated WhatsApp server and phone, tests only), `internal/lock`, `internal/private`,
 `internal/buildinfo`, `internal/walog` (the whatsmeow log bridge).
 
 **Commands:** `version`; `status` (offline snapshot, never connects); `pair` (QR window, offline recovery); `stdio` and
 `serve` (open a saved session under the existing owner policy). `stdio` serves `list_chats`, `get_chat`,
-`search_contacts`, `get_direct_chat_by_contact` and `get_contact_chats`; `serve` has no MCP endpoint yet.
+`search_contacts`, `get_direct_chat_by_contact`, `get_contact_chats`, `list_messages`, `get_message_context` and
+`get_last_interaction`; `serve` has no MCP endpoint yet.
 `OPERATIONS.md` is the operator guide and keeps implemented and verified apart.
 
 ## Specification Sources (Speckit)
@@ -69,6 +70,9 @@ Add the row it ends with to the "Owner reviews" table in `specs/NNN-*/verificati
   `CLAUDE.md` and the feature's `tasks.md` (heading may carry a suffix; the section runs to the next `##`). So
   documentation fixes on a branch under review belong in those places or wait for a new review. The hook needs
   `bash` and `jq`.
+- A plan with `**Feasibility gate**: required` also needs a committed `feasibility.md` marked `**Status**: Verified`
+  and a current design `PASS` that covers that file. Scratch feasibility work runs separately, not through
+  `/speckit-implement`. A scoped acceptance of `CONCERNS` does not clear this gate.
 
 ## Current state
 
@@ -81,6 +85,10 @@ observed on a real account. Feature 006 implements five local read-only MCP tool
 read facade and the existing owner/lock lifecycle. Owner launch allows all stored chat and contact reads; it does
 not grant account actions. Its native pipe evidence covers Windows/amd64, Linux/amd64 and macOS/arm64 with no real
 account. Delivery and owner review are recorded in the archived [feature 006 tasks](.specify/archive/006-mcp-stdio-tools/tasks.md#current-state).
+Feature 007 implements three local message reads. On 2026-11-27 the owner set the timed search size at 400,000
+short messages on Windows and Linux and 100,000 on macOS, after no hosted macOS runner met the larger size within the
+5-second store deadline. Native acceptance passed on all three platforms at those sizes; Intel and physical Macs are
+unverified. Review status and evidence are in `specs/007-mcp-message-tools/verification.md`.
 Since 2026-11-13 `go.mod` replaces whatsmeow with the owner's fork `github.com/tiger-seo/whatsmeow` at `bedcf01`
 (branch `receive-bounds`), which enforces the receive bounds, sends nothing to the user's phone on another account's
 behalf, and carries the lost-515 fix proposed upstream as tulir/whatsmeow#1337; E003-RX-01 is retired.
@@ -163,6 +171,11 @@ the user unlinking the device on the phone, then deleting the directory. Record 
 
 ## Known Issues & Gotchas
 
+### Windows Shell Resolution
+In the PowerShell environment, `bash` resolves to `C:\Windows\system32\bash.exe` and runs WSL2; `sh`
+resolves to Git for Windows' `sh.exe` and runs MSYS. Use `sh` for repository shell scripts that need
+the Windows Git environment and its tools, including `jq`. WSL has its own tool availability and PATH.
+
 ### SDK Middleware Is Too Late for Admission
 **Issue:** Limiting work only in tool handlers does not bound queued requests.
 **Root Cause:** The pinned SDK can dispatch or queue before receiving middleware.
@@ -176,7 +189,9 @@ the user unlinking the device on the phone, then deleting the directory. Record 
 ### Row Limits Do Not Bound Encoded Output
 **Issue:** A valid row count can still yield a response over budget.
 **Root Cause:** The SDK response includes both structured content and escaped text; envelopes and escaping consume additional bytes.
-**Prevention Rule:** Precharge both encodings and check actual final bytes. Return a bounded error, never a truncated successful page. [Source: .specify/archive/006-mcp-stdio-tools/research.md -> R4]
+**Prevention Rule:** Precharge both encodings and check actual final bytes. Never report an unfinished search as a
+successful page. Only shorten a verified reply when the feature contract explicitly permits it and reports the
+omissions and continuation as applicable. [Source: .specify/archive/006-mcp-stdio-tools/research.md -> R4]
 
 ### Live Acknowledgement Does Not Guarantee Replay
 **Issue:** A terminal ingest failure can leave the record incomplete; a history notification may already be acknowledged.

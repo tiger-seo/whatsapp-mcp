@@ -342,7 +342,7 @@ stdout is reserved for MCP protocol frames. The command takes the exclusive data
 start if another process holds it. A saved session can still connect at startup under the existing owner policy;
 the tools themselves read the local store and work while the account is disconnected.
 
-**Access and privacy:** launching `stdio` authorizes that client to read all stored chats and contacts. There is
+**Access and privacy:** launching `stdio` authorizes that client to read all stored chats, contacts and messages. There is
 no per-chat restriction or per-read approval. Names, captions and messages are untrusted data, not instructions.
 A prompt-injected client can request unrelated conversations, and the client or its AI provider can retain
 results. Use a client and provider whose data handling you trust. There are no MCP login, QR, pairing, recovery,
@@ -355,6 +355,9 @@ send or media download tools, no HTTP listener and no proxy. `pair` and offline 
 | `search_contacts` | Distinct people matching a literal substring of any locally stored name or the stored phone digits. Default page size: 50. |
 | `get_direct_chat_by_contact` | One exact direct chat. For mapped identities, the phone chat wins; if absent, the exact mapped LID chat is used. An unmapped LID matches only its own chat. No partial-number lookup. |
 | `get_contact_chats` | Distinct stored chats with the person's direct identities or messages from them, with each chat's actual latest message. Default page size: 20. |
+| `list_messages` | Search locally stored messages, optionally with same-chat context. Default page size: 50; context defaults to five neighbours on each side when enabled. |
+| `get_message_context` | Resolve an exact chat and message ID, or a unique ID, and return up to six neighbours on each side by default. An ambiguous ID asks for a chat JID. |
+| `get_last_interaction` | Return the newest local direct or authored group message for a contact and its known alias. The account's own identity considers only self-chat. |
 
 Search is case-insensitive and literal, including punctuation. For a phone substring in `search_contacts`, use
 digits as stored. The two contact lookup tools instead normalize supported formatted phone numbers, phone JIDs
@@ -362,8 +365,23 @@ and LIDs through local mappings. Lists accept 1 to 200 rows; pages start at zero
 100,000 rows. Success returns structured data and an equivalent safe JSON text representation. An over-budget
 read returns `resource_limit`, not a partial page. Try fewer rows or omit latest detail where supported.
 
+**Message search limits:** an unfinished search returns a `resource_limit` error with no messages or continuation;
+use narrower filters. A verified context listing may instead shorten its page or neighbours, marking omissions.
+Use `next_page` with the same filters and context options to resume at the first omitted match. If the supported
+offset is exceeded, `narrow_search` advises narrowing the search. A first anchor may contain explicitly marked
+text or caption previews; neighbours, exact targets and last interactions are never previewed. A listing without
+context, an exact target or a last interaction must fit in full or return a size error.
+
+A search that passes the 5-second store deadline returns `timeout` with no messages or continuation; narrow it by
+chat, sender or date. The timed searches are verified on 400,000 short messages on Windows and Linux and on 100,000
+on macOS (Apple Silicon hosted runners). Searches over larger histories can time out, most readily on macOS. Intel
+Macs and physical Macs are not verified; on Intel hosted runners a request expanding 2,000 context rows sometimes
+exceeded the deadline. See the [feature verification record](specs/007-mcp-message-tools/verification.md) for
+results, limits and review status.
+
 **Admission and shutdown:** one tool is admitted through completion of its response write, with no waiting tool
-queue. `busy` means the tool credit, store capacity or WAL admission check refused the read; retry later. A WAL
+queue. `busy` means the tool credit, store capacity or WAL admission check refused the read; retry later. A client
+that sends its next tool call the moment a reply arrives can be answered `busy` until that reply's write completes. A WAL
 larger than 64 MiB can trigger a rate-limited recovery checkpoint; do not delete SQLite sidecars. A fresh
 free-space sample below 640 MiB, an unavailable sample or a refusing disk guard yields `unavailable`. Free space
 and retry. Ordinary writes retain their existing policy. A tool-held WAL crossing above 128 MiB cancels the read
@@ -374,7 +392,8 @@ The session caps input frames at 64 KiB, JSON depth at 16 and tokens at 4,096. T
 slots, including the one tool. After 1,024 forwarded notifications, the next eligible notification ends the
 session. Output caps are 2 MiB structured JSON, 2 MiB safe JSON text and 8 MiB for the full response frame.
 Store and tool timers request cancellation at 5 s and 10 s respectively; these are not completion guarantees.
-Output waits at most 5 s, and EOF or the first stop signal starts normal drain. A tool lease is retained until
+Output waits at most 5 s, and EOF or the first stop signal starts normal drain; a reply being written when input
+ends has up to 250 ms to finish. A tool lease is retained until
 its transaction and connection return; the store and lock are not released until actual tool and owner work drain.
 A store-control, device-storage or ingest failure leads to unsuccessful shutdown, even if EOF arrives first.
 

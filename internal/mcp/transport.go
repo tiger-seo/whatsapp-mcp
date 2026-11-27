@@ -18,6 +18,9 @@ import (
 const maxInputFrame = 64 << 10
 const maxOutputFrame = 8 << 20
 
+// inputEndWait bounds how long end of input waits for a response write in progress.
+const inputEndWait = 250 * time.Millisecond
+
 var errFrame = errors.New("invalid protocol frame")
 var errOutputFrame = errors.New("response write failed")
 
@@ -252,6 +255,9 @@ func (c *framedConnection) readHeld(ctx context.Context) (jsonrpc.Message, func(
 			return nil, nil, ctx.Err()
 		case ev := <-c.read:
 			if ev.err != nil {
+				if errors.Is(ev.err, io.EOF) {
+					c.finishWrite()
+				}
 				c.Close()
 				return nil, nil, ev.err
 			}
@@ -451,7 +457,13 @@ func (c *framedConnection) Write(ctx context.Context, msg jsonrpc.Message) error
 	}
 	select {
 	case <-c.done:
-		return sdk.ErrConnectionClosed
+		// A write the pump has already acknowledged happened, whatever closed the connection afterwards.
+		select {
+		case ack := <-f.ack:
+			return complete(ack)
+		default:
+			return sdk.ErrConnectionClosed
+		}
 	case <-ctx.Done():
 		if err := ctx.Err(); !errors.Is(err, context.DeadlineExceeded) {
 			return fail(err)
@@ -466,6 +478,20 @@ func (c *framedConnection) Write(ctx context.Context, msg jsonrpc.Message) error
 		return complete(ack)
 	default:
 		return fail(context.DeadlineExceeded)
+	}
+}
+
+// finishWrite lets a response write in progress return before end of input closes the connection. A client may
+// close its input as soon as it has read a reply, before the output pump has acknowledged that write; closing at
+// once would report a delivered reply as a transport failure. A write holds the lock until it returns.
+func (c *framedConnection) finishWrite() {
+	timer := time.NewTimer(inputEndWait)
+	defer timer.Stop()
+	select {
+	case <-c.lock:
+		c.lock <- struct{}{}
+	case <-c.done:
+	case <-timer.C:
 	}
 }
 

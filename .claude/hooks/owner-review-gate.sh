@@ -14,6 +14,7 @@
 # covered, so recording a verdict does not make it stale. Nor is ticking tasks off: a tasks.md that differs only in
 # its "- [ ]" / "- [X]" markers counts as unchanged. The same goes for AGENTS.md or CLAUDE.md when only its
 # "## Current state" section differs; tasks.md is compared without that section too.
+# Plans marked with a required feasibility gate need committed evidence and a design PASS of that evidence.
 #
 # A BLOCK also passes when the owner parked its findings (constitution, Development Workflow): the stage has at
 # least 3 BLOCK rows, the decision reads "Parked at <commit>: <findings>", that commit changed nothing the
@@ -133,6 +134,15 @@ esac
 
 git rev-parse --verify --quiet "$commit^{commit}" >/dev/null ||
   decide deny "the last $stage review names commit \"$commit\", which is not in this repository."
+
+if [[ $stage == design && -f $feature_dir/plan.md ]] &&
+   grep -Fxq '**Feasibility gate**: required' "$feature_dir/plan.md"; then
+  evidence="$feature_dir/feasibility.md"
+  [[ $verdict == PASS ]] ||
+    decide deny "this plan requires a design PASS on the committed feasibility evidence before implementation. Scratch feasibility work is outside /speckit-implement."
+  git show "$commit:$evidence" 2>/dev/null | grep -Fxq '**Status**: Verified' ||
+    decide deny "the reviewed commit does not contain verified feasibility evidence at $evidence. Commit the evidence and request a fresh design review."
+fi
 
 if [[ $stage == design ]]; then
   paths=("$feature_dir" ":(exclude)$feature_dir/verification.md" ":(exclude)$feature_dir/checklists")
