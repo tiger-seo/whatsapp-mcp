@@ -473,3 +473,29 @@ The old code fails the same way, so the failure is in the test: the client can r
 
 `169cba8` makes the native test repeat a tool call answered `busy`, with a 5 ms pause, within its existing 20-second deadline. The intended `busy` assertion while a call is held is unchanged. `go test -count=20 ./cmd/whatsapp-mcp -run '^TestMCPMessageStdioNative$'` exited 0 on Windows. A WSL2 repeat of the load comparison for the fixed test produced no result: commands inside WSL crashed with segmentation faults, so that check is not verified. A second repeated run on `169cba8` uses the same criterion.
 
+### Repeated macOS Acceptance: Second Run and Native Acceptance (2026-11-27 UTC)
+
+[CI run 45922593108](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/45922593108) tested `bc54fb979a7492a091b9febbde28705ef532e83b` (`169cba8` plus this record), `CGO_ENABLED=0`, synthetic data only. Images: `macos26` 20261117.0516.1 and 20261123.0526.1, `macos15` 20261118.0550.1, Intel 20260824. No `internal/mcp`, `internal/store`, `internal/wa` or `cmd/whatsapp-mcp` result was cached.
+
+| Runner | Machines passing full tests | Named runs passing | Guarded replies (18 per row) | Cancellation repeats |
+| --- | --- | --- | --- | --- |
+| `macos-26` arm64 | 3 of 3 | 9 of 9 | 0.300-1.440 s | 150 of 150 |
+| `macos-15` arm64 | 3 of 3 | 9 of 9 | 0.281-0.742 s | 150 of 150 |
+| `macos-26-intel` | 3 of 3 | 9 of 9 | 0.686-1.531 s | 150 of 150 |
+| `macos-15-intel` | 2 of 3 | 9 of 9 | 0.794-2.271 s | 150 of 150 |
+
+**The criterion is met on macOS/arm64:** all six machines passed every full test run, named run and cancellation repeat, with every guarded 100,000-row reply at 1.440 s or less. Intel macOS did not meet the same rule: one `macos-15-intel` machine failed its full tests in `TestMessageBudgetContextRows`. It stays outside the recorded evidence scope.
+
+The unchanged standard jobs of the same run are the quickstart's native acceptance. Each named run, `go test -count=1 -timeout 5m -v ./internal/store ./internal/mcp ./cmd/whatsapp-mcp -run '^Test(MCPMessage|ToolMessage)'`, exited 0 with no skips: `internal/store` 35 top-level and 36 subtest passes, `internal/mcp` 4 and 7, `cmd/whatsapp-mcp` 1 and 3.
+
+| Native runner (UTC start) | Rows | Guarded replies (sparse / empty) | Full tests |
+| --- | --- | --- | --- |
+| Windows/amd64, 01:30:31 | 400,000 | 0.923 / 0.911 s | Exit 0 |
+| Linux/amd64, 01:30:27 | 400,000 | 1.521 / 1.362 s | Exit 0 |
+| macOS/arm64 `macos-latest`, 01:30:36 | 100,000 | 0.311 / 0.311 s | Exit 0 |
+
+The check job passed formatting, vet, module verification, `govulncheck`, the Unix data-directory denial and all five CGO-free builds. The standard full tests use the build cache: Windows and macOS reused results for five small packages (`internal/buildinfo`, `internal/lock`, `internal/private`, `internal/walog`, `internal/wasim`); the six arm64 repeat machines ran every package with `-count=1`. The macOS native shutdown and integrated pipe steps passed.
+
+**Unverified:** Linux/arm64 and Intel macOS runtime acceptance (cross-builds are not runtime evidence), physical Macs, and timed searches over more than 100,000 rows on macOS or 400,000 elsewhere. No real account was used.
+
+The temporary repeat job was removed afterwards; no product or test file changed after `169cba8`. Documentation for T041: `OPERATIONS.md`, `README.md`, `AGENTS.md` current state, and the backlog items for [large macOS histories](../../docs/backlog/007-message-search-page-reads.md), [busy after a reply](../../docs/backlog/007-tool-slot-after-reply.md) and [preempted reads](../../docs/backlog/007-preempted-read-reports-cancelled.md).
