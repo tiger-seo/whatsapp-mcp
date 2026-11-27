@@ -21,7 +21,7 @@ description: "Implementation tasks for sending text, files and voice notes"
   4. converter.
 
   Record the results in `specs/008-send-messages/feasibility.md`, align research R1, R2, R4, R6, R9 and R11, the contracts and the plan, and mark the record Verified. Done at `5f20340` on 2026-11-27.
-- [ ] T002 Create `specs/008-send-messages/verification.md` with an "Owner reviews" table (`| Stage | Date | Commit | Verdict | Owner decision |`). Commit this task list. Run the `owner-judge` agent in **design** mode over the feature directory, including `feasibility.md`, and record its row. `BLOCK` returns to design. `CONCERNS` needs the owner's decision, and does not clear the feasibility gate. `.claude/hooks/owner-review-gate.sh` must accept `/speckit-implement` only with a current design `PASS`.
+- [X] T002 Create `specs/008-send-messages/verification.md` with an "Owner reviews" table (`| Stage | Date | Commit | Verdict | Owner decision |`). Commit this task list. Run the `owner-judge` agent in **design** mode over the feature directory, including `feasibility.md`, and record its row. `BLOCK` returns to design. `CONCERNS` needs the owner's decision, and does not clear the feasibility gate. `.claude/hooks/owner-review-gate.sh` must accept `/speckit-implement` only with a current design `PASS`.
 
 ## Phase 2: Foundation
 
