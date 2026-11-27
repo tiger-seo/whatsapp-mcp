@@ -8,7 +8,8 @@ PostgreSQL and no C compiler.
 `whatsapp-mcp status` reports the local state offline. `whatsapp-mcp stdio` serves read-only MCP tools for
 chats, contacts and stored messages. Use `list_messages` to search, `get_message_context` to read around a message, and
 `get_last_interaction` to find the latest stored exchange with a contact. A verified context listing can include a
-continuation when it exceeds the reply budget; an unfinished search never returns partial results. See the
+continuation when it exceeds the reply budget; an unfinished search, including one that runs out of time, never
+returns partial results. See the
 [verification record](specs/007-mcp-message-tools/verification.md) for completed checks and pending review.
 `serve` does not expose MCP yet.
 

@@ -372,13 +372,16 @@ offset is exceeded, `narrow_search` advises narrowing the search. A first anchor
 text or caption previews; neighbours, exact targets and last interactions are never previewed. A listing without
 context, an exact target or a last interaction must fit in full or return a size error.
 
-The strengthened, named message acceptance suite passed on Windows and Linux. On macOS, repeated runs hit the
-5-second store deadline on the sparse search fixture, including after reducing SQLite aggregation work.
-Native acceptance and the owner code gate remain open. See the
-[feature verification record](specs/007-mcp-message-tools/verification.md) for fixture results and limits.
+A search that passes the 5-second store deadline returns `timeout` with no messages or continuation; narrow it by
+chat, sender or date. The timed searches are verified on 400,000 short messages on Windows and Linux and on 100,000
+on macOS (Apple Silicon hosted runners). Searches over larger histories can time out, most readily on macOS. Intel
+Macs and physical Macs are not verified; on Intel hosted runners a request expanding 2,000 context rows sometimes
+exceeded the deadline. See the [feature verification record](specs/007-mcp-message-tools/verification.md) for
+results, limits and review status.
 
 **Admission and shutdown:** one tool is admitted through completion of its response write, with no waiting tool
-queue. `busy` means the tool credit, store capacity or WAL admission check refused the read; retry later. A WAL
+queue. `busy` means the tool credit, store capacity or WAL admission check refused the read; retry later. A client
+that sends its next tool call the moment a reply arrives can be answered `busy` until that reply's write completes. A WAL
 larger than 64 MiB can trigger a rate-limited recovery checkpoint; do not delete SQLite sidecars. A fresh
 free-space sample below 640 MiB, an unavailable sample or a refusing disk guard yields `unavailable`. Free space
 and retry. Ordinary writes retain their existing policy. A tool-held WAL crossing above 128 MiB cancels the read
@@ -389,7 +392,8 @@ The session caps input frames at 64 KiB, JSON depth at 16 and tokens at 4,096. T
 slots, including the one tool. After 1,024 forwarded notifications, the next eligible notification ends the
 session. Output caps are 2 MiB structured JSON, 2 MiB safe JSON text and 8 MiB for the full response frame.
 Store and tool timers request cancellation at 5 s and 10 s respectively; these are not completion guarantees.
-Output waits at most 5 s, and EOF or the first stop signal starts normal drain. A tool lease is retained until
+Output waits at most 5 s, and EOF or the first stop signal starts normal drain; a reply being written when input
+ends has up to 250 ms to finish. A tool lease is retained until
 its transaction and connection return; the store and lock are not released until actual tool and owner work drain.
 A store-control, device-storage or ingest failure leads to unsuccessful shutdown, even if EOF arrives first.
 

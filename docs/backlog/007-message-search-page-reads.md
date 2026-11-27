@@ -1,10 +1,9 @@
-# Message search misses the store deadline on native macOS
+# Message search over large histories exceeds the store deadline on macOS
 
 **Created**: 2026-11-26
 
-**Status**: Open; the owner set the macOS guarantee at 100,000 messages on 2026-11-27 and the feature 007 design was
-amended (tasks T037-T041). Blocks tasks T033 and T036 until implemented and verified. Faster search over larger
-histories on macOS stays deferred.
+**Status**: Open; deferred. The owner set the macOS guarantee at 100,000 messages on 2026-11-27 and it passed native
+acceptance. Faster search over larger macOS histories, and Intel Macs, remain.
 
 ## Problem
 
@@ -21,37 +20,29 @@ and the sections above it.
 - `messages_time` is declared newest-first while messages mostly arrive in ascending time, so in the fixture its
   pages are about half empty (21.6 MB of content in 46.8 MB).
 
-## Decision (2026-11-27: the first choice below)
+## Decision (2026-11-27)
 
-The owner has no Apple Silicon Mac. At 400,000 messages, none of the four standard GitHub macOS runner types passes
-the unchanged acceptance command every time with replies of 4.0 s or less. What remains is a choice about the
-requirement. Only the owner can make it.
-
-| Choice | What it changes | What is unknown |
-| --- | --- | --- |
-| Keep the 5-second deadline and set the macOS timing guarantee at **100,000 messages** (**suggested**) | The success criterion, quickstart and task T033 for macOS, and the macOS size in the two scale tests; needs a new design review. Windows and Linux keep 400,000. | Intel macOS and physical Macs at this size. |
-| Keep the deadline and fixture; on macOS require exact results or a timeout error, and record timing without gating it | The success criterion, T033 and the macOS assertions in the scale tests; needs a new design review. | What history size macOS users can rely on. |
-| Raise the 5-second store deadline | An inherited safety limit. Not suggested. | Cost to ingest and shutdown. |
-
-Measured on `macos-26` and `macos-15` (arm64), three machines for each size and runner; a size qualifies only if every
-full test run and all nine acceptance runs pass with replies of 4.0 s or less:
+The owner has no Apple Silicon Mac and chose to keep the 5-second deadline and set the macOS timing guarantee at
+100,000 messages; Windows and Linux keep 400,000. At 400,000 none of the four standard GitHub macOS runner types
+passed every time. Measured on `macos-26` and `macos-15` (arm64), three machines for each size and runner:
 
 | Size | Result | Slowest reply |
 | --- | --- | --- |
-| 100,000 | Qualifies on both | 2.14 s |
-| 200,000 | Fails on both | Timeout (`macos-26`), 4.33 s (`macos-15`) |
+| 100,000 | Qualified on both | 2.14 s |
+| 200,000 | Failed on both | Timeout (`macos-26`), 4.33 s (`macos-15`) |
 | 400,000 (control, same machines) | 1 of 12 runs passed | Timeout |
 
-At 400,000, `macos-15-intel` came closest in the earlier survey (8 of 9 runs); it is not suggested as the macOS gate,
-because it fails the bar and would leave Apple Silicon unverified. Sizes between 100,000 and 200,000 were not
-measured. These are shared virtual machines and do not show how a physical Mac behaves.
+Sizes between 100,000 and 200,000 were not measured. These are shared virtual machines and do not show how a physical
+Mac behaves.
 
-**Also open:** `TestMCPMessageStdioNative/cancel` failed once in 84 macOS acceptance runs (server exit 1 with a
-transport failure after the replies passed; cause not established). It is independent of the search size and needs a
-look before the code review.
+## Still open
 
-Cleanup owed before the code review: the opt-in diagnostic `internal/mcp/message_io_diagnostic_test.go` now holds the
-rejected covering-index comparison and no CI step runs it; remove it or keep it deliberately.
+- **Larger macOS histories.** A search beyond the guaranteed size can return `timeout`. Real accounts can hold more.
+- **The timeout gives no remedy.** The message says only that the request timed out; advice to narrow by chat, sender
+  or date would help an LLM client avoid repeating the same search. It changes the tool contract.
+- **Intel Macs.** At 100,000 the named acceptance passed on both Intel runner types, but
+  `TestMessageBudgetContextRows` (a `list_messages` call expanding 2,000 context rows) exceeded the deadline on 3 of 6
+  machines in one run and 1 of 6 in the next. Windows, Linux and Apple Silicon passed it.
 
 ## Rejected: a covering search index
 
@@ -118,4 +109,4 @@ other newest-first read would then walk the wider entries, which is not measured
 
 ## Review trigger
 
-The owner's decision above; feature 007 cannot complete native acceptance without one.
+A report of search or context timeouts, before the first release, or before claiming Intel macOS support.
