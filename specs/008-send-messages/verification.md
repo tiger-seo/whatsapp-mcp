@@ -13,3 +13,4 @@
 
 | Stage | Date | Commit | Verdict | Owner decision |
 | --- | --- | --- | --- | --- |
+| design | 2026-11-27 | 3254097 | BLOCK | |
