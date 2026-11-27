@@ -427,3 +427,7 @@ The `owner-judge` design review of `35b447d` returned PASS (row in the Owner rev
 | The cause of the macOS cancellation failure is inferred, and one `internal` diagnostic was unexplained | The `internal` line is the cancelled request's result: the server logs the `cancelled` code in that category. T033 repeats the native cancellation test on macOS. |
 
 The review noted that Intel macOS and physical Macs are unmeasured at 100,000 messages, and that macOS users with larger histories may receive `timeout`; both are recorded in the plan and are the owner's to accept.
+
+### Repeated macOS Acceptance on the Final Code: Criterion (2026-11-27)
+
+A temporary `macos-repeat` job runs the implementation of T037-T040 on `macos-26`, `macos-15`, `macos-26-intel` and `macos-15-intel`, three machines each: `go test ./... -count=1 -timeout 30m`, the named acceptance command three times, and `go test -count=50` of `TestMCPMessageStdioNative/cancel`. Set before the run: native macOS acceptance counts as repeatable only if on all six arm64 machines every full test, named run and cancellation repeat exits 0 and every guarded short-message reply takes 4.0 s or less. The six Intel machines are reported separately; they are outside the recorded evidence scope unless they meet the same rule.

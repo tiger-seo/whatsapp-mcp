@@ -208,6 +208,52 @@ jobs:
           echo "passed: $(grep -cE '^\s*--- PASS' run-guard.log)  skipped: $(grep -cE '^\s*--- SKIP' run-guard.log)  failed: $(grep -cE '^\s*--- FAIL' run-guard.log)"
           grep -E '^\s*--- SKIP' -B2 run-guard.log | grep -vE '^--$' | head -60 || true
 
+  # Temporary, for feature 007: repeated native macOS acceptance evidence on the final code. The arm64 runners are
+  # the evidence; the Intel runners show whether the guaranteed size also holds there.
+  macos-repeat:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/007-mcp-message-tools'
+    name: repeat (${{ matrix.runner }}, machine ${{ matrix.machine }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26, macos-15, macos-26-intel, macos-15-intel]
+        machine: [1, 2, 3]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: runner facts
+        run: echo "commit=$(git rev-parse HEAD) date=$(date -u +%FT%TZ) runner=${{ matrix.runner }} image=${ImageOS:-} ${ImageVersion:-} native=$(go env GOOS GOARCH | xargs) cpus=$(sysctl -n hw.ncpu) memory=$(sysctl -n hw.memsize)"
+      - name: full tests
+        run: go test ./... -count=1 -timeout 30m
+      - name: message tool acceptance, three runs
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          failures=0
+          for attempt in 1 2 3; do
+            results="$RUNNER_TEMP/acceptance-$attempt.log"
+            status=0
+            go test -count=1 -timeout 5m -v ./internal/store ./internal/mcp ./cmd/whatsapp-mcp -run '^Test(MCPMessage|ToolMessage)' > "$results" || status=$?
+            cat "$results"
+            echo "attempt=$attempt go_test_exit=$status top_pass=$(grep -c '^--- PASS: ' "$results" || true) sub_pass=$(grep -cE '^ +--- PASS: ' "$results" || true) top_fail=$(grep -c '^--- FAIL: ' "$results" || true) sub_fail=$(grep -cE '^ +--- FAIL: ' "$results" || true) skip=$(grep -cE -e '--- SKIP: ' "$results" || true)"
+            if [[ "$status" -ne 0 ]]; then failures=$((failures + 1)); fi
+          done
+          echo "failed_attempts=$failures"
+          [[ "$failures" -eq 0 ]]
+      - name: native cancellation, fifty runs
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          results="$RUNNER_TEMP/cancel.log"
+          status=0
+          go test -count=50 -timeout 10m -v ./cmd/whatsapp-mcp -run '^TestMCPMessageStdioNative$/^cancel$' > "$results" || status=$?
+          grep -E -e '--- FAIL|exit=|^(ok|FAIL)' "$results" || true
+          echo "cancel go_test_exit=$status passes=$(grep -cE '^ +--- PASS: TestMCPMessageStdioNative/cancel ' "$results" || true) failures=$(grep -cE '^ +--- FAIL: TestMCPMessageStdioNative/cancel ' "$results" || true)"
+          exit "$status"
+
   # The tests that take minutes on a slow disk: a 500 MiB listing and a 400,000-message memory check. They show that
   # a limit holds and are not needed on every push, so they run on Linux only, at night, and only if main has a
   # commit from the last 25 hours. Start the job by hand to run them on any branch.
