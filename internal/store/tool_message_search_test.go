@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestToolMessageSearchKeys(t *testing.T) {
@@ -299,6 +301,69 @@ func TestToolMessageSearchFirstPageOfOneStopsAtTop(t *testing.T) {
 			t.Fatalf("limit %d: keys=%v err=%v", limit, keys, err)
 		}
 	}
+}
+
+func TestToolMessageReadReportsEndedContext(t *testing.T) {
+	f := newToolMessageFixture(t)
+	preparer := func(t *testing.T, q querier) *sql.Stmt {
+		t.Helper()
+		stmt, err := q.(interface {
+			PrepareContext(context.Context, string) (*sql.Stmt, error)
+		}).PrepareContext(t.Context(), `SELECT 1`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stmt
+	}
+	// Each statement uses its own live context, so the failure is the one the database layer reports after it has
+	// ended the cancelled transaction, not the cancellation itself.
+	untilClosed := func(run func() error) error {
+		for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); runtime.Gosched() {
+			if err := run(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, tc := range []struct {
+		name  string
+		after func(t *testing.T, q querier, stmt *sql.Stmt) error
+		want  error
+	}{
+		{"closed statement", func(_ *testing.T, _ querier, stmt *sql.Stmt) error {
+			return untilClosed(func() error { var n int; return stmt.QueryRowContext(context.Background()).Scan(&n) })
+		}, context.Canceled},
+		{"finished transaction", func(_ *testing.T, q querier, _ *sql.Stmt) error {
+			return untilClosed(func() error {
+				var n int
+				return q.QueryRowContext(context.Background(), `SELECT 1`).Scan(&n)
+			})
+		}, context.Canceled},
+		{"classified error", func(*testing.T, querier, *sql.Stmt) error { return limitErr("search work") }, ErrResourceLimit},
+		{"storage error", func(*testing.T, querier, *sql.Stmt) error { return ioError("corrupt") }, ErrIO},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			_, err := messageSnapshot(ctx, f.reader, func(_ context.Context, q querier) (int, error) {
+				stmt := preparer(t, q)
+				defer stmt.Close()
+				cancel()
+				return 0, tc.after(t, q, stmt)
+			})
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("got %v, want %v", err, tc.want)
+			}
+		})
+	}
+	t.Run("live context", func(t *testing.T) {
+		_, err := messageSnapshot(t.Context(), f.reader, func(context.Context, querier) (int, error) {
+			return 0, errors.New("unexplained")
+		})
+		if !errors.Is(err, ErrIO) {
+			t.Fatalf("unexplained failure with a live context: %v", err)
+		}
+	})
 }
 
 func TestToolMessageSearchScale(t *testing.T) {

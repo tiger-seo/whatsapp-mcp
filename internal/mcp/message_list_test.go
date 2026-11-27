@@ -66,6 +66,24 @@ func TestMessageListUnverifiedSearch(t *testing.T) {
 	}
 }
 
+type timedOutMessageReader struct{ ChatContactReader }
+
+func (r timedOutMessageReader) ListMessages(context.Context, store.MessageFilter, store.Context, store.Page, bool, store.MessageListPolicy) (store.MessageList, error) {
+	return store.MessageList{}, context.DeadlineExceeded
+}
+
+func TestMessageListTimeLimit(t *testing.T) {
+	r := newFixture(t)
+	c := chatTestServer(t, timedOutMessageReader{r.store})
+	for _, contextEnabled := range []bool{false, true} {
+		root := chatCall(t, c, "list_messages", map[string]any{"query": "private-search", "include_context": contextEnabled}, true)
+		failure := root["error"].(map[string]any)
+		if failure["code"] != "timeout" || len(root) != 1 || strings.Contains(fmt.Sprint(root), "private-search") {
+			t.Fatalf("time-limited search: %+v", root)
+		}
+	}
+}
+
 func TestMessageListOversizedVerifiedReply(t *testing.T) {
 	r := newFixture(t, func(st *store.Store, _ *wastore.Device) {
 		body := "anchor" + strings.Repeat("\x01", (256<<10)-len("anchor"))

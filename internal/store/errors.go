@@ -189,6 +189,17 @@ func isContextErr(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
+// unexplained reports a failure with no store or SQLite meaning of its own, or an interrupted statement. When the
+// call's context has ended, that is its effect: database/sql ends a cancelled transaction on another goroutine, so
+// the next statement can fail with a closed statement or transaction instead of reporting the cancellation.
+func unexplained(err error) bool {
+	if errors.Is(err, ErrIO) || !errors.Is(mapDriverError(err), ErrIO) {
+		return false
+	}
+	code := sqliteCode(err)
+	return code == 0 || code == sqliteInterrupt
+}
+
 // mapDriverError converts a driver error into the store's error set. It keeps the SQLite result code and never
 // the driver's message text, which can echo SQL fragments or values. Errors the store already classified, and
 // context errors, pass through.
