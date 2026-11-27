@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -119,7 +120,19 @@ func TestMCPMessageAcceptanceClosedStore(t *testing.T) {
 	}
 }
 
-func seedMessageScale(t *testing.T) (*store.Store, string) {
+// scaleSearchRows is the history size at which the timed searches must complete within the store deadline. Hosted
+// macOS runners are not reliably fast enough for the larger size.
+func scaleSearchRows() int {
+	if runtime.GOOS == "darwin" {
+		return 100000
+	}
+	return 400000
+}
+
+// scaleMatchStep spaces twelve matches through the history, the newest at nine tenths of it.
+func scaleMatchStep() int { return scaleSearchRows() * 3 / 40 }
+
+func seedMessageScale(t *testing.T) *store.Store {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "data")
 	if err := private.MkdirAll(dir); err != nil {
@@ -144,11 +157,12 @@ func seedMessageScale(t *testing.T) (*store.Store, string) {
 		}
 	})
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for start := 1; start <= 400000; start += 1000 {
+	rowCount, step := scaleSearchRows(), scaleMatchStep()
+	for start := 1; start <= rowCount; start += 1000 {
 		rows := make([]store.Message, 0, 1000)
 		for i := start; i < start+1000; i++ {
 			text := "ordinary chatter"
-			if i <= 360000 && i%30000 == 0 {
+			if i <= 12*step && i%step == 0 {
 				text = "sparse needle"
 			}
 			rows = append(rows, store.Message{ChatJID: fixtureJID(0), SenderJID: fixtureJID(0), ID: fmt.Sprintf("scale-%08d", i), Time: base.Add(time.Duration(i) * time.Second), Text: text})
@@ -157,11 +171,11 @@ func seedMessageScale(t *testing.T) (*store.Store, string) {
 			t.Fatalf("seed %d: %v", start, err)
 		}
 	}
-	return st, dir
+	return st
 }
 
 func TestMCPMessageAcceptanceScale(t *testing.T) {
-	st, _ := seedMessageScale(t)
+	st := seedMessageScale(t)
 	c := chatTestServer(t, st.ToolReader())
 	for _, tc := range []struct {
 		query string
@@ -187,7 +201,7 @@ func TestMCPMessageAcceptanceScale(t *testing.T) {
 				t.Fatalf("matches: %d, want %d", len(rows), tc.count)
 			}
 			for i, row := range rows {
-				if want := fmt.Sprintf("scale-%08d", 360000-i*30000); row.(map[string]any)["id"] != want {
+				if want := fmt.Sprintf("scale-%08d", (12-i)*scaleMatchStep()); row.(map[string]any)["id"] != want {
 					t.Fatalf("match %d: %v, want %s", i, row, want)
 				}
 			}

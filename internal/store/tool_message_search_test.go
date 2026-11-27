@@ -366,23 +366,37 @@ func TestToolMessageReadReportsEndedContext(t *testing.T) {
 	})
 }
 
+// scaleSearchRows is the history size at which the timed searches must complete within the store deadline. Hosted
+// macOS runners are not reliably fast enough for the larger size.
+func scaleSearchRows() int {
+	if runtime.GOOS == "darwin" {
+		return 100000
+	}
+	return 400000
+}
+
 func TestToolMessageSearchScale(t *testing.T) {
 	f := newToolMessageFixture(t)
 	if _, err := f.store.writer.ExecContext(t.Context(), `DELETE FROM messages`); err != nil {
 		t.Fatal(err)
 	}
-	_, err := f.store.writer.ExecContext(t.Context(), `WITH RECURSIVE seq(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM seq WHERE i<400000)
-	 INSERT INTO messages(chat_jid,id,sender_jid,time,from_me,text,text_fold)
-	 SELECT ?1,printf('scale-%08d',i),?1,1000000+i,0,
-	 CASE WHEN i<=360000 AND i%30000=0 THEN 'sparse needle' ELSE 'ordinary chatter' END,
-	 CASE WHEN i<=360000 AND i%30000=0 THEN 'sparse needle' ELSE 'ordinary chatter' END FROM seq`, f.phone)
-	if err != nil {
-		t.Fatal(err)
+	rows := scaleSearchRows()
+	step := rows * 3 / 40 // twelve matches, the newest at nine tenths of the history
+	seed := func(from, to int) {
+		t.Helper()
+		if _, err := f.store.writer.ExecContext(t.Context(), `WITH RECURSIVE seq(i) AS (VALUES(?2) UNION ALL SELECT i+1 FROM seq WHERE i<?3)
+		 INSERT INTO messages(chat_jid,id,sender_jid,time,from_me,text,text_fold)
+		 SELECT ?1,printf('scale-%08d',i),?1,1000000+i,0,
+		 CASE WHEN i<=12*?4 AND i%?4=0 THEN 'sparse needle' ELSE 'ordinary chatter' END,
+		 CASE WHEN i<=12*?4 AND i%?4=0 THEN 'sparse needle' ELSE 'ordinary chatter' END FROM seq`, f.phone, from, to, step); err != nil {
+			t.Fatal(err)
+		}
+		var busy, log, checkpointed int
+		if err := f.store.writer.QueryRowContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &log, &checkpointed); err != nil || busy != 0 {
+			t.Fatalf("checkpoint: %d %v", busy, err)
+		}
 	}
-	var busy, log, checkpointed int
-	if err := f.store.writer.QueryRowContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &log, &checkpointed); err != nil || busy != 0 {
-		t.Fatalf("checkpoint: %d %v", busy, err)
-	}
+	seed(1, rows)
 	for _, query := range []string{"sparse needle", "not-present"} {
 		t.Run(query, func(t *testing.T) {
 			keys, err := messageSnapshot(t.Context(), f.reader, func(ctx context.Context, q querier) ([]messageKey, error) {
@@ -401,19 +415,20 @@ func TestToolMessageSearchScale(t *testing.T) {
 				t.Fatalf("found %d sparse keys", len(keys))
 			}
 			for i, key := range keys {
-				if want := fmt.Sprintf("scale-%08d", 360000-i*30000); key.id != want {
+				if want := fmt.Sprintf("scale-%08d", (12-i)*step); key.id != want {
 					t.Fatalf("key %d: got %s want %s", i, key.id, want)
 				}
 			}
 		})
 	}
-	if _, err := f.store.writer.ExecContext(t.Context(), `INSERT INTO messages(chat_jid,id,sender_jid,time,from_me,text,text_fold) VALUES(?1,'extra-1',?1,2000001,0,'other','other'),(?1,'extra-2',?1,2000002,0,'other','other')`, f.phone); err != nil {
-		t.Fatal(err)
-	}
+	// Two rows more than one search may visit. Where the history is larger than the timed size, the deadline may end
+	// the walk before the visit ceiling does; either way nothing is returned.
+	seed(rows+1, 400002)
 	keys, err := messageSnapshot(t.Context(), f.reader, func(ctx context.Context, q querier) ([]messageKey, error) {
 		return searchMessageKeys(ctx, q, MessageFilter{Query: "not-present"}, Page{Limit: 50})
 	})
-	if !errors.Is(err, ErrResourceLimit) || len(keys) != 0 {
+	timedOut := rows < 400000 && errors.Is(err, context.DeadlineExceeded)
+	if !errors.Is(err, ErrResourceLimit) && !timedOut || len(keys) != 0 {
 		t.Fatalf("unfinished search: %v %v", keys, err)
 	}
 }
