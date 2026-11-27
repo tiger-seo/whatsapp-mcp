@@ -15,6 +15,7 @@
 | --- | --- | --- | --- | --- |
 | design | 2026-11-27 | 3254097 | BLOCK | |
 | design | 2026-11-27 | 2596af3 | BLOCK | |
+| design | 2026-11-27 | 0c9a90f | CONCERNS | |
 
 ## Design review of `3254097` (BLOCK): handling
 
@@ -46,3 +47,19 @@
 | The tasks header cites R1–R11 | low | Now R1–R12. |
 | Observation: client request timeouts (believed 60 s in the TypeScript MCP SDK) | — | T038 times a large send through the owner's client; `OPERATIONS.md` documents the effective limit (T037). |
 | Observation: kept roots on Windows may block renaming the outbox | — | T019 records the behaviour; T037 documents it. |
+
+## Design review of `0c9a90f` (CONCERNS): handling
+
+A CONCERNS verdict does not clear the feasibility gate, so the findings were fixed and the design sent for another review rather than accepted.
+
+| Finding | Severity | Handling |
+| --- | --- | --- |
+| No rule for a client cancellation after WhatsApp accepted the send; the guard closes the session on a cancelled success, and the record may be skipped | medium | R7, spec FR-013, both contracts: once the send call started, send and record continue on contexts detached from the request's cancellation (still bounded by the budget, 5 s and the work context). A cancelled call returns the tool error `sent_cancelled` (with chat, ID, timestamp) or `outcome_unknown`, which the guard accepts. Tests in T011 and T012. |
+| `send_audio_message` with a `.ogg` has no defined disk worst case | low | R12, FR-011, contracts, data model: `send_audio_message` always uses the conversion case. T011 test. |
+| Only the record's lock wait is bounded; relookup and the store write run under the library context | low | R9, T009: relookup and `StoreMessage` take the record's context; test with the store writer held; `store.io_error` noise expected. |
+| The admission time cannot ride in the request context with go-sdk v1.8.0; the clocks must be shared | low | R7, T012: per-session guard state read through a session-to-guard map, never from client parameters; one injected clock for guard and service. |
+| Unclear who resolves the directories and creates the outbox; `status` could create artifacts | low | R10, T003: only tool-serving commands do it, after the lock; config checks syntax only; test that `status` with recipients set creates nothing. |
+| Observation A: a hung network path leaves sending `busy` until restart | — | Documented in `OPERATIONS.md` (T037). |
+| Observation B: R3 said "before any port call" | — | Reworded to "outside any port call". |
+| Observation C: a stage finishing after its handler was cancelled | — | It removes its working directory, then frees the slot (pipeline contract, T011 test). |
+| Observation D: FR-011 omitted the +1 MiB | — | Aligned in FR-011, the contracts and the data model. |

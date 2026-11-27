@@ -34,7 +34,7 @@ Written once after the acknowledgement, through ingest's serialized live-write p
 - **Lookup cache**: Per normalized phone number, the last lookup result (registered with its LID, or unregistered) and its time; used for 24 hours; at most 1,000 entries, oldest evicted first. Failed lookups are not cached. Lost on restart.
 - **Allowed roots**: One kept `os.Root` handle per allowed directory, opened at startup when sending is enabled and closed at shutdown.
 - **Owner send admissions**: The number of admitted send calls on the current generation. Retirement waits for it to reach zero.
-- **Per-send working directory**: A private directory under the data directory, holding the plaintext working copy (or conversion input), the converter's `output.ogg`, and the upload's encrypted temporary file. It is created only after the free-space check, which requires at least "512 MiB plus two times the file size for a file send, or plus the file size and 200 MiB for a conversion". It exists only during one send and is removed on every exit path. A leftover from a crash or an abandoned stuck read is removed at the next start.
+- **Per-send working directory**: A private directory under the data directory, holding the plaintext working copy (or conversion input), the converter's `output.ogg`, and the upload's encrypted temporary file. It is created only after the free-space check, which requires at least "512 MiB plus two times the file size plus 1 MiB for `send_file`, or plus the file size and 200 MiB for `send_audio_message`". It exists only during one send and is removed on every exit path. A leftover from a crash or an abandoned stuck read is removed at the next start.
 
 ## Send call lifecycle
 

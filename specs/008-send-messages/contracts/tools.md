@@ -65,10 +65,11 @@ The text rendering states the same facts in one sentence.
 | `not_on_whatsapp` | Phone number without stored chat is not registered | one lookup |
 | `lookup_failed` | The registration lookup failed or timed out | one lookup |
 | `file_refused` | Path, link, file kind, size or allow-list refusal (names `send_allowed_dirs` where it applies) | none |
-| `insufficient_space` | Free space on the data directory's volume is below 512 MiB plus the send's worst-case working files (two times the file size for a file; the file size plus 200 MiB for a conversion), or it cannot be measured | none |
+| `insufficient_space` | Free space on the data directory's volume is below 512 MiB plus the send's worst-case working files (two times the file size plus 1 MiB for `send_file`; the file size plus 200 MiB for `send_audio_message`, always), or it cannot be measured | none |
 | `invalid_audio` | `.ogg` that is not Ogg Opus, or malformed Ogg data | file read, private working copy |
 | `ffmpeg_missing` | Conversion needed and no converter configured or on `PATH` (names `ffmpeg`) | file read |
 | `conversion_failed` | Converter error, 60 s limit or output limit | file read, conversion |
 | `upload_failed` | Upload refused or failed before the send | upload |
 | `send_failed` | WhatsApp refused the message (error in its acknowledgement), or an error from the fixed list known to happen before the hand-over (not on WhatsApp, device or prekey fetch failed, encryption failed); counted in the rate window | upload if any |
+| `sent_cancelled` | The client cancelled the request after WhatsApp acknowledged the message. The error carries `chat_jid`, `id` and `timestamp`; the message was sent and recorded locally if the record succeeded. Counted in the rate window; not retried | message sent |
 | `outcome_unknown` | Cancelled, timed out, disconnected, or any unrecognised error once the send call had started; may have been delivered; counted in the rate window; not retried | send possibly delivered |

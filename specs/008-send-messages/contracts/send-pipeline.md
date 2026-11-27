@@ -29,18 +29,20 @@ Each step refuses with no later step run; see [tools.md](tools.md) for codes.
    - create the private working directory;
    - copy the plaintext there, limited to the opened size plus one byte (more refuses), context-checked between chunks.
 
-   The send slot is held until this goroutine actually returns, even after the handler has returned. Then analyse the Ogg data or convert.
+   The send slot is held until this goroutine actually returns, even after the handler has returned. A stage that finishes after its handler has returned removes its own working directory and then frees the slot. Then analyse the Ogg data or convert.
 8. Upload from the working copy (port call).
 9. Send (port call). The rate window records the send at this point.
 10. Record locally (port call through ingest's serialized live-write path).
 
 Every port call is admitted individually.
 
-**Budget**, measured from the guard's admission time, which the guard passes to the handler:
+**Budget**, measured from the guard's admission time. The guard keeps it as per-session state, read by the handler through the server's session-to-guard map, and guard and service share one injected clock:
 
 - the send has until 2:00 to reach WhatsApp's acceptance; the conversion has 60 s inside it;
 - the record has at most 5 s;
 - the guard deadline is 2:15, leaving at least 10 s for the reply.
+
+**Client cancellation:** Once the library send call has started, the send and the record run on contexts detached from the request's cancellation, bounded by the budget, the record's 5 s and the work context. A cancelled call returns the tool error `sent_cancelled` (acknowledged, with chat, ID and timestamp) or `outcome_unknown`, never a success, so the guard does not close the session.
 
 ## Owner admission and stop
 
@@ -49,12 +51,12 @@ Every port call is admitted individually.
 - **What the port never does:** connect, reconnect, pair or start recovery. A disconnected owner refuses with `not_connected`.
 - **Shutdown order:** The MCP session's stop runs before the owner's, so in-flight tool contexts are already cancelled when retirement begins.
 - **Quiet-stop evidence:** A stop during lookup, upload or the wait for the acknowledgement passed the quiet-stop check on the simulator ([feasibility](../feasibility.md)). A stop during a group send is tested in T010. Any library work that remains there needs an owner allow-list decision before the tools ship.
-- **Local record:** It is written under ingest's live-write lock, with the LID relookup, so a chat merged during the send is not recreated. The lock is taken with the record's context (a cancellable variant of `lockForLive`), so neither the reply budget nor retirement can be held by a long history flush.
+- **Local record:** It is written under ingest's live-write lock, with the LID relookup, so a chat merged during the send is not recreated. The lock, the relookup and the store write all take the record's context (a cancellable variant of `lockForLive`), so neither the reply budget nor retirement can be held by a long history flush or a busy writer.
 
 ## Network and resources
 
 - **Network:** All requests go through the generation's fence. The upload request gets a deadline equal to the remaining send budget. Download requests keep their 10-second limit and 16 MiB response limit.
-- **Disk:** No working file is written unless fresh free space on the data volume is at least 512 MiB plus the send's worst case. That is two times the file size for a file send, and the file size plus 200 MiB for a conversion. The process-wide slot keeps one working directory at a time.
+- **Disk:** No working file is written unless fresh free space on the data volume is at least 512 MiB plus the send's worst case. That is two times the file size plus 1 MiB for `send_file`, and the file size plus 200 MiB for `send_audio_message` (always, since a `.ogg` may need conversion). An unmeasurable free space refuses. The process-wide slot keeps one working directory at a time.
 - **Upload:** The plaintext is copied from the validated handle through a counting reader (≤ 100 MiB) into the working directory before any port call. `UploadReader` encrypts that copy into a second temporary file there.
 - **Converter:** It reads the private copy under a fixed name, with `-protocol_whitelist file,pipe` and an explicit demuxer. It runs one at a time, for at most 60 s. Its stdout is counted against 100 MiB and written to `output.ogg` in the working directory. The send context cancels it by stopping its whole process tree (a Windows job object, a Unix process group), so a launcher's child cannot outlive it. The working directory is removed on every exit, and leftovers are removed at startup.
 - **Concurrency:** One send per process. One tool call per MCP session, with a 2 min 15 s guard deadline for the send tools.
