@@ -16,6 +16,7 @@
 | design | 2026-11-27 | 3254097 | BLOCK | |
 | design | 2026-11-27 | 2596af3 | BLOCK | |
 | design | 2026-11-27 | 0c9a90f | CONCERNS | |
+| design | 2026-11-27 | 129e4ae | PASS | |
 
 ## Design review of `3254097` (BLOCK): handling
 
@@ -63,3 +64,14 @@ A CONCERNS verdict does not clear the feasibility gate, so the findings were fix
 | Observation B: R3 said "before any port call" | — | Reworded to "outside any port call". |
 | Observation C: a stage finishing after its handler was cancelled | — | It removes its working directory, then frees the slot (pipeline contract, T011 test). |
 | Observation D: FR-011 omitted the +1 MiB | — | Aligned in FR-011, the contracts and the data model. |
+
+## Design review of `129e4ae` (PASS): low findings for implementation
+
+The review confirmed every round-1 to round-3 fix against the code and the pinned go-sdk, and found that the round-3 changes need no new feasibility evidence. Its low findings are settled during implementation without editing the reviewed documents. The code review checks them.
+
+| Finding | Settled in |
+| --- | --- |
+| A client cancel racing the end of the handler or the response write can still close the session (narrow window, message sent and recorded) | T012: for the three send tools, the guard writes rather than rejects a success reply to a cancelled request, with a test that injects the cancel after the handler returns. |
+| T014 does not repeat R10's conditions | T014 follows R10: resolve, check by identity, open and create only when `send_allowed_recipients` is not empty, after the lock and before `attachOwner`. The sending off/on and `status` cases go in `cmd/whatsapp-mcp/send_wiring_test.go`. |
+| The `sent_cancelled` result shape is not defined | T013 defines it within the contract's error shape (`chat_jid`, `id`, `timestamp`, `local_record`) and names the code for a cancel before the hand-over. |
+| Observations | A missing guard state makes the handler refuse, never fall back to "now" (T012). `OPERATIONS.md` tells operators to check `list_messages` before retrying a cancelled send (T037). |
