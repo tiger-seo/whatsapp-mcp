@@ -37,7 +37,7 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 
 ## Paths
 
-- The path is resolved with its links followed and must land inside one of the allowed directories (resolved at startup). The resolved file is then opened confined to that directory, so a link or junction swapped in after resolution is refused rather than followed. A link from one allowed directory into another is accepted.
+- The path is resolved with its links followed and must land inside one of the allowed directories. The directories are resolved, checked against the data directory by identity (never by path text) and opened once at startup when sending is enabled, and those handles are kept. The resolved file is then opened confined to that directory, so a link or junction swapped in after resolution is refused rather than followed. A link from one allowed directory into another is accepted.
 - On Windows, a path through a junction is refused, because it does not resolve. So are reserved device names (`CON`, `NUL.txt`).
 - These are refused: relative paths; UNC, device and `\\?\` paths; alternate data streams; anything that is not a regular file; files with more than one link; empty files; files over 100 MiB (also enforced on the bytes read).
 - A refusal because of the allow-list names `send_allowed_dirs`.
@@ -58,15 +58,16 @@ The text rendering states the same facts in one sentence.
 | --- | --- | --- |
 | `invalid_input` | Malformed or out-of-range argument, refused address kind, bad extension, caption on a voice note | none |
 | `not_permitted` | Recipient not in `send_allowed_recipients` (message names the setting) | none |
-| `rate_limited` | 10 in the last minute or 200 in the last 24 hours; includes `retry_after_seconds` | none |
+| `rate_limited` | Sends: 10 in the last minute or 200 in the last 24 hours. Registration lookups: 10 in the last minute or 100 in the last 24 hours (cached results excluded). Includes `retry_after_seconds` and which limit applied. | none |
 | `busy` | Another tool call or send is in progress | none |
 | `not_connected` | The session is not connected | none |
 | `not_on_whatsapp` | Phone number without stored chat is not registered | one lookup |
 | `lookup_failed` | The registration lookup failed or timed out | one lookup |
 | `file_refused` | Path, link, file kind, size or allow-list refusal (names `send_allowed_dirs` where it applies) | none |
-| `invalid_audio` | `.ogg` that is not Ogg Opus, or malformed Ogg data | file read |
+| `insufficient_space` | Free space on the data directory's volume is below 512 MiB plus the send's worst-case working files (two times the file size for a file; the file size plus 200 MiB for a conversion) | none |
+| `invalid_audio` | `.ogg` that is not Ogg Opus, or malformed Ogg data | file read, private working copy |
 | `ffmpeg_missing` | Conversion needed and no converter configured or on `PATH` (names `ffmpeg`) | file read |
 | `conversion_failed` | Converter error, 60 s limit or output limit | file read, conversion |
 | `upload_failed` | Upload refused or failed before the send | upload |
-| `send_failed` | WhatsApp refused the message, or it failed before it was handed over | upload if any |
-| `outcome_unknown` | Cancelled, timed out or disconnected after the message was handed over; may have been delivered; counted in the rate window; not retried | send possibly delivered |
+| `send_failed` | WhatsApp refused the message (error in its acknowledgement), or an error from the fixed list known to happen before the hand-over (not on WhatsApp, device or prekey fetch failed, encryption failed); counted in the rate window | upload if any |
+| `outcome_unknown` | Cancelled, timed out, disconnected, or any unrecognised error once the send call had started; may have been delivered; counted in the rate window; not retried | send possibly delivered |

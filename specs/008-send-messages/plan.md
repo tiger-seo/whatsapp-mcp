@@ -40,7 +40,7 @@ See [quickstart.md](quickstart.md).
 
 **Performance Goals**:
 
-- A send finishes or is stopped within 2 minutes; conversion within 60 s.
+- A send reaches WhatsApp's acceptance or is stopped within 2 minutes; conversion within 60 s. The record takes at most 5 s, and the guard deadline of 2 min 15 s leaves 10 s for the reply.
 - A stopped converter and its files are gone within 5 s.
 - A 100 MiB upload streams with memory that does not grow with file size (measured in feasibility).
 
@@ -57,6 +57,8 @@ See [quickstart.md](quickstart.md).
 - 3 tools.
 - 1 send in flight per process.
 - 10 sends per minute, 200 per rolling 24 hours.
+- 10 registration lookups per minute, 100 per rolling 24 hours; results cached 24 hours (at most 1,000 numbers).
+- Working files only with fresh free space ≥ 512 MiB plus the send's worst case.
 - Files 1 byte to 100 MiB; text and caption up to 65,536 bytes.
 
 ## Constitution Check
@@ -69,7 +71,7 @@ See [quickstart.md](quickstart.md).
 | II, IX | One module, no new dependency (`os.Root` is standard library), five targets. ffmpeg stays optional and external, as P6 already states. Three settings, each required by M1 or the owner's F01 decision; no compatibility layer. |
 | III, VIII | Sends go through the single owner's port on the current generation; no second client. Automated tests use the fake and the simulator only. Real-account steps are listed in [quickstart.md](quickstart.md) and each needs the owner's permission. |
 | IV | Content only at `debug`; one redacted audit event per attempt; stdout untouched ([send-pipeline.md](contracts/send-pipeline.md#diagnostics)). |
-| V, X | F01 is resolved for sending by the owner's allow-list decision. F05 is handled by confined opens on the handle, link and kind checks, and native abuse tests. F06 is handled by the bounded parser with a fuzz test, and by the converter's protocol and demuxer restriction, limits and cleanup. F09 is handled by the size, time, concurrency and rate bounds on consumed bytes. F03 is handled by private working directories. No High finding remains open for the enabled capability; OS sandboxing of ffmpeg is a documented residual risk (F06), not an exception. No receive-resource exception. |
+| V, X | F01 is resolved for sending by the owner's allow-list decision. F05 is handled by confined opens on the handle, link and kind checks, and native abuse tests. F06 is handled by the bounded parser with a fuzz test, and by the converter's protocol and demuxer restriction, limits and cleanup. F09 is handled by the size, time, concurrency, send-rate and lookup-rate bounds on consumed bytes, and by a disk bound (R12) that keeps the store above its write reserve. F03 is handled by private working directories. No High finding remains open for the enabled capability; OS sandboxing of ffmpeg is a documented residual risk (F06), not an exception. No receive-resource exception. |
 | VI | Each layer is tested separately: unit, fuzz, MCP in-memory, simulator, native. Platform controls are reported per platform, untested ones as not verified. |
 
 **Feasibility gate (required before `/speckit-implement`)**: Run as scratch work outside `/speckit-implement`, with no production wiring, and record in a committed `feasibility.md` marked `**Status**: Verified` only when all items pass:

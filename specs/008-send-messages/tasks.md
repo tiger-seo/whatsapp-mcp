@@ -28,21 +28,34 @@ description: "Implementation tasks for sending text, files and voice notes"
 **Prerequisite**: T002 has a current design `PASS`. No production code before it. Every user story depends on this phase.
 
 - [ ] T003 [P] Add the three settings to `internal/config/setting.go` and `Config` in `internal/config/config.go`, with tests in `internal/config/send_settings_test.go`:
-  - **`send_allowed_dirs`**: a list, separated by the OS path-list separator in a flag or environment variable, a TOML array in `config.toml`. Default `<data dir>/outbox`. Validation: "Absolute, existing directories, resolved with links. Each must not be the data directory, an ancestor of it, or inside it, except the default outbox and its subdirectories." On Windows, an entry whose path contains a junction fails at startup (R4).
+  - **`send_allowed_dirs`**: a list, separated by the OS path-list separator in a flag or environment variable, a TOML array in `config.toml`. Default `<data dir>/outbox`.
+    - Syntax is always checked.
+    - Only when `send_allowed_recipients` is not empty: "Absolute, existing directories, resolved with links, compared with the data directory by identity (`os.SameFile` on the entry, its ancestors and the data directory's ancestors). Each must not be the data directory, an ancestor of it, or inside it, except the default outbox and its subdirectories. Each is opened as an `os.Root` and kept."
+    - On Windows, an entry whose path contains a junction fails at startup, but only when sending is enabled (R4, R10).
   - **`send_allowed_recipients`**: a list, comma-separated in a flag or environment variable, a TOML array. Default empty. Validation: "Each entry is a phone number, phone JID, LID or group JID, normalized. Status, broadcast, newsletter, server and malformed addresses are refused. `*` is allowed only as the sole entry."
   - **`ffmpeg`**: a path, default unset. Validation: "Absolute path to an existing executable regular file."
 
-  Cover precedence (flag > environment variable > file > default), each refusal naming its setting, the debug dump, and the default outbox not being required to exist before startup creates it.
+  Cover precedence (flag > environment variable > file > default), each refusal naming its setting, and the debug dump. Also cover:
+  - with sending off: no directory is resolved, opened or created, and a junction in the default outbox's ancestors does not stop startup;
+  - with sending on: the default outbox is created private;
+  - a case-alias spelling of the data directory, or of an ancestor, is refused by the identity check. Run it on the native macOS runner (case-insensitive APFS), and record that the other platforms do not exercise it.
 - [ ] T004 [P] Implement recipient normalization and the send policy in `internal/media/recipient.go` and `internal/media/policy.go`, with tests in `internal/media/recipient_test.go` and `internal/media/policy_test.go`.
   - **Recipient argument:** "1–256 UTF-8 bytes: a phone number (digits, optional leading `+`, spaces and dashes ignored), a phone JID, a LID or a group JID". Status, broadcast-list, newsletter, server and malformed addresses are refused. The account's own address (note to self) is allowed.
   - **Recipient kind:** `phone`, `lid`, `group` or `self`, for the audit event.
   - **Policy:** The policy matches the allow-list after normalization. A LID and its mapped phone count as the same recipient in both directions, and unknown aliases are never guessed. An empty list refuses with `not_permitted` naming `send_allowed_recipients`; `*` permits any recipient.
-  - **Store helper:** Add the missing read helper `LIDsForPhone` beside `PhoneForLID` in `internal/store/lids.go`, with the guard's `write` flag false, plus a test in `internal/store/lids_test.go`.
+  - **Store helpers (all reads, with the guard's `write` flag false):**
+    - add `LIDsForPhone` beside `PhoneForLID` in `internal/store/lids.go`;
+    - add `ChatExists` in `internal/store/chats.go`, true for any stored chat, named or not (`ChatName`'s ok is false for an unnamed chat, so it cannot be used);
+    - add `FreshFreeBytes` in `internal/store/disk.go`, which measures the data directory's volume now with the guard's own function, never the 30-second cached value, and exposes `diskResume` as a constant the send service uses.
+
+    Tests in `internal/store/lids_test.go`, `internal/store/chats_test.go` and `internal/store/disk_test.go`.
 - [ ] T005 [P] Implement the rate window and the process-wide send slot in `internal/media/limits.go`, with tests in `internal/media/limits_test.go` using an injected clock:
   - "A send is allowed when fewer than 10 fall in the last minute and fewer than 200 in the last 24 hours", with at most 200 timestamps kept;
   - a send is recorded when it is handed to WhatsApp, whatever its outcome, and refused calls are not counted;
   - `retry_after_seconds` is computed from the oldest timestamp in the binding window;
-  - the slot allows one send at a time per process and refuses a second with `busy`.
+  - the slot allows one send at a time per process and refuses a second with `busy`;
+  - **Lookup window:** "fewer than 10 fall in the last minute and fewer than 100 in the last 24 hours", at most 100 timestamps, counted when a lookup is sent.
+  - **Lookup cache:** "Per normalized phone number, the last lookup result (registered with its LID, or unregistered) and its time; used for 24 hours; at most 1,000 entries, oldest evicted first. Failed lookups are not cached." A cache hit uses none of the window. An over-limit lookup gives `rate_limited` that names the lookup limit.
 - [ ] T006 Replace the media client's fixed 10-second total in `internal/wa/http.go` with the request-dependent bound proven in feasibility item 2, and build the session's media client with it in `internal/wa/session.go`:
   - an upload `POST` must carry a context deadline and is bounded by it;
   - every other request is bounded by a 10-second context, released when its body closes;
@@ -60,11 +73,11 @@ description: "Implementation tasks for sending text, files and voice notes"
 
   A test can hold any step (`lookup`, `devices`, `prekeys`, `groupinfo`, `upload`, `ack`) and release it.
 - [ ] T008 Implement the owner's send port in `internal/wa/send.go`, the session side in `internal/wa/session_send.go`, and a fake port in `internal/wa/fake.go` (A5):
-  - **Port operations:** a registration lookup, a streaming upload into a caller-provided private temporary file (`UploadReader`), a send and the local record (T009).
+  - **Port operations:** a registration lookup; a streaming upload (`UploadReader`) whose source is the private working copy and whose ciphertext goes to a caller-provided private temporary file, never the user's file; a send; and the local record (T009).
   - **Admission:** only when connected, on the current generation, not retiring, owner not stopping; otherwise `ErrNotConnected`. Admitted calls are counted. Each call's context is derived from the generation's work context and the caller's deadline.
   - **Retirement:** In `internal/wa/owner.go`, `retireGeneration` waits, after `work_cancelled` and within the existing drain bound, for admitted send calls to return (trace step `sends_waited`) before `Retire` blocks storage. A call still running at the bound makes the stop unsafe.
   - **Never:** The port never connects, reconnects, pairs or starts recovery.
-  - **Outcome:** An error before the message node is written is a failure. Cancellation, a deadline or a disconnect after the library send began is "outcome unknown"; no automatic retry.
+  - **Outcome:** "Only two kinds of error are a failure (`send_failed`): WhatsApp's own refusal (an error code in the acknowledgement), and errors from a fixed list known to happen before the node is written, such as recipient not on WhatsApp, a failed device or prekey fetch, or a failed encryption." Anything else once the library send call started is `outcome_unknown`; no automatic retry. Unit-test the mapping with each listed error, an unlisted error, and a wrapped context error.
 - [ ] T009 Implement the local record in `internal/wa/send_record.go`, reusing `extractContent` from `internal/wa/ingest_extract.go`. The data model's sent-message row:
   - `chat_jid` "The normalized recipient: phone JID, group JID, or the LID as given when no mapping is known";
   - `sender_jid` "The account's own phone JID, without a device part";
@@ -72,21 +85,30 @@ description: "Implementation tasks for sending text, files and voice notes"
   - `from_me` true;
   - `text`, `caption`, `media_type` and the upload's media metadata (URL, direct path, key, both hashes, length, MIME, document file name).
 
-  Write it with `StoreMessage` under a bounded 5-second context that retirement waits for. A failed write returns "record missing" and logs a content-free warning.
+  Write it through ingest's serialized live-write path in `internal/wa/ingest.go`: `lockForLive`, then `relookup` of a LID chat, then the store write, within a 5-second bound (shortened to the remaining budget) that retirement waits for. A failed write returns "record missing" and logs a content-free warning. Test in `internal/wa/send_record_test.go` that a LID merge interleaved with the record leaves the message in the phone chat and does not recreate the LID chat.
 - [ ] T010 Add port tests: `internal/wa/send_owner_test.go` with a fake session and `internal/wa/wasim_send_test.go` on the simulator.
   - **Owner, with a fake session:** admission refusals in every phase, and the retirement order `work_cancelled` → send returned → `sends_waited` → `disconnect` → `fence_closed` → `barrier_retired`. A send that does not return within the drain bound marks the stop unsafe.
   - **Simulator — sends:** lookup registered and unregistered, a text send, an image `UploadReader` plus send with caption, a group send, and the local record of each.
-  - **Simulator — stops:** a stop held at each step (`lookup`, `devices`, `prekeys`, `groupinfo`, `upload`, `ack`) returns before this generation's `barrier_retired` and passes the quiet-stop check with no library goroutines and no refusals. A held `ack` gives "outcome unknown".
+  - **Simulator — stops:** a stop held at each step (`lookup`, `devices`, `prekeys`, `groupinfo`, `upload`, `ack`) returns before this generation's `barrier_retired` and passes the quiet-stop check with no library goroutines and no refusals. A held `ack` gives "outcome unknown". The group steps were not covered by feasibility. If library work remains after a stop there, stop and bring it to the owner as a quiet-stop allow-list decision before the tools ship; do not widen the allow-list in this task.
   - **Repetition:** Repeat the stop cases with `-count=20` in the verification run.
 - [ ] T011 Implement the send service pipeline in `internal/media/service.go` and the per-send working directory in `internal/media/workdir.go`, with tests in `internal/media/service_test.go` against the fake port:
-  - steps 1–9 of the pipeline contract in order, each refusal stopping all later steps;
-  - a 2-minute deadline from the call's start;
-  - the registration lookup only for a phone recipient without a stored direct chat (`ChatName` ok = false), and not counted in the rate window;
+  - steps 1–10 of the pipeline contract in order, each refusal stopping all later steps;
+  - the budget: acceptance by 2:00 from the call's start, the record within the remaining time and at most 5 s;
+  - the registration lookup only for a phone recipient without a stored chat (`ChatExists` false), not counted in the send window, using the lookup cache and window (T005);
+  - the disk check (R12) before the working directory exists: `FreshFreeBytes` ≥ 512 MiB plus two times the file size (file) or the file size plus 200 MiB (conversion), otherwise `insufficient_space`; text sends skip it;
+  - the plaintext working copy made before any port call, in a goroutine that checks the context between 1 MiB chunks. On cancellation the handler returns and a stuck read is abandoned, leaving its directory to the startup sweep.
   - the error codes of the tools contract;
   - "A private directory under the data directory ... removed on every exit path", with a startup sweep of leftovers.
 
-  The service holds the slot (T005) for the whole call, including the local record.
-- [ ] T012 In `internal/mcp/connection.go`, give the three send tools a guard deadline of 2 minutes plus 5 seconds, leaving every other tool at 10 seconds and keeping the single tool credit. In `internal/mcp/diagnostics.go`, add tool identities and categories for the new error codes, and one `info` audit event per send attempt with tool, recipient kind, result code, media type and duration, never the address, text, caption, path, file contents or converter output. Tests in `internal/mcp/connection_test.go` and `internal/mcp/diagnostics_test.go`: a read tool is refused `busy` while a send is in flight; the send's deadline and a read's 10 s; the audit fields and their redaction.
+  The service holds the slot (T005) for the whole call, including the local record. Tests cover:
+  - an injected low free-space value: refused, with no working directory, upload, send or store write;
+  - a source reader held during a stop: the handler returns within 1 s, no port call is in flight, and the owner's stop passes the quiet-stop check;
+  - the budget arithmetic.
+- [ ] T012 In `internal/mcp/connection.go`, give the three send tools a guard deadline of 2 minutes 15 seconds, leaving every other tool at 10 seconds and keeping the single tool credit. In `internal/mcp/diagnostics.go`, add tool identities and categories for the new error codes, and one `info` audit event per send attempt with tool, recipient kind, result code, media type and duration, never the address, text, caption, path, file contents or converter output. Tests in `internal/mcp/connection_test.go` and `internal/mcp/diagnostics_test.go`:
+  - a read tool is refused `busy` while a send is in flight;
+  - the send's deadline and a read's 10 s;
+  - a fake send acknowledged at 1:59.9 whose record takes the full 5 s still delivers its success reply, with no `notifications/cancelled` and no closed connection;
+  - the audit fields and their redaction.
 - [ ] T013 Add the tool registration scaffold `RegisterSendTools` in `internal/mcp/send_tools.go` and the result types in `internal/mcp/send_results.go`, following the tools contract:
   - **Annotations:** `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`.
   - **Descriptions:** each says the call sends a WhatsApp message in the owner's name, and that sending is off until `send_allowed_recipients` is configured.
@@ -136,6 +158,7 @@ description: "Implementation tasks for sending text, files and voice notes"
 - [ ] T019 [P] [US2] Port the feasibility containment cases to `internal/media/path_test.go`, `internal/media/path_windows_test.go` and `internal/media/path_unix_test.go`.
   - **Refused, all platforms:** relative, traversal, prefix look-alike, outside, directory, empty, over 100 MiB (sparse file), missing, hard link to an outside file, symlink and symlinked directory escaping, and a directory swapped for a link after resolution.
   - **Accepted:** a link inside the outbox and a link into another allowed directory.
+  - **Kept roots:** a root directory swapped for a link after startup does not redirect an open, because the kept `os.Root` handle is used.
   - **Refused, Windows:** a junction to outside, a junction swap, an alternate data stream, UNC, `\\?\`, `\\.\` and forward-slash UNC, `CON`, `NUL.txt`. Informational: trailing dot and space, 8.3 names.
   - **Refused, Unix:** a FIFO, and a file swapped for a FIFO after resolution, without blocking; a symlink to `/dev/null`; a device node when run as root.
   - **Skips:** Report cases that need a privilege as skipped, never as passed.
@@ -156,8 +179,8 @@ description: "Implementation tasks for sending text, files and voice notes"
   - handle checks: "a regular file with exactly one link, and its size must be 1 byte to 100 MiB";
   - a counting reader that enforces 100 MiB on the bytes actually read.
 
-  Return one open handle, used for every later read.
-- [ ] T022 [US2] Implement the message type table and media message construction in `internal/media/types.go`: image, video (with the streaming sidecar from the upload) and document messages, built from the upload response. Stream the upload from the validated handle through the port into a temporary file in the per-send working directory (R3).
+  Return one open handle, used for every later read. Use the `os.Root` handles opened and kept at startup (T003), never one reopened by path.
+- [ ] T022 [US2] Implement the message type table and media message construction in `internal/media/types.go`: image, video (with the streaming sidecar from the upload) and document messages, built from the upload response. Upload from the plaintext working copy (T011) through the port, with the ciphertext in a temporary file in the per-send working directory (R3).
 - [ ] T023 [US2] Implement `send_file` with its optional `caption` (default `""`) in `internal/mcp/send_tools.go` and the file path in `internal/media/service.go`.
 - [ ] T024 [US2] Run the US2 tests natively on Windows and in WSL2, and in CI on Linux, Windows and macOS (T034). Record the command, date, per-platform counts, skips and exit codes in `specs/008-send-messages/verification.md`. A platform not run is "not verified".
 
@@ -182,7 +205,8 @@ description: "Implementation tasks for sending text, files and voice notes"
   - the launcher's child stopped with the tree (job object on Windows, process group on Unix);
   - no process and no working directory left within 5 s;
   - one conversion at a time;
-  - `ffmpeg_missing` naming the `ffmpeg` setting when neither the setting nor `PATH` has it.
+  - `ffmpeg_missing` naming the `ffmpeg` setting when neither the setting nor `PATH` has it;
+  - executable substitution: an `ffmpeg` in the current directory, or in a relative `PATH` entry, is never used.
 
   Add `TestRealFFmpeg`, guarded by `WA_FFMPEG_TESTS=1`:
   - each allowed input kind the local build can create, converted to Ogg Opus of the right duration;
@@ -202,7 +226,7 @@ description: "Implementation tasks for sending text, files and voice notes"
   - **Lookup:** the configured absolute path, or `exec.LookPath("ffmpeg")`.
   - **Input:** a size-checked private copy named `input`.
   - **Invocation:** the exact R6 argument list, with `-protocol_whitelist file,pipe` and the demuxer from the extension.
-  - **Output:** read from stdout through a counting writer, stopped at 100 MiB.
+  - **Output:** read from stdout through a counting writer, stopped at 100 MiB, written to `output.ogg` in the working directory.
   - **Environment:** empty (on Windows only `SystemRoot`).
   - **Process tree:** on Windows started suspended in a kill-on-close job object and then resumed (`golang.org/x/sys/windows`); on Unix its own process group, killed as a group.
   - **Limits:** 60 s, one conversion at a time, `WaitDelay` 2 s, the working directory removed on every exit path.
@@ -217,6 +241,7 @@ description: "Implementation tasks for sending text, files and voice notes"
   - malformed Ogg data, and an argument-like file name;
   - a stalled and a growing converter;
   - cancellation and shutdown during conversion or upload;
+  - low free disk space, and a source file whose read is stuck;
   - a send while disconnected, and rapid repeated sends.
 
   Each case must show that nothing outside the allowed directories was read, nothing was uploaded, sent or stored, no temporary file remains, and no connect, reconnect or recovery started.
