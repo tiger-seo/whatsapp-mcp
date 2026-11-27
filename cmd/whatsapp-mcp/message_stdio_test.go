@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -198,6 +199,22 @@ func testMessageStdioNative(t *testing.T, mode string) {
 		}
 		t.Fatalf("missing event %s", name)
 	}
+	// call is for a tool call that follows a tool reply. A client can read a reply before the server has finished
+	// writing it and released the single tool slot; the busy answer asks the client to retry.
+	call := func(id int, params string) []byte {
+		t.Helper()
+		for {
+			send(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":%s}`, id, params))
+			b := reply(id)
+			if !bytes.Contains(b, []byte(`"code":"busy"`)) {
+				return b
+			}
+			if deadline.Err() != nil {
+				t.Fatalf("tool slot not released: %s", b)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
 	send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`)
 	reply(1)
 	liveNames := entryNames()
@@ -209,17 +226,14 @@ func testMessageStdioNative(t *testing.T, mode string) {
 		if !strings.Contains(string(result), messageSecrets[2]) || !strings.Contains(string(result), messageSecrets[3]) {
 			t.Fatalf("missing stored data: %s", result)
 		}
-		send(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_message_context","arguments":{"message_id":"` + messageSecrets[0] + `","approval":"` + messageSecrets[1] + `"}}}`)
-		failure := reply(3)
+		failure := call(3, `{"name":"get_message_context","arguments":{"message_id":"`+messageSecrets[0]+`","approval":"`+messageSecrets[1]+`"}}`)
 		if !strings.Contains(string(failure), `"isError":true`) {
 			t.Fatalf("expected tool error: %s", failure)
 		}
-		send(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_message_context","arguments":{"message_id":"fixture","chat_jid":"` + pipeJID + `","before":0,"after":0}}}`)
-		if result := reply(4); strings.Contains(string(result), `"isError":true`) || !strings.Contains(string(result), messageSecrets[2]) {
+		if result := call(4, `{"name":"get_message_context","arguments":{"message_id":"fixture","chat_jid":"`+pipeJID+`","before":0,"after":0}}`); strings.Contains(string(result), `"isError":true`) || !strings.Contains(string(result), messageSecrets[2]) {
 			t.Fatalf("message context: %s", result)
 		}
-		send(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_last_interaction","arguments":{"jid":"` + pipeJID + `"}}}`)
-		if result := reply(5); strings.Contains(string(result), `"isError":true`) || !strings.Contains(string(result), messageSecrets[2]) {
+		if result := call(5, `{"name":"get_last_interaction","arguments":{"jid":"`+pipeJID+`"}}`); strings.Contains(string(result), `"isError":true`) || !strings.Contains(string(result), messageSecrets[2]) {
 			t.Fatalf("last interaction: %s", result)
 		}
 		if names := entryNames(); !slices.Equal(names, liveNames) {
@@ -241,8 +255,7 @@ func testMessageStdioNative(t *testing.T, mode string) {
 		if b := reply(2); !strings.Contains(string(b), `"isError":true`) {
 			t.Fatalf("cancelled request succeeded: %s", b)
 		}
-		send(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_messages","arguments":{}}}`)
-		if b := reply(4); strings.Contains(string(b), `"isError":true`) || !strings.Contains(string(b), `"messages":[]`) {
+		if b := call(4, `{"name":"list_messages","arguments":{}}`); strings.Contains(string(b), `"isError":true`) || !strings.Contains(string(b), `"messages":[]`) {
 			t.Fatalf("tool credit not retired after return: %s", b)
 		}
 		in.Close()
