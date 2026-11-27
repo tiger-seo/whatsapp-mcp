@@ -152,6 +152,8 @@ type messageSearchStream struct {
 	cursor messageKey
 	buffer []searchCandidate
 	done   bool
+	// size is the most keys the next refill may ask for. It doubles until it no longer limits a batch.
+	size int
 }
 
 type messageQueryCache struct {
@@ -207,9 +209,15 @@ func searchMessageKeys(ctx context.Context, q querier, f MessageFilter, p Page) 
 		}
 		branches = ids.branches()
 	}
+	// A first page of one looks at the newest key alone, so a match there reads nothing older. Doubling then reaches
+	// the ordinary batch within a few refills: one statement for every key cannot cross a long history in time.
+	first := messageSearchBatch
+	if p.Limit == 1 && p.Offset == 0 {
+		first = 1
+	}
 	streams := make([]messageSearchStream, len(branches))
 	for i, b := range branches {
-		streams[i] = messageSearchStream{branch: b, cursor: messageKey{time: math.MaxInt64}}
+		streams[i] = messageSearchStream{branch: b, cursor: messageKey{time: math.MaxInt64}, size: first}
 	}
 	visits, raw, folded := 0, 0, 0
 	needle := fold(f.Query)
@@ -225,13 +233,13 @@ func searchMessageKeys(ctx context.Context, q querier, f MessageFilter, p Page) 
 					return nil, limitErr("search work")
 				}
 				n := min(messageSearchBatch, remaining)
-				if p.Limit == 1 && p.Offset == 0 {
-					n = 1
-				} else if needle != "" {
+				if needle != "" {
 					if reserved := reservedSearchRows(messageSearchRawBytes-raw, messageSearchFoldBytes-folded); reserved >= minReservedSearchRows {
 						n = min(n, reserved)
 					}
 				}
+				n = min(n, s.size)
+				s.size = min(2*s.size, messageSearchBatch)
 				var candidates []searchCandidate
 				var next messageKey
 				var count, rawUsed, foldUsed int

@@ -232,6 +232,75 @@ func TestToolMessageSearchOlderAfterLargeFields(t *testing.T) {
 	}
 }
 
+type countedSearchQuery struct {
+	querier
+	statements int
+}
+
+func (q *countedSearchQuery) QueryRowContext(ctx context.Context, sql string, args ...any) *sql.Row {
+	q.statements++
+	return q.querier.QueryRowContext(ctx, sql, args...)
+}
+
+func TestToolMessageSearchFirstPageOfOneBatches(t *testing.T) {
+	f := newToolMessageFixture(t)
+	if _, err := f.store.writer.ExecContext(t.Context(), `DELETE FROM messages`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.writer.ExecContext(t.Context(), `WITH RECURSIVE seq(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM seq WHERE i<2000)
+	 INSERT INTO messages(chat_jid,id,sender_jid,time,from_me,text,text_fold)
+	 SELECT ?1,printf('row-%04d',i),?1,i,0,CASE WHEN i=1 THEN 'bottom' ELSE 'other' END,CASE WHEN i=1 THEN 'bottom' ELSE 'other' END FROM seq`, f.phone); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		query string
+		want  []string
+	}{{"bottom", []string{"row-0001"}}, {"absent", nil}} {
+		t.Run(tc.query, func(t *testing.T) {
+			statements := 0
+			keys, err := messageSnapshot(t.Context(), f.reader, func(ctx context.Context, q querier) ([]messageKey, error) {
+				counted := &countedSearchQuery{querier: q}
+				keys, err := searchMessageKeys(ctx, counted, MessageFilter{Query: tc.query}, Page{Limit: 1})
+				statements = counted.statements
+				return keys, err
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ids []string
+			for _, key := range keys {
+				ids = append(ids, key.id)
+			}
+			if !reflect.DeepEqual(ids, tc.want) {
+				t.Fatalf("got %v, want %v", ids, tc.want)
+			}
+			// 2,000 rows take a few growing refills and then full batches, never one statement per row.
+			if statements > 50 {
+				t.Fatalf("%d batch statements for a one-match first page", statements)
+			}
+		})
+	}
+}
+
+func TestToolMessageSearchFirstPageOfOneStopsAtTop(t *testing.T) {
+	f := newToolMessageFixture(t)
+	if _, err := f.store.writer.ExecContext(t.Context(), `DELETE FROM messages`); err != nil {
+		t.Fatal(err)
+	}
+	// The older row is malformed, so reading it at all fails the search.
+	if _, err := f.store.writer.ExecContext(t.Context(), `INSERT INTO messages(chat_jid,id,sender_jid,time,from_me,text,text_fold) VALUES(?1,'older',?1,1,0,?2,?2),(?1,'newest',?1,2,0,'needle','needle')`, f.phone, "\xff"); err != nil {
+		t.Fatal(err)
+	}
+	for limit, wantErr := range map[int]error{1: nil, 2: ErrResourceLimit} {
+		keys, err := messageSnapshot(t.Context(), f.reader, func(ctx context.Context, q querier) ([]messageKey, error) {
+			return searchMessageKeys(ctx, q, MessageFilter{Query: "needle"}, Page{Limit: limit})
+		})
+		if !errors.Is(err, wantErr) || (wantErr == nil) != (len(keys) == 1) {
+			t.Fatalf("limit %d: keys=%v err=%v", limit, keys, err)
+		}
+	}
+}
+
 func TestToolMessageSearchScale(t *testing.T) {
 	f := newToolMessageFixture(t)
 	if _, err := f.store.writer.ExecContext(t.Context(), `DELETE FROM messages`); err != nil {
