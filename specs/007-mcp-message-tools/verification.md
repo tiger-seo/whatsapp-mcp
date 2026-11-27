@@ -520,4 +520,3 @@ The `owner-judge` code review of `f2e2fad` returned PASS (row in the Owner revie
 - Intel macOS builds but is not verified at runtime: 4 of the 12 Intel hosted machines in the two repeated runs failed `TestMessageBudgetContextRows`.
 
 T036 is complete. No pull request was opened or merged.
-
