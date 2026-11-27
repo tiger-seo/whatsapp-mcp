@@ -4,7 +4,7 @@ description: "Implementation tasks for sending text, files and voice notes"
 
 # Tasks: Sending Text, Files and Voice Notes
 
-**Input**: the `specs/008-send-messages/` design artifacts (spec, plan, research R1–R11, data model, [tools contract](contracts/tools.md), [pipeline contract](contracts/send-pipeline.md), quickstart, [feasibility](feasibility.md)) and `.specify/memory/constitution.md`.
+**Input**: the `specs/008-send-messages/` design artifacts (spec, plan, research R1–R12, data model, [tools contract](contracts/tools.md), [pipeline contract](contracts/send-pipeline.md), quickstart, [feasibility](feasibility.md)) and `.specify/memory/constitution.md`.
 
 **Organization**:
 
@@ -46,7 +46,7 @@ description: "Implementation tasks for sending text, files and voice notes"
   - **Store helpers (all reads, with the guard's `write` flag false):**
     - add `LIDsForPhone` beside `PhoneForLID` in `internal/store/lids.go`;
     - add `ChatExists` in `internal/store/chats.go`, true for any stored chat, named or not (`ChatName`'s ok is false for an unnamed chat, so it cannot be used);
-    - add `FreshFreeBytes` in `internal/store/disk.go`, which measures the data directory's volume now with the guard's own function, never the 30-second cached value, and exposes `diskResume` as a constant the send service uses.
+    - add `FreshFreeBytes` in `internal/store/disk.go`, which measures the data directory's volume now with the guard's own function, never the 30-second cached value, returns the measurement error instead of letting it pass, and exposes `diskResume` as a constant the send service uses.
 
     Tests in `internal/store/lids_test.go`, `internal/store/chats_test.go` and `internal/store/disk_test.go`.
 - [ ] T005 [P] Implement the rate window and the process-wide send slot in `internal/media/limits.go`, with tests in `internal/media/limits_test.go` using an injected clock:
@@ -85,7 +85,15 @@ description: "Implementation tasks for sending text, files and voice notes"
   - `from_me` true;
   - `text`, `caption`, `media_type` and the upload's media metadata (URL, direct path, key, both hashes, length, MIME, document file name).
 
-  Write it through ingest's serialized live-write path in `internal/wa/ingest.go`: `lockForLive`, then `relookup` of a LID chat, then the store write, within a 5-second bound (shortened to the remaining budget) that retirement waits for. A failed write returns "record missing" and logs a content-free warning. Test in `internal/wa/send_record_test.go` that a LID merge interleaved with the record leaves the message in the phone chat and does not recreate the LID chat.
+  Write it through ingest's serialized live-write path in `internal/wa/ingest.go`, within a 5-second bound (shortened to the remaining budget) that retirement waits for:
+  - add `lockForLiveCtx(ctx)`, which selects on the lock and `ctx.Done()` and keeps `liveWaiting` balanced on both paths;
+  - under it, `relookup` of a LID chat, then the store write.
+
+  A failed write, or a lock not obtained in time, returns "record missing" and logs a content-free warning. Tests in `internal/wa/send_record_test.go`:
+  - a LID merge interleaved with the record leaves the message in the phone chat and does not recreate the LID chat;
+  - with a worker holding the lock, the record gives up when the remaining budget runs out;
+  - with a worker holding the lock, the record gives up when retirement cancels the work context, and the stop stays within its drain bound;
+  - `liveWaiting` is zero afterwards in both cases, so the worker is not starved.
 - [ ] T010 Add port tests: `internal/wa/send_owner_test.go` with a fake session and `internal/wa/wasim_send_test.go` on the simulator.
   - **Owner, with a fake session:** admission refusals in every phase, and the retirement order `work_cancelled` → send returned → `sends_waited` → `disconnect` → `fence_closed` → `barrier_retired`. A send that does not return within the drain bound marks the stop unsafe.
   - **Simulator — sends:** lookup registered and unregistered, a text send, an image `UploadReader` plus send with caption, a group send, and the local record of each.
@@ -96,18 +104,21 @@ description: "Implementation tasks for sending text, files and voice notes"
   - the budget: acceptance by 2:00 from the call's start, the record within the remaining time and at most 5 s;
   - the registration lookup only for a phone recipient without a stored chat (`ChatExists` false), not counted in the send window, using the lookup cache and window (T005);
   - the disk check (R12) before the working directory exists: `FreshFreeBytes` ≥ 512 MiB plus two times the file size (file) or the file size plus 200 MiB (conversion), otherwise `insufficient_space`; text sends skip it;
-  - the plaintext working copy made before any port call, in a goroutine that checks the context between 1 MiB chunks. On cancellation the handler returns and a stuck read is abandoned, leaving its directory to the startup sweep.
+  - the source stage (R3), before any port call and in one goroutine the handler can abandon: syntax check, resolve, confined open, handle checks, disk check, working directory, copy. The copy is limited to the opened size plus one byte (more refuses with `file_refused`) and checks the context between 1 MiB chunks. On cancellation the handler returns. The send slot stays taken until the goroutine returns, so later calls get `busy`, and the startup sweep removes a leftover directory;
+  - a failed free-space measurement refuses with `insufficient_space`.
   - the error codes of the tools contract;
   - "A private directory under the data directory ... removed on every exit path", with a startup sweep of leftovers.
 
   The service holds the slot (T005) for the whole call, including the local record. Tests cover:
   - an injected low free-space value: refused, with no working directory, upload, send or store write;
-  - a source reader held during a stop: the handler returns within 1 s, no port call is in flight, and the owner's stop passes the quiet-stop check;
+  - a held `Lstat` (resolution), a held open and a held read, each during a stop: the handler returns within 1 s, the MCP stop step completes, no port call is in flight, and the owner's stop passes the quiet-stop check (injectable filesystem hooks);
+  - while a stage is held, a second call gets `busy`, and after release the slot frees;
+  - a file grown after the open is refused with no upload;
   - the budget arithmetic.
-- [ ] T012 In `internal/mcp/connection.go`, give the three send tools a guard deadline of 2 minutes 15 seconds, leaving every other tool at 10 seconds and keeping the single tool credit. In `internal/mcp/diagnostics.go`, add tool identities and categories for the new error codes, and one `info` audit event per send attempt with tool, recipient kind, result code, media type and duration, never the address, text, caption, path, file contents or converter output. Tests in `internal/mcp/connection_test.go` and `internal/mcp/diagnostics_test.go`:
+- [ ] T012 In `internal/mcp/connection.go`, give the three send tools a guard deadline of 2 minutes 15 seconds, make the guard's clock and timers injectable, and pass the admission time to the handler in the request context (the service derives its deadlines from it), leaving every other tool at 10 seconds and keeping the single tool credit. In `internal/mcp/diagnostics.go`, add tool identities and categories for the new error codes, and one `info` audit event per send attempt with tool, recipient kind, result code, media type and duration, never the address, text, caption, path, file contents or converter output. Tests in `internal/mcp/connection_test.go` and `internal/mcp/diagnostics_test.go`:
   - a read tool is refused `busy` while a send is in flight;
   - the send's deadline and a read's 10 s;
-  - a fake send acknowledged at 1:59.9 whose record takes the full 5 s still delivers its success reply, with no `notifications/cancelled` and no closed connection;
+  - with a fake clock, a fake send acknowledged at 1:59.9 after admission, whose record takes the full 5 s, still delivers its success reply, with no `notifications/cancelled` and no closed connection;
   - the audit fields and their redaction.
 - [ ] T013 Add the tool registration scaffold `RegisterSendTools` in `internal/mcp/send_tools.go` and the result types in `internal/mcp/send_results.go`, following the tools contract:
   - **Annotations:** `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: false`, `openWorldHint: true`.
@@ -158,7 +169,7 @@ description: "Implementation tasks for sending text, files and voice notes"
 - [ ] T019 [P] [US2] Port the feasibility containment cases to `internal/media/path_test.go`, `internal/media/path_windows_test.go` and `internal/media/path_unix_test.go`.
   - **Refused, all platforms:** relative, traversal, prefix look-alike, outside, directory, empty, over 100 MiB (sparse file), missing, hard link to an outside file, symlink and symlinked directory escaping, and a directory swapped for a link after resolution.
   - **Accepted:** a link inside the outbox and a link into another allowed directory.
-  - **Kept roots:** a root directory swapped for a link after startup does not redirect an open, because the kept `os.Root` handle is used.
+  - **Kept roots:** a root directory swapped for a link after startup does not redirect an open, because the kept `os.Root` handle is used. On Windows, record whether the user can still rename or delete an allowed directory while its root is kept open, and document the result in T037.
   - **Refused, Windows:** a junction to outside, a junction swap, an alternate data stream, UNC, `\\?\`, `\\.\` and forward-slash UNC, `CON`, `NUL.txt`. Informational: trailing dot and space, 8.3 names.
   - **Refused, Unix:** a FIFO, and a file swapped for a FIFO after resolution, without blocking; a symlink to `/dev/null`; a device node when run as root.
   - **Skips:** Report cases that need a privilege as skipped, never as passed.
@@ -272,6 +283,7 @@ description: "Implementation tasks for sending text, files and voice notes"
   - `send_allowed_recipients` set to the one chat the owner names;
   - text, a `.jpg` with a caption, a `.pdf`, an `.ogg` and an `.mp3`;
   - checks on the phone, and of `list_messages`;
+  - the time of a large file send (tens of MiB) through the owner's MCP client, to observe the client's own request timeout (the TypeScript MCP SDK's default is believed to be 60 s), documented in `OPERATIONS.md`;
   - cleanup by unlinking on the phone, then deleting the directory.
 
   Record redacted results in `specs/008-send-messages/verification.md`; a step not run is "not verified".

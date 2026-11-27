@@ -28,7 +28,7 @@ Written once after the acknowledgement, through ingest's serialized live-write p
 
 ## In-memory state
 
-- **Send slot**: Process-wide; at most one send in progress. Released when the call returns, including the local record.
+- **Send slot**: Process-wide; at most one send in progress. Released when the call returns, including the local record, and not before an abandoned source-stage goroutine (R3) has actually returned.
 - **Rate window**: The timestamps of sends handed to WhatsApp in the last 24 hours, at most 200. A send is allowed when fewer than 10 fall in the last minute and fewer than 200 in the last 24 hours. Lost on restart.
 - **Lookup window**: The timestamps of registration lookups sent in the last 24 hours, at most 100. A lookup is allowed when fewer than 10 fall in the last minute and fewer than 100 in the last 24 hours. Lost on restart.
 - **Lookup cache**: Per normalized phone number, the last lookup result (registered with its LID, or unregistered) and its time; used for 24 hours; at most 1,000 entries, oldest evicted first. Failed lookups are not cached. Lost on restart.

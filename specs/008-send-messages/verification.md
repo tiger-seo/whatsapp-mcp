@@ -33,3 +33,16 @@
 | Unrecognised errors after the hand-over could read as `send_failed` | low | R9 and the tools contract: a fixed list of pre-hand-over errors is `send_failed`; anything else is `outcome_unknown` (T008 test). |
 | Group sends not exercised in feasibility | low | T010 tests them on the simulator; leftover library work there goes to the owner as an allow-list decision, not widened in the task. |
 | No executable-substitution test | low | T026: an `ffmpeg` in the current directory or a relative `PATH` entry is never used. |
+
+## Design review of `2596af3` (BLOCK): handling
+
+| Finding | Severity | Handling |
+| --- | --- | --- |
+| The local record's `lockForLive` waits with no context; a history flush or merge can hold the lock about 30 s, so the reply misses the guard deadline or retirement passes its drain bound | medium | R9, pipeline contract: a cancellable `lockForLiveCtx` (select on the lock and `ctx.Done()`, `liveWaiting` balanced). A lock not obtained in time is "record missing". T009 tests a worker holding the lock against the budget and against retirement. |
+| Only the copy's reads can be abandoned; resolving, opening and checking still run in the handler, and shutdown waits for the handler | medium | R3, R4, spec edge case, pipeline contract: the whole source stage (syntax, resolve, open, checks, disk check, working directory, copy) runs in one abandonable goroutine. The send slot is held until it actually returns, so later calls get `busy` and stuck work cannot pile up. T011 tests a held `Lstat`, open and read during a stop. |
+| The copy is capped at 100 MiB, not at the opened size | low | R3, tools contract, spec edge case: copy limited to the opened size plus one byte; a grown file is refused (T011 test). |
+| A failed free-space measurement is not defined | low | R12, T004, tools contract: it refuses with `insufficient_space`. |
+| The budget test would take minutes of real time, and the guard and service clocks are separate | low | R7, T012: an injectable guard clock and timers; the guard passes its admission time to the handler, and the service derives its deadlines from it. |
+| The tasks header cites R1–R11 | low | Now R1–R12. |
+| Observation: client request timeouts (believed 60 s in the TypeScript MCP SDK) | — | T038 times a large send through the owner's client; `OPERATIONS.md` documents the effective limit (T037). |
+| Observation: kept roots on Windows may block renaming the outbox | — | T019 records the behaviour; T037 documents it. |
