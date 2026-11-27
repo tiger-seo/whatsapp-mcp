@@ -96,6 +96,7 @@ The independent review identified oversized-key materialization, malformed UTF-8
 | design | 2026-11-23 | e45dbd6 | PASS | |
 | code | 2026-11-24 | ab8555e | BLOCK | |
 | design | 2026-11-27 | 35b447d | PASS | |
+| code | 2026-11-27 | f2e2fad | PASS | |
 
 - **Code BLOCK (`ab8555e`):** The native macOS named suite did not return the required sparse search result within the 5-second store deadline. The judge reviewed the committed diff and verification record; its local Go commands were denied, so the verdict relies on the recorded CI evidence and source review, not a judge rerun. It also flagged the one-result first-page search's one-row refills as an unverified scale risk, not a separate blocker. The unrelated local `.gitignore` change was excluded from this committed review.
 
@@ -499,3 +500,24 @@ The check job passed formatting, vet, module verification, `govulncheck`, the Un
 **Unverified:** Linux/arm64 and Intel macOS runtime acceptance (cross-builds are not runtime evidence), physical Macs, and timed searches over more than 100,000 rows on macOS or 400,000 elsewhere. No real account was used.
 
 The temporary repeat job was removed afterwards; no product or test file changed after `169cba8`. Documentation for T041: `OPERATIONS.md`, `README.md`, `AGENTS.md` current state, and the backlog items for [large macOS histories](../../docs/backlog/007-message-search-page-reads.md), [busy after a reply](../../docs/backlog/007-tool-slot-after-reply.md) and [preempted reads](../../docs/backlog/007-preempted-read-reports-cancelled.md).
+
+### Final CI and Owner Code Review (2026-11-27 UTC)
+
+[CI run 45925642208](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/45925642208) tested the reviewed commit `f2e2fada0d325593ad31f33510ae26fb70c743e7`, and every job passed, including the check job. The named acceptance command exited 0 with 40 top-level and 46 subtest passes and no skips (`internal/store` 35 and 36, `internal/mcp` 4 and 7, `cmd/whatsapp-mcp` 1 and 3).
+
+| Native runner (UTC start) | Rows | Guarded replies (sparse / empty) |
+| --- | --- | --- |
+| Windows/amd64, 02:03:55 | 400,000 | 2.068 / 1.634 s |
+| Linux/amd64, 02:03:05 | 400,000 | 2.305 / 1.955 s |
+| macOS/arm64, 02:03:27 | 100,000 | 0.616 / 0.537 s |
+
+The `owner-judge` code review of `f2e2fad` returned PASS (row in the Owner reviews table). As it reported, on Windows/amd64 with `CGO_ENABLED=0` it ran the new tests, confirmed in a scratch worktree that they fail when each production change is reverted, and ran `go test ./... -count=1 -timeout 30m` (exit 0, 10 packages), `gofmt`, `go vet`, `go mod verify` and the five cross-builds; it did not run `govulncheck` locally. Low observations, none blocking and none changed after the review:
+
+- The native cancellation test's retry on `busy` also covers its check that the tool slot is released after the read returns, so only a slot that stays held past the 20-second deadline would now fail there. The `busy` assertion while the call is held is unchanged.
+- `TestToolMessageReadReportsEndedContext` would pass without exercising the fix if no statement failed within 2 seconds. It fails against the old code.
+- `scaleSearchRows` is repeated in the store and MCP test packages and the two must stay equal.
+- The backlog item for `busy` after a reply calls it accepted contract behaviour, but no owner decision about it is recorded. It is inherited from feature 006's one-tool admission.
+- Intel macOS builds but is not verified at runtime: 4 of the 12 Intel hosted machines in the two repeated runs failed `TestMessageBudgetContextRows`.
+
+T036 is complete. No pull request was opened or merged.
+

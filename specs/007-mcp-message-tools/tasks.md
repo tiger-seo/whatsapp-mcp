@@ -93,7 +93,7 @@ description: "Implementation tasks for MCP message tools"
 - [X] T033 Run `specs/007-mcp-message-tools/quickstart.md` feature acceptance at each platform's SC-005 size with named tests confirmed in each package, `CGO_ENABLED=0`, synthetic fixtures and native Windows/Linux/macOS controls; record commands, dates, platform, commit, test counts, exit codes and unverified platforms in `specs/007-mcp-message-tools/verification.md`.
 - [X] T034 Run gofmt, vet, module verification, full tests, vulnerability check and all five CGO-free build targets per `AGENTS.md` and `specs/007-mcp-message-tools/quickstart.md`; record actual command exit codes, counts and limitations in `specs/007-mcp-message-tools/verification.md`; do not treat cross-builds as native runtime evidence.
 - [X] T035 Document the delivered local tools, budget and continuation behavior, and verification limits in `README.md`, `OPERATIONS.md`, and the current state in `AGENTS.md`; update `docs/backlog/INDEX.md` only if a tracked backlog item changes.
-- [ ] T036 Obtain current owner code review of implementation and `specs/007-mcp-message-tools/verification.md` before PR creation or merge; record the dated reviewed commit and verdict, resolve BLOCK or record the user's decision for CONCERNS, and repeat if covered work changes.
+- [X] T036 Obtain current owner code review of implementation and `specs/007-mcp-message-tools/verification.md` before PR creation or merge; record the dated reviewed commit and verdict, resolve BLOCK or record the user's decision for CONCERNS, and repeat if covered work changes.
 
 ## Phase 7: Platform Search Size and Acceptance Corrections
 
