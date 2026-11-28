@@ -19,6 +19,7 @@
 | design | 2026-11-27 | 129e4ae | PASS | |
 | design | 2026-11-28 | 25c6bb8 | PASS | |
 | code | 2026-11-28 | 862034b | CONCERNS | |
+| code | 2026-11-28 | 3c0c122 | CONCERNS | |
 
 ## Design review of `3254097` (BLOCK): handling
 
@@ -259,10 +260,21 @@ never fell below 2,895 MiB, and the test temp volume (`D:`) averaged 79.06% idle
 (peak 2.32). These are machine-wide measurements during the passing run only. The earlier failures were not
 instrumented, so this does not establish whether other agents or resource contention caused them.
 
+### Code Re-review of `3c0c122` (CONCERNS)
+
+The reviewer inspected the feature diff and found no blocking code defect. The passing local full suite and
+same-host comparison resolved the earlier test-evidence concern, although the cause of the original timeouts
+is unknown. The sole reason for `CONCERNS` in this round was that the review session could not independently
+run Go checks or verify the CI run through `gh` because those commands required approval.
+
+Non-blocking observations: the send working directory uses `os.MkdirTemp` and is checked before use; a
+case-aliased explicit path to an existing default outbox can skip the default outbox privacy check on
+Windows; a few test waits use polling or timed waits. No owner decision has been recorded for this verdict.
+
 ### Not done
 
 | Task | State |
 | --- | --- |
 | T037 | documentation written; the `docs/roadmap.md` "Done" line waits for the merge |
 | T038 | real account: **not verified**; needs the owner's permission for each step, including the client time-limit measurement |
-| T039 | Implementation and evidence committed; code review returned `CONCERNS` at `862034b`. A current code `PASS` is still required before opening a PR. |
+| T039 | Implementation and evidence committed; code re-review returned `CONCERNS` at `3c0c122`. The PR gate remains uncleared. |
