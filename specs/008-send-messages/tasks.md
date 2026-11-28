@@ -270,8 +270,8 @@ description: "Implementation tasks for sending text, files and voice notes"
 - [X] T034 Extend `.github/workflows/ci.yml` (actions pinned to full commit SHAs):
   - the path containment tests already run in the native matrix;
   - add a job that installs ffmpeg on Linux (`apt`), macOS (`brew`) and Windows (`choco`, which exercises the package-manager launcher case) and runs `WA_FFMPEG_TESTS=1 go test ./internal/media -run RealFFmpeg`.
-- [ ] T035 Run the [quickstart](quickstart.md) offline gates, with the simulator stop cases repeated `-count=20`. Record the command, date, platform, commit, counts and exit codes in `specs/008-send-messages/verification.md`.
-- [ ] T036 Run every gate in `AGENTS.md`'s Commands section on the final code:
+- [X] T035 Run the [quickstart](quickstart.md) offline gates, with the simulator stop cases repeated `-count=20`. Record the command, date, platform, commit, counts and exit codes in `specs/008-send-messages/verification.md`.
+- [X] T036 Run every gate in `AGENTS.md`'s Commands section on the final code:
   - `gofmt -l .`, `go vet ./...`, `go mod verify`;
   - `go test ./... -count=1 -timeout 30m`;
   - the five `CGO_ENABLED=0` builds;

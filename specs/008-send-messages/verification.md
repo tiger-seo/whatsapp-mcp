@@ -240,11 +240,29 @@ Neither revision reproduced the timeouts in the store-only suite. This compariso
 of the earlier failures nor a passing local full-repository run. No test or deadline was changed. The recorded code
 verdict remains `CONCERNS`; no PR was opened.
 
+### Local Windows Full Suite With Load Sampling (2026-11-28 UTC)
+
+At `e543473` (same code as `25c6bb8`), with Windows/amd64, Go 1.27.4 and `CGO_ENABLED=0`, ran
+`go test ./... -count=1 -timeout 30m -json` from 02:02:59 to 02:10:14 UTC. The Go command exited **0**:
+11 packages passed, one had no test files, and 2,469 test events passed, 0 failed and 37 skipped (counts include
+subtests). Default package parallelism and the existing deadlines were unchanged. No real account was used.
+
+| Previously failing case | Time |
+| --- | --- |
+| Store search: `sparse_needle` / `not-present` | 2.34 s / 2.40 s |
+| MCP search: `sparse_needle` / `not-present` | 3.84 s / 4.32 s |
+| `TestToolMessageContextRowCap` | 2.05 s |
+
+Agent Manager listed no managed sessions before the run; activity outside Agent Manager was not monitored.
+Across 86 Windows counter samples taken five seconds apart, CPU averaged 50.96% (peak 100%), available memory
+never fell below 2,895 MiB, and the test temp volume (`D:`) averaged 79.06% idle with a disk queue averaging 0.46
+(peak 2.32). These are machine-wide measurements during the passing run only. The earlier failures were not
+instrumented, so this does not establish whether other agents or resource contention caused them.
+
 ### Not done
 
 | Task | State |
 | --- | --- |
-| T035, T036 | Native CI passed; local full-suite verification remains open. |
 | T037 | documentation written; the `docs/roadmap.md` "Done" line waits for the merge |
 | T038 | real account: **not verified**; needs the owner's permission for each step, including the client time-limit measurement |
 | T039 | Implementation and evidence committed; code review returned `CONCERNS` at `862034b`. A current code `PASS` is still required before opening a PR. |
