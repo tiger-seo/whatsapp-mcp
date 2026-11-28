@@ -18,6 +18,7 @@
 | design | 2026-11-27 | 0c9a90f | CONCERNS | |
 | design | 2026-11-27 | 129e4ae | PASS | |
 | design | 2026-11-28 | 25c6bb8 | PASS | |
+| code | 2026-11-28 | 862034b | CONCERNS | |
 
 ## Design review of `3254097` (BLOCK): handling
 
@@ -214,6 +215,16 @@ The renewed design review covered the send-only frame and parameter limits, incl
 bounded parsing, and retaining one tool credit. It noted that the test trace for the new bound and consolidation
 into the project baseline could be clearer. This is a design verdict, not a code review.
 
+### Code Review of `862034b` (CONCERNS)
+
+The review confirmed that the passing native CI covered the same implementation, but the local Windows store
+timeouts remain unexplained. No same-host baseline run against `main` has been recorded. The reviewer's permissions
+prevented independent Go checks and access to the pinned fork in the module cache. No code `PASS` was issued.
+
+The review also noted that `os.MkdirTemp` creates the per-send directory under the private work root and that the
+directory is checked before use, but its creation does not go through `internal/private`. Native device-node
+refusal on Linux and macOS, socket refusal on macOS, Windows 8.3 names, and Intel and physical Macs remain not verified.
+
 ### Not done
 
 | Task | State |
@@ -221,4 +232,4 @@ into the project baseline could be clearer. This is a design verdict, not a code
 | T035, T036 | Native CI passed; local full-suite verification remains open. |
 | T037 | documentation written; the `docs/roadmap.md` "Done" line waits for the merge |
 | T038 | real account: **not verified**; needs the owner's permission for each step, including the client time-limit measurement |
-| T039 | Implementation committed at `c13b250`; evidence follow-up and owner code review still pending. |
+| T039 | Implementation and evidence committed; code review returned `CONCERNS` at `862034b`. A current code `PASS` is still required before opening a PR. |
