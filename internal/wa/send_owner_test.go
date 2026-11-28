@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"go.mau.fi/whatsmeow"
@@ -228,6 +229,10 @@ func TestSendOwnerCallContexts(t *testing.T) {
 }
 
 func TestSendOwnerCancellationReachesOnlyCallsBeforeTheHandOver(t *testing.T) {
+	synctest.Test(t, testSendOwnerCancellation)
+}
+
+func testSendOwnerCancellation(t *testing.T) {
 	r := newSendOwner(t, nil)
 	for _, tt := range []struct {
 		op       string
@@ -267,11 +272,12 @@ func TestSendOwnerCancellationReachesOnlyCallsBeforeTheHandOver(t *testing.T) {
 			}
 			continue
 		}
+		synctest.Wait()
 		select {
 		case err := <-done:
 			t.Errorf("%s ended on the caller's cancel: %v", tt.op, err)
 			continue
-		case <-time.After(100 * time.Millisecond):
+		default:
 		}
 		close(release)
 		if err := <-done; err != nil {
@@ -283,40 +289,51 @@ func TestSendOwnerCancellationReachesOnlyCallsBeforeTheHandOver(t *testing.T) {
 func TestSendOwnerRetirementWaitsForSends(t *testing.T) {
 	for _, op := range []string{"lookup", "upload", "deliver", "record"} {
 		t.Run(op, func(t *testing.T) {
-			r := newSendOwner(t, nil)
-			entered := make(chan struct{})
-			r.sess.hold = func(_ string, ctx context.Context) error {
-				close(entered)
-				<-ctx.Done()
-				// The call takes a moment to return, so only a retirement that waits sees it first.
-				time.Sleep(50 * time.Millisecond)
-				r.trace.add("send_returned")
-				return ctx.Err()
-			}
-			done := make(chan error, 1)
-			go func() { done <- portCalls1(r.o, op) }()
-			<-entered
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := r.o.stopForTest(ctx); err != nil {
-				t.Fatal(err)
-			}
-			if err := <-done; op == "deliver" && !errors.Is(err, ErrOutcomeUnknown) {
-				t.Errorf("deliver stopped by retirement = %v, want unknown", err)
-			}
-			steps := r.trace.get()
-			last := -1
-			for _, want := range []string{"work_cancelled", "send_returned", "sends_waited", "disconnect", "fence_closed", "barrier_retired"} {
-				i := slices.Index(steps, want)
-				if i <= last {
-					t.Fatalf("step %q out of order in %v", want, steps)
-				}
-				last = i
-			}
-			if err := r.o.StopError(); err != nil {
-				t.Errorf("StopError = %v", err)
-			}
+			synctest.Test(t, func(t *testing.T) { testSendOwnerRetirement(t, op) })
 		})
+	}
+}
+
+func testSendOwnerRetirement(t *testing.T, op string) {
+	r := newSendOwner(t, nil)
+	entered, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	r.sess.hold = func(_ string, ctx context.Context) error {
+		close(entered)
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+		r.trace.add("send_returned")
+		return ctx.Err()
+	}
+	done := make(chan error, 1)
+	go func() { done <- portCalls1(r.o, op) }()
+	<-entered
+	r.o.BeginStop()
+	<-cancelled
+	synctest.Wait()
+	if steps := r.trace.get(); slices.Contains(steps, "disconnect") {
+		t.Errorf("retirement disconnected before the send returned: %v", steps)
+	}
+	close(release)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.o.stopForTest(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; op == "deliver" && !errors.Is(err, ErrOutcomeUnknown) {
+		t.Errorf("deliver stopped by retirement = %v, want unknown", err)
+	}
+	steps := r.trace.get()
+	last := -1
+	for _, want := range []string{"work_cancelled", "send_returned", "sends_waited", "disconnect", "fence_closed", "barrier_retired"} {
+		i := slices.Index(steps, want)
+		if i <= last {
+			t.Fatalf("step %q out of order in %v", want, steps)
+		}
+		last = i
+	}
+	if err := r.o.StopError(); err != nil {
+		t.Errorf("StopError = %v", err)
 	}
 }
 
@@ -338,6 +355,10 @@ func portCalls1(port SendPort, op string) error {
 }
 
 func TestSendOwnerStuckSendMakesTheStopUnsafe(t *testing.T) {
+	synctest.Test(t, testSendOwnerStuckSend)
+}
+
+func testSendOwnerStuckSend(t *testing.T) {
 	r := newSendOwner(t, func(cfg *OwnerConfig) { cfg.drainBound = 100 * time.Millisecond })
 	entered, release := make(chan struct{}), make(chan struct{})
 	r.sess.hold = func(string, context.Context) error {
@@ -349,19 +370,17 @@ func TestSendOwnerStuckSendMakesTheStopUnsafe(t *testing.T) {
 	go func() { done <- portCalls1(r.o, "deliver") }()
 	<-entered
 	r.o.BeginStop()
-	deadline := time.After(5 * time.Second)
-	for !r.log.contains("owner_drain_failed") {
-		select {
-		case <-deadline:
-			t.Fatal("the stuck send was not reported")
-		case <-time.After(5 * time.Millisecond):
-		}
+	synctest.Wait()
+	synctest.Sleep(100 * time.Millisecond)
+	synctest.Wait()
+	if !r.log.contains("owner_drain_failed") {
+		t.Error("the stuck send was not reported")
 	}
 	// The generation is not released while the call still runs.
 	select {
 	case <-r.o.Done():
-		t.Fatal("the owner finished while a send was running")
-	case <-time.After(200 * time.Millisecond):
+		t.Error("the owner finished while a send was running")
+	default:
 	}
 	close(release)
 	<-done

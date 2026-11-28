@@ -30,11 +30,18 @@ type sendSimRig struct {
 	trace *stepLog
 }
 
-func newSendSimRig(t *testing.T, ctx context.Context) *sendSimRig {
+func newSendSimRig(t *testing.T, ctx context.Context, observers ...func(string)) *sendSimRig {
 	t.Helper()
 	trace := &stepLog{}
 	r := &sendSimRig{trace: trace}
-	r.ownerRig, _ = newRecordedRig(t, func(cfg *OwnerConfig) { cfg.trace = trace.add })
+	r.ownerRig, _ = newRecordedRig(t, func(cfg *OwnerConfig) {
+		cfg.trace = func(step string) {
+			trace.add(step)
+			for _, observe := range observers {
+				observe(step)
+			}
+		}
+	})
 	r.sim = r.srv.EnableSend()
 	r.sim.Register(peerJID(), testPeerLID)
 	r.sim.AddGroup(groupJID(),
@@ -281,7 +288,26 @@ func TestSimulatorStopDuringEachSendStep(t *testing.T) {
 		t.Run(string(tt.step), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
-			r := newSendSimRig(t, ctx)
+			armed := make(chan struct{})
+			var owner *connectionOwner
+			var gen *genState
+			atBarrier := make(chan int, 1)
+			r := newSendSimRig(t, ctx, func(step string) {
+				if step != "barrier_retired" {
+					return
+				}
+				select {
+				case <-armed:
+					owner.mu.Lock()
+					running := gen.sendsRunning
+					owner.mu.Unlock()
+					select {
+					case atBarrier <- running:
+					default:
+					}
+				default:
+				}
+			})
 			step := wasim.Step(strings.TrimSuffix(string(tt.step), "_group"))
 			hold := r.sim.Hold(step)
 			before := len(r.trace.get())
@@ -298,6 +324,15 @@ func TestSimulatorStopDuringEachSendStep(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatalf("%s was not reached\n%s", step, strings.Join(r.log.lines, "\n"))
 			}
+			owner = r.owner
+			owner.mu.Lock()
+			gen = owner.gen
+			running := gen.sendsRunning
+			owner.mu.Unlock()
+			if running != 1 {
+				t.Fatalf("held %s: %d admitted sends, want 1", step, running)
+			}
+			close(armed)
 			r.wantCleanStop(ctx)
 			var err error
 			select {
@@ -316,8 +351,17 @@ func TestSimulatorStopDuringEachSendStep(t *testing.T) {
 			}
 			steps := r.trace.get()[before:]
 			waited, blocked := slices.Index(steps, "sends_waited"), slices.Index(steps, "barrier_retired")
-			if waited < 0 || blocked < 0 || waited > blocked {
-				t.Errorf("steps = %v; want the send waited for before storage was blocked", steps)
+			// A call can return on lifetime cancellation before retirement has to wait for it.
+			if blocked < 0 || waited > blocked {
+				t.Errorf("steps = %v; want storage retirement after any send wait", steps)
+			}
+			select {
+			case running := <-atBarrier:
+				if running != 0 {
+					t.Errorf("storage retired while %d send calls were still running", running)
+				}
+			default:
+				t.Error("storage retirement was not observed")
 			}
 			if got := r.srv.Handshakes(); got != 2 {
 				t.Errorf("handshakes = %d; a send call connected", got)
