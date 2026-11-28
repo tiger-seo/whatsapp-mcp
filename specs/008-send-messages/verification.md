@@ -271,6 +271,35 @@ Non-blocking observations: the send working directory uses `os.MkdirTemp` and is
 case-aliased explicit path to an existing default outbox can skip the default outbox privacy check on
 Windows; a few test waits use polling or timed waits. No owner decision has been recorded for this verdict.
 
+### Review Findings Follow-up (2026-11-28 UTC)
+
+- Reproduced the Windows outbox bug: with a `BUILTIN\Users` read grant on the default outbox, the original code
+  refused its canonical spelling but accepted both the case alias and a child beneath it. The directory identity
+  that grants the outbox exception now also requires a private outbox. The regression test accepts the private
+  aliases and rejects all three unprivate entries.
+- Per-send temporary directories now use `internal/private`; the Windows test verifies a protected ACL beneath
+  a parent that grants inheritable read access to other users.
+- Owner cancellation and retirement tests now synchronize on the relevant events instead of waiting real time.
+  The first repeated simulator run exposed another timing assumption: a completed call need not emit `sends_waited`.
+  The test now observes the admitted-call count at storage retirement. The MCP converter poll still observes an
+  external subprocess, and the in-memory client retry still handles a guard `busy` response without changing the
+  guard's credit lifetime.
+
+Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`; no real account was used.
+
+| Command or check | Result |
+| --- | --- |
+| `go test ./internal/config -run '^TestSendDirsCaseAliasRequiresPrivateOutbox$' -count=1 -v` before the fix | Exit 1; both alias cases reproduced |
+| `go test ./internal/config ./internal/private ./internal/wa -run '^(TestSendDirs\|TestMkdirTemp\|TestSendOwner)' -count=1 -timeout 45s` | Exit 0; all three packages passed |
+| Owner cancellation, retirement and stuck-send tests (`-count=100 -timeout 2m`) | Exit 0; 100 repetitions of each test, including all four retirement subcases |
+| `go test ./... -count=1 -timeout 30m -json` before the simulator assertion correction | Exit 0; 2,472 passed, 0 failed, 37 skipped including subtests; 11 packages passed, one had no test files |
+| `go test ./internal/wa -run '^TestSimulatorStopDuringEachSendStep$' -count=20` after the test correction | Exit 0; all nine scenarios passed in each of 20 repetitions |
+| `go test ./internal/wa -count=1 -timeout 10m` after the test correction | Exit 0 |
+| `gofmt -l .`, `go vet ./...`, `go mod verify`, five CLI builds and govulncheck v1.9.0 | Exit 0 each; no formatting issues or vulnerabilities reported |
+| `go vet`, `go build` and `go test` for `./internal/wa/testdata/cmd/session-check` | Exit 0 each |
+
+Native Linux and macOS CI have not run on these changes. The earlier code verdict does not cover this patch.
+
 ### Not done
 
 | Task | State |
