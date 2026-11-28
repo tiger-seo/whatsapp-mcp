@@ -197,12 +197,21 @@ func OpenSendDirs(c *Config) (dirs []media.AllowedDir, err error) {
 		if err != nil || !os.SameFile(opened, info) {
 			return dirs, refuse(entry, "changed while it was opened", err)
 		}
-		overlaps, err := data.overlaps(resolved, opened)
+		overlaps, inOutbox, err := data.overlaps(resolved, opened)
 		if err != nil {
 			return dirs, refuse(entry, "cannot be compared with the data directory", err)
 		}
 		if overlaps {
 			return dirs, refuse(entry, "is the data directory, contains it or lies inside it; only the default outbox may lie inside", nil)
+		}
+		if inOutbox {
+			if err := private.CheckDir(data.outboxPath); err != nil {
+				return dirs, refuse(entry, "cannot be used as the private outbox: "+err.Error(), err)
+			}
+			current, err := os.Lstat(data.outboxPath)
+			if err != nil || !os.SameFile(current, data.outbox) {
+				return dirs, refuse(entry, "the default outbox changed while it was checked", err)
+			}
 		}
 	}
 	return dirs, nil
@@ -220,7 +229,8 @@ type dataIdentity struct {
 	dir       fs.FileInfo
 	ancestors []fs.FileInfo
 	// outbox is nil unless the data directory holds a real directory of that name.
-	outbox fs.FileInfo
+	outbox     fs.FileInfo
+	outboxPath string
 }
 
 func newDataIdentity(dataDir string) (dataIdentity, error) {
@@ -232,8 +242,8 @@ func newDataIdentity(dataDir string) (dataIdentity, error) {
 	if err != nil {
 		return dataIdentity{}, err
 	}
-	id := dataIdentity{dir: chain[0], ancestors: chain[1:]}
-	info, err := os.Lstat(filepath.Join(resolved, outboxName))
+	id := dataIdentity{dir: chain[0], ancestors: chain[1:], outboxPath: filepath.Join(resolved, outboxName)}
+	info, err := os.Lstat(id.outboxPath)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
@@ -262,21 +272,21 @@ func ancestry(dir string) ([]fs.FileInfo, error) {
 }
 
 // overlaps reports whether the allowed directory at resolved, opened as entry, is or contains the data directory,
-// or lies inside it outside the outbox.
-func (id dataIdentity) overlaps(resolved string, entry fs.FileInfo) (bool, error) {
+// or lies inside it outside the outbox. inOutbox identifies entries that use that exception.
+func (id dataIdentity) overlaps(resolved string, entry fs.FileInfo) (overlaps, inOutbox bool, err error) {
 	for _, ancestor := range id.ancestors {
 		if os.SameFile(entry, ancestor) {
-			return true, nil
+			return true, false, nil
 		}
 	}
 	chain, err := ancestry(resolved)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	inside, inOutbox := false, false
+	inside := false
 	for _, info := range chain {
 		inside = inside || os.SameFile(info, id.dir)
 		inOutbox = inOutbox || (id.outbox != nil && os.SameFile(info, id.outbox))
 	}
-	return inside && !inOutbox, nil
+	return inside && !inOutbox, inside && inOutbox, nil
 }

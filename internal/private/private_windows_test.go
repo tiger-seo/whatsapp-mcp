@@ -70,6 +70,23 @@ func TestMkdirAllProtected(t *testing.T) {
 	f.Close()
 }
 
+func TestMkdirTempProtected(t *testing.T) {
+	parent := privateTemp(t)
+	grantUsers(t, parent, "(OI)(CI)R")
+	dir, err := MkdirTemp(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sd, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, _, err := sd.Control()
+	if err != nil || control&windows.SE_DACL_PROTECTED == 0 {
+		t.Fatalf("temporary directory's ACL is not protected: %v", err)
+	}
+}
+
 func TestCheckDirInheritedAccess(t *testing.T) {
 	parent := filepath.Join(t.TempDir(), "shared")
 	if err := os.Mkdir(parent, 0o700); err != nil {

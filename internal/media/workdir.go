@@ -29,12 +29,8 @@ func newWorkDir(dataDir string) (string, error) {
 	if err := private.MkdirAll(parent); err != nil {
 		return "", errWorkFile
 	}
-	dir, err := os.MkdirTemp(parent, "send-")
+	dir, err := private.MkdirTemp(parent)
 	if err != nil {
-		return "", errWorkFile
-	}
-	if err := private.CheckDir(dir); err != nil {
-		_ = os.Remove(dir)
 		return "", errWorkFile
 	}
 	return dir, nil

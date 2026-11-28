@@ -1,10 +1,13 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/tiger-seo/whatsapp-mcp/internal/private"
 )
 
 // junction creates a directory junction, which needs no privilege.
@@ -44,4 +47,35 @@ func TestSendDirsJunction(t *testing.T) {
 	}
 	_, err := openDirs(t, loadSending(t, behind, "*"))
 	wantSendDirRefusal(t, err)
+}
+
+func TestSendDirsCaseAliasRequiresPrivateOutbox(t *testing.T) {
+	data := privateDir(t)
+	outbox := filepath.Join(data, "outbox")
+	child := filepath.Join(outbox, "child")
+	if err := private.MkdirAll(child); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(data, "OUTBOX")
+	if _, err := os.Stat(alias); os.IsNotExist(err) {
+		t.Skip("the volume is case-sensitive")
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []string{alias, filepath.Join(alias, "child")} {
+		if _, err := openDirs(t, loadSending(t, data, "*", entry)); err != nil {
+			t.Fatalf("private outbox alias refused: %v", err)
+		}
+	}
+	if output, err := exec.Command("icacls", outbox, "/grant", "*S-1-5-32-545:(RX)").CombinedOutput(); err != nil {
+		t.Fatalf("grant Users access to the test outbox: %v: %s", err, output)
+	}
+	for _, entry := range []string{outbox, alias, filepath.Join(alias, "child")} {
+		_, err := openDirs(t, loadSending(t, data, "*", entry))
+		wantSendDirRefusal(t, err)
+		var privacyErr *private.Error
+		if !errors.As(err, &privacyErr) {
+			t.Errorf("expected a privacy error for %s, got %v", entry, err)
+		}
+	}
 }
