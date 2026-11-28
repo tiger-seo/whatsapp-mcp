@@ -207,6 +207,49 @@ jobs:
           grep -E '^\s*--- (PASS|SKIP|FAIL)' run-guard.log | sed -E 's/ \([0-9.]+s\)//' | sort | uniq -c | sort -rn | head -150
           echo "passed: $(grep -cE '^\s*--- PASS' run-guard.log)  skipped: $(grep -cE '^\s*--- SKIP' run-guard.log)  failed: $(grep -cE '^\s*--- FAIL' run-guard.log)"
           grep -E '^\s*--- SKIP' -B2 run-guard.log | grep -vE '^--$' | head -60 || true
+      # The path rules for sending differ per OS (symlinks, junctions, streams, FIFOs, case-insensitive volumes), and
+      # a case that needs a privilege or a file system the runner lacks is skipped: the summary shows which ran.
+      - name: send platform controls (verbose summary)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          echo "commit=$(git rev-parse HEAD) date=$(date -u +%FT%TZ) native=$(go env GOOS GOARCH | xargs)"
+          go test -timeout 10m -count=1 -v -run 'SendDirs|SendPath|SendConvert' ./internal/config ./internal/media > send-paths.log 2>&1 || { tail -n 80 send-paths.log; exit 1; }
+          grep -E '^\s*--- (PASS|SKIP|FAIL)' send-paths.log | sed -E 's/ \([0-9.]+s\)//' | sort
+          echo "passed: $(grep -cE '^\s*--- PASS' send-paths.log)  skipped: $(grep -cE '^\s*--- SKIP' send-paths.log)  failed: $(grep -cE '^\s*--- FAIL' send-paths.log)"
+          grep -E 'not verified|allowed directory' send-paths.log || true
+
+  # The converter tests against a real ffmpeg, installed the way users install it. On Windows the package manager
+  # puts a launcher on PATH that starts the real program, which the converter must still be able to stop.
+  ffmpeg:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    name: real ffmpeg (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: install ffmpeg
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: install ffmpeg
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - name: install ffmpeg
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+      - name: converter tests with the installed ffmpeg
+        shell: bash
+        env:
+          WA_FFMPEG_TESTS: "1"
+        run: |
+          echo "commit=$(git rev-parse HEAD) date=$(date -u +%FT%TZ) native=$(go env GOOS GOARCH | xargs) program=$(command -v ffmpeg)"
+          go test -timeout 10m -count=1 -v -run RealFFmpeg ./internal/media
 
   # The tests that take minutes on a slow disk: a 500 MiB listing and a 400,000-message memory check. They show that
   # a limit holds and are not needed on every push, so they run on Linux only, at night, and only if main has a
