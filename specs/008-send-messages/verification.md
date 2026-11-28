@@ -20,7 +20,7 @@
 | design | 2026-11-28 | 25c6bb8 | PASS | |
 | code | 2026-11-28 | 862034b | CONCERNS | |
 | code | 2026-11-28 | 3c0c122 | CONCERNS | |
-| code | 2026-11-28 | 8d1a168 | CONCERNS | |
+| code | 2026-11-28 | 8d1a168 | CONCERNS | 2026-11-28: Owner accepts the intermittent Windows full-suite search timeouts for opening the PR. Not merge approval. |
 
 ## Design review of `3254097` (BLOCK): handling
 
@@ -318,8 +318,8 @@ and the revised owner and simulator tests synchronize on events.
 
 In the full run, `sparse_needle` and `not-present` hit the five-second search deadline (5.002 s and 5.005 s).
 The search implementation was not changed; isolated success does not establish the cause or rule out a
-regression in full-suite behavior. A comparable full-suite run on `main` is still missing. No owner
-decision has been recorded, and native Linux and macOS verification of the follow-up remains open before merge.
+regression in full-suite behavior. A comparable full-suite run on `main` is still missing. The owner accepted
+the concern for opening the PR only. Native Linux and macOS verification of the follow-up remains open before merge.
 
 ### Not done
 
@@ -327,4 +327,3 @@ decision has been recorded, and native Linux and macOS verification of the follo
 | --- | --- |
 | T037 | documentation written; the `docs/roadmap.md` "Done" line waits for the merge |
 | T038 | real account: **not verified**; needs the owner's permission for each step, including the client time-limit measurement |
-| T039 | Implementation and evidence committed; code re-review returned `CONCERNS` at `8d1a168`. The PR gate remains uncleared. |

@@ -293,7 +293,7 @@ description: "Implementation tasks for sending text, files and voice notes"
   - cleanup by unlinking on the phone, then deleting the directory.
 
   Record redacted results in `specs/008-send-messages/verification.md`; a step not run is "not verified".
-- [ ] T039 Commit the implementation and its `verification.md` evidence, then run the `owner-judge` agent in **code** mode and record its row. Resolve `BLOCK`, record the owner's decision for `CONCERNS`, and review again whenever covered work changes. Do this before creating or merging the pull request.
+- [X] T039 Commit the implementation and its `verification.md` evidence, then run the `owner-judge` agent in **code** mode and record its row. Resolve `BLOCK`, record the owner's decision for `CONCERNS`, and review again whenever covered work changes. Do this before creating or merging the pull request.
 
 ## Dependencies and Execution Order
 
