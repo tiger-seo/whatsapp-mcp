@@ -218,12 +218,27 @@ into the project baseline could be clearer. This is a design verdict, not a code
 ### Code Review of `862034b` (CONCERNS)
 
 The review confirmed that the passing native CI covered the same implementation, but the local Windows store
-timeouts remain unexplained. No same-host baseline run against `main` has been recorded. The reviewer's permissions
+timeouts remain unexplained. No same-host baseline run against `main` was available at review time. The reviewer's permissions
 prevented independent Go checks and access to the pinned fork in the module cache. No code `PASS` was issued.
 
 The review also noted that `os.MkdirTemp` creates the per-send directory under the private work root and that the
 directory is checked before use, but its creation does not go through `internal/private`. Native device-node
 refusal on Linux and macOS, socket refusal on macOS, Windows 8.3 names, and Intel and physical Macs remain not verified.
+
+### Same-Host Store Comparison (2026-11-28 UTC)
+
+On Windows/amd64 with Go 1.27.4 and `CGO_ENABLED=0`, ran
+`go test -p 1 ./internal/store -count=1 -timeout 30m -json` once on each revision, sequentially. The baseline
+was a temporary export of `origin/main`; the feature ran in the existing checkout. Counts include subtests.
+
+| Revision | UTC time | Exit | Pass / fail / skip | `sparse_needle` | `not-present` | `TestToolMessageContextRowCap` |
+| --- | --- | --- | --- | --- | --- | --- |
+| `origin/main` (`8c07f92`) | 01:47–01:53 | 0 | 738 / 0 / 12 | 2.45 s | 2.58 s | 2.43 s |
+| Feature (`8dc4ad0`, same code as `862034b`) | 01:53–01:58 | 0 | 741 / 0 / 12 | 2.57 s | 2.85 s | 1.99 s |
+
+Neither revision reproduced the timeouts in the store-only suite. This comparison establishes neither the cause
+of the earlier failures nor a passing local full-repository run. No test or deadline was changed. The recorded code
+verdict remains `CONCERNS`; no PR was opened.
 
 ### Not done
 
