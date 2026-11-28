@@ -142,6 +142,9 @@ func (c *Conn) readLoop(ctx context.Context) {
 				_ = c.Send(ctx, *reply)
 			}
 		}
+		if sim := c.server.send.Load(); sim != nil && !answered {
+			answered = sim.handle(ctx, c, node)
+		}
 		if reply := mediaConnReply(node); !answered && reply != nil {
 			answered = true
 			_ = c.Send(ctx, *reply)

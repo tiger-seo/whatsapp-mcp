@@ -16,6 +16,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/tiger-seo/whatsapp-mcp/internal/media/sendapi"
 )
 
 // SDKErrorLatch exposes a payload-free signal for terminal SDK internal errors.
@@ -64,7 +65,11 @@ func GuardTransportWithReporter(inner sdk.Transport, reporter GuardReporter) sdk
 type guardedTransport struct {
 	inner    sdk.Transport
 	reporter GuardReporter
-	attach   func(*guardedConnection)
+	// clock times the tool deadlines; nil is the process clock.
+	clock sendapi.Clock
+	// sends says that the send tools are registered. Without it their names are unknown tools like any other.
+	sends  bool
+	attach func(*guardedConnection)
 }
 
 func (t guardedTransport) Connect(ctx context.Context) (sdk.Connection, error) {
@@ -74,6 +79,10 @@ func (t guardedTransport) Connect(ctx context.Context) (sdk.Connection, error) {
 	}
 	g := newGuardedConnection(c)
 	g.reporter = t.reporter
+	if t.clock != nil {
+		g.clock = t.clock
+	}
+	g.sends = t.sends
 	if t.attach != nil {
 		t.attach(g)
 	}
@@ -84,7 +93,51 @@ type guardEntry struct {
 	tool, cancelled, writing bool
 	internal                 jsonrpc.ID
 	identity                 DiagnosticTool
-	deadline                 time.Time
+	// admitted is when the request was admitted and deadline when its tool call must have been answered.
+	admitted, deadline time.Time
+}
+
+// The time a tool call has, from its admission to the end of its response. A send has two minutes to reach
+// WhatsApp's acceptance and five seconds for its local record, which leaves ten for the reply.
+const (
+	toolDeadline = 10 * time.Second
+	sendDeadline = 2*time.Minute + 15*time.Second
+)
+
+// admission returns when the tool call in flight was admitted. One tool credit per session makes it unambiguous.
+func (g *guardedConnection) admission() (time.Time, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, entry := range g.active {
+		if entry.tool {
+			return entry.admitted, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// within runs write under a deadline on the guard's clock: the context carries what is left, and the connection is
+// closed when it passes before the write returns. late reports that it had passed by then.
+func (g *guardedConnection) within(ctx context.Context, deadline time.Time, write func(context.Context) error) (err error, late bool) {
+	left := deadline.Sub(g.clock.Now())
+	writeCtx, cancel := context.WithTimeout(ctx, left)
+	defer cancel()
+	expired, stop := g.clock.NewTimer(left)
+	done := make(chan struct{})
+	watched := make(chan struct{})
+	go func() {
+		defer close(watched)
+		select {
+		case <-expired:
+			_ = g.close(true)
+		case <-done:
+		}
+	}()
+	err = write(writeCtx)
+	close(done)
+	stop()
+	<-watched
+	return err, !g.clock.Now().Before(deadline)
 }
 
 func guardToolIdentity(r *jsonrpc.Request) DiagnosticTool {
@@ -118,6 +171,12 @@ func diagnosticToolIdentity(name string) DiagnosticTool {
 		return DiagnosticMessageContext
 	case "get_last_interaction":
 		return DiagnosticLastInteraction
+	case string(sendapi.ToolMessage):
+		return DiagnosticSendMessage
+	case string(sendapi.ToolFile):
+		return DiagnosticSendFile
+	case string(sendapi.ToolAudio):
+		return DiagnosticSendAudio
 	default:
 		return DiagnosticToolUnknown
 	}
@@ -138,6 +197,8 @@ func (g *guardedConnection) report(denial GuardDenial, identity DiagnosticTool) 
 type guardedConnection struct {
 	inner                               sdk.Connection
 	reporter                            GuardReporter
+	clock                               sendapi.Clock
+	sends                               bool
 	mu                                  sync.Mutex
 	active                              map[jsonrpc.ID]guardEntry
 	tool, initialized, notified, closed bool
@@ -160,7 +221,7 @@ type guardReadResult struct {
 }
 
 func newGuardedConnection(c sdk.Connection) *guardedConnection {
-	return &guardedConnection{inner: c, active: make(map[jsonrpc.ID]guardEntry), done: make(chan struct{}), readRequest: make(chan struct{}), readResult: make(chan guardReadResult)}
+	return &guardedConnection{inner: c, clock: sendapi.SystemClock{}, active: make(map[jsonrpc.ID]guardEntry), done: make(chan struct{}), readRequest: make(chan struct{}), readResult: make(chan guardReadResult)}
 }
 
 func (g *guardedConnection) SessionID() string { return g.inner.SessionID() }
@@ -253,29 +314,22 @@ func (g *guardedConnection) readInput(ctx context.Context) (jsonrpc.Message, boo
 			}
 		}
 		g.mu.Unlock()
-		var timer *time.Timer
+		stopTimer := func() {}
 		var timeout <-chan time.Time
 		if !deadline.IsZero() {
-			timer = time.NewTimer(time.Until(deadline))
-			timeout = timer.C
+			timeout, stopTimer = g.clock.NewTimer(deadline.Sub(g.clock.Now()))
 		}
 		select {
 		case <-g.done:
-			if timer != nil {
-				timer.Stop()
-			}
+			stopTimer()
 			return nil, false, sdk.ErrConnectionClosed
 		case <-ctx.Done():
-			if timer != nil {
-				timer.Stop()
-			}
+			stopTimer()
 			return nil, false, ctx.Err()
 		case result := <-g.readResult:
-			if timer != nil {
-				timer.Stop()
-			}
+			stopTimer()
 			g.reading = false
-			if !deadline.IsZero() && !time.Now().Before(deadline) {
+			if !deadline.IsZero() && !g.clock.Now().Before(deadline) {
 				if cancellation := g.deadlineCancellation(target); cancellation != nil {
 					g.pending = &result
 					return cancellation, true, nil
@@ -359,10 +413,22 @@ func parseRawID(raw json.RawMessage) (jsonrpc.ID, bool) {
 }
 
 func parameterObject(raw json.RawMessage, optional bool) (map[string]json.RawMessage, bool) {
+	return boundedParameterObject(raw, optional, maxInputFrame)
+}
+
+// isSendCall reports parameters that call a send tool.
+func isSendCall(raw json.RawMessage) bool {
+	var p struct {
+		Name string `json:"name"`
+	}
+	return json.Unmarshal(raw, &p) == nil && diagnosticToolIdentity(p.Name).send()
+}
+
+func boundedParameterObject(raw json.RawMessage, optional bool, limit int) (map[string]json.RawMessage, bool) {
 	if len(raw) == 0 && optional {
 		return map[string]json.RawMessage{}, true
 	}
-	if len(raw) > 64<<10 {
+	if len(raw) > limit {
 		return nil, false
 	}
 	if !boundedParameterShape(raw) {
@@ -485,10 +551,15 @@ func validStringField(fields map[string]json.RawMessage, name string) bool {
 	return len(raw) > 0 && raw[0] == '"' && json.Unmarshal(raw, &value) == nil
 }
 
-func validRequestParams(r *jsonrpc.Request) bool {
+// validRequestParams checks a request's parameters. A call of a send tool may be as long as its text needs.
+func validRequestParams(r *jsonrpc.Request, send bool) bool {
 	switch r.Method {
 	case "initialize", "tools/list", "tools/call", "ping":
-		fields, ok := parameterObject(r.Params, r.Method != "initialize")
+		limit := maxInputFrame
+		if send {
+			limit = maxSendFrame
+		}
+		fields, ok := boundedParameterObject(r.Params, r.Method != "initialize", limit)
 		if !ok {
 			return false
 		}
@@ -555,6 +626,12 @@ func (g *guardedConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 					g.mu.Unlock()
 					continue
 				}
+				if entry.writing && entry.identity.send() {
+					// The reply to a send is already on its way. It must reach the client: a lost one would look like
+					// a failed send and invite a second message.
+					g.mu.Unlock()
+					continue
+				}
 				entry.cancelled = true
 				g.active[id] = entry
 				if entry.writing {
@@ -609,8 +686,11 @@ func (g *guardedConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 		}
 		tool := r.Method == "tools/call"
 		identity := guardToolIdentity(r)
+		if identity.send() && !g.sends {
+			identity = DiagnosticToolUnknown
+		}
 		busy := len(g.active) >= 4 || (tool && g.tool)
-		invalid := !validRequestParams(r)
+		invalid := !validRequestParams(r, identity.send())
 		if !busy {
 			if g.nextID == math.MaxUint64 {
 				g.mu.Unlock()
@@ -620,7 +700,11 @@ func (g *guardedConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 			internal, _ := jsonrpc.MakeID(strconv.FormatUint(g.nextID, 10))
 			entry := guardEntry{tool: tool, internal: internal, identity: identity}
 			if tool {
-				entry.deadline = time.Now().Add(10 * time.Second)
+				entry.admitted = g.clock.Now()
+				entry.deadline = entry.admitted.Add(toolDeadline)
+				if identity.send() {
+					entry.deadline = entry.admitted.Add(sendDeadline)
+				}
 			}
 			g.active[r.ID] = entry
 			if tool {
@@ -661,19 +745,14 @@ func (g *guardedConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
 				}
 				reply.Error, reply.Result = nil, result
 			}
-			writeCtx := ctx
-			cancel := func() {}
-			var timer *time.Timer
-			if !deadline.IsZero() {
-				writeCtx, cancel = context.WithDeadline(ctx, deadline)
-				timer = time.AfterFunc(time.Until(deadline), func() { _ = g.close(true) })
+			var err error
+			late := false
+			if deadline.IsZero() {
+				err = g.inner.Write(ctx, reply)
+			} else {
+				err, late = g.within(ctx, deadline, func(ctx context.Context) error { return g.inner.Write(ctx, reply) })
 			}
-			err := g.inner.Write(writeCtx, reply)
-			if timer != nil {
-				timer.Stop()
-			}
-			cancel()
-			if err != nil || (!deadline.IsZero() && !time.Now().Before(deadline)) {
+			if err != nil || late {
 				_ = g.close(true)
 				return nil, errors.New("response write failed")
 			}
@@ -733,7 +812,9 @@ func (g *guardedConnection) Write(ctx context.Context, msg jsonrpc.Message) erro
 		_ = g.close(true)
 		return errors.New("unknown response")
 	}
-	if entry.tool && entry.cancelled && r.Error == nil {
+	// A send that was cancelled while its handler was returning may still report success; the guard writes it rather
+	// than closing the session over a message that was sent.
+	if entry.tool && entry.cancelled && r.Error == nil && !entry.identity.send() {
 		var result struct {
 			IsError bool `json:"isError"`
 		}
@@ -757,19 +838,14 @@ func (g *guardedConnection) Write(ctx context.Context, msg jsonrpc.Message) erro
 		copy.Error = &jsonrpc.Error{Code: code, Message: "request failed"}
 		copy.Result = nil
 	}
-	writeCtx := ctx
-	cancel := func() {}
-	var timer *time.Timer
+	var err error
+	late := false
 	if entry.tool {
-		writeCtx, cancel = context.WithDeadline(ctx, entry.deadline)
-		timer = time.AfterFunc(time.Until(entry.deadline), func() { _ = g.close(true) })
+		err, late = g.within(ctx, entry.deadline, func(ctx context.Context) error { return g.inner.Write(ctx, &copy) })
+	} else {
+		err = g.inner.Write(ctx, &copy)
 	}
-	err := g.inner.Write(writeCtx, &copy)
-	if timer != nil {
-		timer.Stop()
-	}
-	cancel()
-	if err != nil || (entry.tool && !time.Now().Before(entry.deadline)) {
+	if err != nil || late {
 		_ = g.close(true)
 		return fmt.Errorf("response write failed")
 	}

@@ -15,7 +15,10 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// maxInputFrame bounds every input frame except a call of a send tool, whose text may be 65,536 bytes before JSON
+// escaping makes it longer; maxSendFrame bounds that one.
 const maxInputFrame = 64 << 10
+const maxSendFrame = 512 << 10
 const maxOutputFrame = 8 << 20
 
 // inputEndWait bounds how long end of input waits for a response write in progress.
@@ -145,6 +148,12 @@ func readFrames(r io.Reader, out chan<- frameEvent, activity chan<- frameActivit
 						return
 					}
 				}
+				if len(b) == cap(b) && cap(b) < maxSendFrame {
+					// Only a frame that outgrows the ordinary buffer gets the larger one, allocated once and exactly.
+					larger := make([]byte, len(b), maxSendFrame)
+					copy(larger, b)
+					b = larger
+				}
 				b = append(b, one[0])
 				if one[0] == '\n' {
 					select {
@@ -165,7 +174,7 @@ func readFrames(r io.Reader, out chan<- frameEvent, activity chan<- frameActivit
 					}
 					break
 				}
-				if len(b) == maxInputFrame {
+				if len(b) == maxSendFrame {
 					select {
 					case out <- frameEvent{err: errFrame}:
 					case <-done:
@@ -276,7 +285,7 @@ func (c *framedConnection) readHeld(ctx context.Context) (jsonrpc.Message, func(
 }
 
 func validateFrame(b []byte) error {
-	if len(b) > maxInputFrame || len(b) == 0 || b[len(b)-1] != '\n' {
+	if len(b) > maxSendFrame || len(b) == 0 || b[len(b)-1] != '\n' {
 		return errFrame
 	}
 	dec := json.NewDecoder(bytes.NewReader(b))
@@ -344,6 +353,9 @@ func validateFrame(b []byte) error {
 	}
 	var method string
 	if json.Unmarshal(obj["method"], &method) != nil {
+		return errFrame
+	}
+	if len(b) > maxInputFrame && (method != "tools/call" || !isSendCall(obj["params"])) {
 		return errFrame
 	}
 	if method == "notifications/cancelled" {

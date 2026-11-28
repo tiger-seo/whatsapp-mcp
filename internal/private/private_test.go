@@ -54,6 +54,27 @@ func TestMkdirAllNested(t *testing.T) {
 	}
 }
 
+func TestMkdirTemp(t *testing.T) {
+	parent := privateTemp(t)
+	seen := map[string]bool{}
+	for range 2 {
+		dir, err := MkdirTemp(parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if filepath.Dir(dir) != parent || seen[dir] {
+			t.Fatalf("not a new directory in the parent: %s", dir)
+		}
+		seen[dir] = true
+		if err := CheckDir(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := MkdirTemp(filepath.Join(parent, "missing")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("missing parent: %v", err)
+	}
+}
+
 func TestCheckDirMissing(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "missing")
 	if err := CheckDir(dir); !errors.Is(err, fs.ErrNotExist) {

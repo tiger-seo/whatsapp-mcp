@@ -25,6 +25,8 @@ type streams struct {
 	stderr      io.Writer
 	environ     []string
 	diagnostics *mcp.Diagnostics
+	// config is the loaded configuration of a long-running command, set before its body runs.
+	config *config.Config
 }
 
 type command struct {

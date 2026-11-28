@@ -23,6 +23,9 @@ import (
 var binary string
 
 func TestMain(m *testing.M) {
+	if events := os.Getenv(sendChildEvents); events != "" {
+		os.Exit(runSendChild(events, os.Args[1:]))
+	}
 	if os.Getenv("WA_TEST_FORCED_SHUTDOWN_DIR") != "" || os.Getenv("WA_TEST_NATIVE_DIAGNOSTICS") != "" {
 		os.Exit(m.Run())
 	}

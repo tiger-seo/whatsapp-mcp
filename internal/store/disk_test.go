@@ -68,3 +68,31 @@ func TestFreeBytesReal(t *testing.T) {
 		t.Errorf("freeBytes = %d, %v", n, err)
 	}
 }
+
+func TestFreshFreeBytesLimitsNothingAndNeverUsesTheCache(t *testing.T) {
+	st, _ := openTest(t, newDataDir(t))
+	calls, free, fail := 0, uint64(diskResume), error(nil)
+	st.disk.mu.Lock()
+	st.disk.free = func(dir string) (uint64, error) {
+		calls++
+		if dir != st.disk.dir {
+			t.Errorf("measured %q, want the data directory", dir)
+		}
+		return free, fail
+	}
+	st.disk.mu.Unlock()
+	for i, want := range []uint64{diskResume, diskReserve - 1, 0} {
+		free = want
+		got, err := st.FreshFreeBytes()
+		if err != nil || got != want || calls != i+1 {
+			t.Fatalf("FreshFreeBytes = %d, %v after %d measurements; want %d", got, err, calls, want)
+		}
+	}
+	fail = errors.New("no measurement")
+	if _, err := st.FreshFreeBytes(); !errors.Is(err, fail) {
+		t.Errorf("failed measurement = %v, want it returned", err)
+	}
+	if DiskResumeBytes != diskResume {
+		t.Errorf("DiskResumeBytes = %d, want %d", DiskResumeBytes, diskResume)
+	}
+}

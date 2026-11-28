@@ -6,8 +6,9 @@ session and your messages.
 ## Storage
 
 Everything the binary keeps lives in one SQLite file, `whatsapp.db`, in the data directory. While the process
-runs, SQLite also keeps `whatsapp.db-wal` and `whatsapp.db-shm` next to it. Nothing else is stored: no other
-database, no temporary files.
+runs, SQLite also keeps `whatsapp.db-wal` and `whatsapp.db-shm` next to it. There is no other database. Sending
+adds two directories there: `outbox`, where you place files to send, and `send-work`, which holds a private copy
+of a file only while it is being sent (see [Sending](#sending-feature-008)).
 
 ### Files and privacy
 
@@ -346,7 +347,8 @@ the tools themselves read the local store and work while the account is disconne
 no per-chat restriction or per-read approval. Names, captions and messages are untrusted data, not instructions.
 A prompt-injected client can request unrelated conversations, and the client or its AI provider can retain
 results. Use a client and provider whose data handling you trust. There are no MCP login, QR, pairing, recovery,
-send or media download tools, no HTTP listener and no proxy. `pair` and offline `status` remain separate commands.
+or media download tools, no HTTP listener and no proxy. Sending has its own tools and its own permission; see
+[Sending](#sending-feature-008). `pair` and offline `status` remain separate commands.
 
 | Tool | What it returns |
 | --- | --- |
@@ -388,7 +390,8 @@ and retry. Ordinary writes retain their existing policy. A tool-held WAL crossin
 and fences the next writer until the snapshot returns. If the wait expires, writes fail rather than bypass the
 held snapshot. This is not a cap on ordinary WAL growth.
 
-The session caps input frames at 64 KiB, JSON depth at 16 and tokens at 4,096. There are four outstanding request
+The session caps input frames at 64 KiB (512 KiB for a call of a send tool, whose text may need it), JSON depth
+at 16 and tokens at 4,096. There are four outstanding request
 slots, including the one tool. After 1,024 forwarded notifications, the next eligible notification ends the
 session. Output caps are 2 MiB structured JSON, 2 MiB safe JSON text and 8 MiB for the full response frame.
 Store and tool timers request cancellation at 5 s and 10 s respectively; these are not completion guarantees.
@@ -406,3 +409,101 @@ exit remains available.
 fake owners on Windows/amd64, Linux/amd64 and macOS/arm64. Linux/arm64 and macOS/amd64 were cross-built, not
 verified natively. No real account was used for feature 006. See the
 [verification record](.specify/archive/006-mcp-stdio-tools/verification.md) for the exact coverage and limitations.
+
+## Sending (feature 008)
+
+`stdio` also offers `send_message`, `send_file` and `send_audio_message`. Each call sends a WhatsApp message in
+your name. **Sending is off until you list who may receive it.** The tools need a connected session; they never
+pair, reconnect or start recovery, and nothing is queued while disconnected.
+
+### Settings
+
+| Setting | Flag and environment variable | Default | Meaning |
+| --- | --- | --- | --- |
+| `send_allowed_recipients` | `--send-allowed-recipients`, `WHATSAPP_MCP_SEND_ALLOWED_RECIPIENTS` | empty: sending is off | Phone numbers, phone JIDs, LIDs and group JIDs that may be sent to, separated by commas (a TOML array in `config.toml`). `*`, only as the sole entry, permits **any** recipient. |
+| `send_allowed_dirs` | `--send-allowed-dirs`, `WHATSAPP_MCP_SEND_ALLOWED_DIRS` | `<data dir>/outbox` | Directories files may be sent from, separated by the system's path-list separator (`;` on Windows, `:` elsewhere), or a TOML array. |
+| `ffmpeg` | `--ffmpeg`, `WHATSAPP_MCP_FFMPEG` | unset: `ffmpeg` on `PATH` | Absolute path of the converter. On Windows it must be an `.exe` or `.com`, not a batch file. |
+
+```toml
+send_allowed_recipients = ["+49 151 00000000", "120363000000000000@g.us"]
+send_allowed_dirs = ['C:\Users\me\whatsapp-outbox']
+```
+
+Invalid values stop the start and name the setting. The directories are resolved, checked and opened only when
+`send_allowed_recipients` is not empty: each must exist, and must not be the data directory, contain it or lie
+inside it (the default outbox and its subdirectories excepted). The default outbox is then created, private to
+you. With sending off, `stdio` does not look at the directories, and `status` never does.
+
+**Permission.** The server checks the allow-list before it opens a file or contacts WhatsApp. A LID and the phone
+number it maps to count as the same recipient. Nothing in a tool call, a stored message or an "approval" can widen
+the list. The list limits **who** receives, not **what**: a client that was misled by a message can still send
+stored text or an allowed file to a permitted recipient, and with `*` to anyone.
+
+### Limits
+
+- One send at a time. While a send runs, every other tool call of the session, reads included, is answered `busy`.
+- At most 10 sends in a minute and 200 in 24 hours. A send counts once it is handed to WhatsApp, whatever happens
+  next. The count is kept in memory and starts again after a restart.
+- A phone number without a stored chat is first checked with WhatsApp: at most 10 such lookups a minute and 100 in
+  24 hours, each result remembered for 24 hours (at most 1,000 numbers).
+- A message or caption is at most 65,536 bytes. A file is 1 byte to 100 MiB.
+- A send has 2 minutes to reach WhatsApp's acknowledgement, and then at most 5 seconds to record itself. **Your MCP
+  client may give up sooner** (many default to about a minute); that has not been measured yet.
+
+### Outcomes
+
+A success names the chat, the message ID and the time, and says whether the message is in the local history
+(`local_record`). Failures are tool errors with a code. Two need care before you send again:
+
+- `outcome_unknown`: the connection, the time limit or an unrecognised error ended the call after the message was
+  handed to WhatsApp. **It may have been delivered.** Check the chat. It is not retried.
+- `sent_cancelled`: the client cancelled the request after WhatsApp accepted the message. **It was sent.** If your
+  client does not show the reply to a cancelled call, check `list_messages` or the chat before sending again.
+
+### Files
+
+`media_path` must be an absolute local path that resolves, links followed, into an allowed directory. Refused:
+relative, UNC, device and `\\?\` paths, alternate data streams, anything that is not a regular file, files with
+more than one hard link, empty files and files over 100 MiB. A file that changes size while it is read is refused.
+Files are never moved, changed or deleted.
+
+- On Windows a path through a **junction** is refused, even when it points inside an allowed directory. An allowed
+  directory behind a junction (some redirected user profiles) stops the start when sending is enabled.
+- An allowed directory is opened once at start. On Windows it cannot be renamed or deleted while `stdio` runs. On
+  Unix it can, and the old directory stays the one files are read from until a restart.
+- The extension chooses the type: `jpg`, `jpeg`, `png`, `gif`, `webp` as an image; `mp4`, `avi`, `mov` as a video;
+  `ogg` as a voice note (it must be Ogg Opus, and takes no caption); anything else as a document with the file's
+  name.
+- A file send copies the file into `send-work` first and encrypts it there. It is refused unless the data
+  directory's volume has 512 MiB free plus twice the file's size; `send_audio_message` needs 512 MiB plus the
+  file's size plus 200 MiB. The directory is emptied after each send and at the next start.
+- **A file on a hung network drive** can leave a read that never returns. The call still ends, but every later send
+  is answered `busy` until you restart `stdio`.
+
+### Voice notes and ffmpeg
+
+`send_audio_message` sends Ogg Opus as it is and converts `mp3`, `wav`, `m4a`, `aac`, `flac`, `ogg`, `opus` and
+`amr` with ffmpeg, which is not shipped with the binary. Without it the call fails with `ffmpeg_missing`; Ogg Opus
+still works. A configured path wins; otherwise `ffmpeg` is searched on `PATH`, never in the current directory. The
+reported duration is limited to 300 seconds.
+
+The converter gets a private copy under a fixed name, an empty environment (on Windows only `SystemRoot`), one
+input format chosen by the extension and only local file input. It runs one at a time for at most 60 seconds, its
+output is limited to 100 MiB, and its whole process tree is stopped when a limit, a cancellation or a shutdown
+ends it. **It is not sandboxed by the operating system**: a flaw in ffmpeg reached through a crafted audio file
+runs with your rights. Keep ffmpeg updated.
+
+### Logs
+
+Each send attempt writes one `event=send_attempt` record to stderr with the tool, the kind of recipient address,
+the outcome and result code, the media type and the duration. No address, text, caption, path or file content is
+logged. `send_record_missing` means a sent message is not in the local history; a `store.io_error` can accompany it
+when the write was cancelled. A failed stderr write ends the session, as for other audit records.
+
+### What has been checked
+
+See the [feature verification record](specs/008-send-messages/verification.md). Sending was tested with fakes, a
+simulated WhatsApp server and, for the converter, a stand-in program and a real ffmpeg. **It has not been tried on
+a real account**: delivery, how a phone shows each type and voice note, the real server's refusals and a client's
+own time limit are unverified.
+

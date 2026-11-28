@@ -5,6 +5,16 @@ import (
 	"time"
 )
 
+// DiskResumeBytes is the free space at which a refusing disk guard lets writes through again. Work outside the
+// store that fills the same volume keeps at least this much free.
+const DiskResumeBytes uint64 = diskResume
+
+// FreshFreeBytes measures the free space of the data directory's volume now, with the guard's own measurement and
+// never its cached value. Unlike the guard, it returns a failed measurement as an error.
+func (s *Store) FreshFreeBytes() (uint64, error) {
+	return s.disk.free(s.disk.dir)
+}
+
 // diskGuard refuses writes when free space falls below the reserve. A measurement is reused for 30 s. Once
 // refusing, it keeps refusing until 512 MiB is free, so a disk hovering at the limit does not flap.
 type diskGuard struct {

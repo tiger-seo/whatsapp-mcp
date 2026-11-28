@@ -3,8 +3,10 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/tiger-seo/whatsapp-mcp/internal/media/sendapi"
 	"io"
 	"log/slog"
 	"os"
@@ -856,5 +858,78 @@ func TestDiagnosticsStderrSubprocess(t *testing.T) {
 			}
 			t.Logf("child_exit=%d %s", cmd.ProcessState.ExitCode(), strings.TrimSpace(out.String()))
 		})
+	}
+}
+
+func TestDiagnosticsSendAttempts(t *testing.T) {
+	r := newSendRig(t, func(o *sendOptions) { o.recipients = []string{sendPeerJID, sendGroupJID} })
+	client := r.client()
+	const secret = "synthetic-secret-text"
+	call(t, client, "send_message", sendText(sendPeer, secret))
+	call(t, client, "send_message", sendText(sendGroupJID, secret))
+	call(t, client, "send_message", sendText("491511000009", secret))
+	call(t, client, "send_message", json.RawMessage(`{"recipient":"491511000001","message":"x","unknown":"`+secret+`"}`))
+	call(t, client, "send_file", map[string]any{"recipient": sendPeer, "media_path": r.outbox + "/synthetic-secret-name.pdf", "caption": secret})
+	call(t, client, "send_message", json.RawMessage(`{"recipient":"491511000001","message":"x","message":"`+secret+`"}`))
+	attempts := []string{
+		"tool=send_message recipient_kind=phone outcome=sent reason=ok media_type=none duration_ms=",
+		"tool=send_message recipient_kind=group outcome=sent reason=ok media_type=none duration_ms=",
+		"tool=send_message recipient_kind=phone outcome=not_sent reason=not_permitted media_type=none duration_ms=",
+		"tool=send_message recipient_kind=unknown outcome=not_sent reason=invalid_input media_type=none duration_ms=",
+		"tool=send_file recipient_kind=phone outcome=not_sent reason=file_refused media_type=document duration_ms=",
+		"tool=send_message recipient_kind=unknown outcome=not_sent reason=invalid_input media_type=none duration_ms=",
+	}
+	// A call the guard refused before it released the earlier credit is an attempt of its own, which the client made
+	// again.
+	const retried = "recipient_kind=unknown outcome=not_sent reason=busy"
+	awaitDiagnostic(t, func() bool {
+		all := r.diag.String()
+		return strings.Count(all, "event=send_attempt")-strings.Count(all, retried) >= len(attempts)
+	})
+	got := r.diag.String()
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSpace(got), "\n") {
+		if !strings.Contains(line, retried) {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) != len(attempts) {
+		t.Fatalf("%d records for %d attempts:\n%s", len(lines), len(attempts), got)
+	}
+	for i, line := range lines {
+		if !strings.Contains(line, "level=INFO event=send_attempt "+attempts[i]) {
+			t.Errorf("record %d = %q, want %q", i, line, attempts[i])
+		}
+	}
+	for _, private := range []string{"synthetic-secret", "49151100", "120363", "@s.whatsapp.net", "@g.us", "outbox", ".pdf"} {
+		if strings.Contains(got, private) {
+			t.Errorf("diagnostics hold %q:\n%s", private, got)
+		}
+	}
+}
+
+func TestDiagnosticsSendRecordTakesOnlyFixedValues(t *testing.T) {
+	w := &diagnosticWriter{}
+	d := NewDiagnostics(w, slog.LevelError)
+	defer d.Finish()
+	d.ReportSend(DiagnosticSendAudio, sendapi.RecipientKind("491511000001@s.whatsapp.net"), "secret reason\nforged=1", "secret/type", -time.Second)
+	d.ReportSend(DiagnosticListChats, sendapi.KindSelf, string(sendapi.CodeSentCancelled), "audio", 1500*time.Millisecond)
+	d.ReportSend(DiagnosticSendFile, sendapi.KindLID, string(sendapi.CodeOutcomeUnknown), "video", time.Second)
+	for _, code := range sendapi.Codes() {
+		d.ReportSend(DiagnosticSendFile, sendapi.KindPhone, string(code), "image", 0)
+		awaitDiagnostic(t, func() bool { return strings.Contains(w.String(), "reason="+string(code)+" ") })
+	}
+	got := w.String()
+	for _, want := range []string{
+		"tool=send_audio_message recipient_kind=unknown outcome=unknown reason=unknown media_type=none duration_ms=0",
+		"tool=unknown recipient_kind=self outcome=sent reason=sent_cancelled media_type=audio duration_ms=1500",
+		"tool=send_file recipient_kind=lid outcome=unknown reason=outcome_unknown media_type=video duration_ms=1000",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "secret") || strings.Contains(got, "forged") || strings.Contains(got, "49151") {
+		t.Errorf("unsafe record:\n%s", got)
 	}
 }

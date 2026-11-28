@@ -89,6 +89,13 @@ Feature 007 implements three local message reads. On 2026-11-27 the owner set th
 short messages on Windows and Linux and 100,000 on macOS, after no hosted macOS runner met the larger size within the
 5-second store deadline. Native acceptance passed on all three platforms at those sizes; Intel and physical Macs are
 unverified. Review status and evidence are in `specs/007-mcp-message-tools/verification.md`.
+Feature 008 (branch `008-send-messages`, not merged) adds `send_message`, `send_file` and `send_audio_message` to
+`stdio`: `internal/media` (send service, with the leaf types in `internal/media/sendapi`), the send port on the
+connection owner in `internal/wa`, and the guard's 2 min 15 s deadline in `internal/mcp`. Sending is off until
+`send_allowed_recipients` is set. By the owner's decision of 2026-11-27 a send call may use a 512 KiB input frame;
+every other frame keeps 64 KiB. The design re-review and native Windows, Linux and macOS CI passed at `25c6bb8`.
+The local Windows full suite passed at `e543473`; the owner code review remains at `CONCERNS`, and real-account
+acceptance is still open. Evidence is in `specs/008-send-messages/verification.md`.
 Since 2026-11-13 `go.mod` replaces whatsmeow with the owner's fork `github.com/tiger-seo/whatsmeow` at `bedcf01`
 (branch `receive-bounds`), which enforces the receive bounds, sends nothing to the user's phone on another account's
 behalf, and carries the lost-515 fix proposed upstream as tulir/whatsmeow#1337; E003-RX-01 is retired.

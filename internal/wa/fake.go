@@ -2,9 +2,13 @@ package wa
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"io"
 	"sort"
+	"strconv"
 	"sync"
+	"time"
 
 	"github.com/tiger-seo/whatsapp-mcp/internal/store"
 	"go.mau.fi/whatsmeow"
@@ -357,4 +361,192 @@ func (f *Fake) Calls() FakeCalls {
 	}
 	out.Groups = append([]types.JID(nil), f.calls.Groups...)
 	return out
+}
+
+// The operations of FakeSendPort, as its hooks and failures name them.
+const (
+	FakeReady   = "ready"
+	FakeLookup  = "lookup"
+	FakeUpload  = "upload"
+	FakeDeliver = "deliver"
+	FakeRecord  = "record"
+)
+
+// FakeSendUpload is one upload the fake received.
+type FakeSendUpload struct {
+	Data []byte
+	Kind whatsmeow.MediaType
+}
+
+// FakeSendCalls is what a FakeSendPort was asked to do.
+type FakeSendCalls struct {
+	Lookups    []string
+	Uploads    []FakeSendUpload
+	Deliveries []FakeSendCall
+	Records    []SentMessage
+}
+
+// FakeSendPort is an offline send port with the owner's cancellation rules. It records every call, never creates a
+// client or transport, and lets a test hold or fail each operation.
+type FakeSendPort struct {
+	mu            sync.Mutex
+	identity      SendIdentity
+	registrations map[string]Registration
+	failures      map[string]error
+	hooks         map[string]func(context.Context) error
+	calls         FakeSendCalls
+	deliveryTime  time.Time
+	delivered     int
+}
+
+var _ SendPort = (*FakeSendPort)(nil)
+
+// NewFakeSendPort returns a connected fake for the account with the given addresses. Every phone number is
+// unregistered until SetRegistration says otherwise.
+func NewFakeSendPort(identity SendIdentity) *FakeSendPort {
+	return &FakeSendPort{identity: identity, registrations: map[string]Registration{}, failures: map[string]error{},
+		hooks: map[string]func(context.Context) error{}, deliveryTime: time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)}
+}
+
+// SetRegistration sets the answer for a phone number given as digits.
+func (f *FakeSendPort) SetRegistration(phone string, r Registration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.registrations[phone] = r
+}
+
+// SetFailure makes an operation return err; nil makes it succeed again.
+func (f *FakeSendPort) SetFailure(operation string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failures[operation] = err
+}
+
+// SetHook runs fn inside an operation, with the context the operation runs under, after the call was recorded. An
+// error it returns is the operation's error.
+func (f *FakeSendPort) SetHook(operation string, fn func(context.Context) error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hooks[operation] = fn
+}
+
+// Calls returns what the fake was asked to do.
+func (f *FakeSendPort) Calls() FakeSendCalls {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := FakeSendCalls{Lookups: append([]string(nil), f.calls.Lookups...)}
+	for _, u := range f.calls.Uploads {
+		u.Data = append([]byte(nil), u.Data...)
+		out.Uploads = append(out.Uploads, u)
+	}
+	for _, d := range f.calls.Deliveries {
+		d.Message = cloneMessage(d.Message)
+		out.Deliveries = append(out.Deliveries, d)
+	}
+	for _, r := range f.calls.Records {
+		r.Message = cloneMessage(r.Message)
+		out.Records = append(out.Records, r)
+	}
+	return out
+}
+
+// run records a call, runs the operation's hook and returns its error or the configured failure.
+func (f *FakeSendPort) run(ctx context.Context, operation string, record func()) error {
+	f.mu.Lock()
+	if record != nil {
+		record()
+	}
+	hook := f.hooks[operation]
+	f.mu.Unlock()
+	if hook != nil {
+		if err := hook(ctx); err != nil {
+			return err
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.failures[operation]
+}
+
+// Ready implements SendPort.
+func (f *FakeSendPort) Ready() error { return f.run(context.Background(), FakeReady, nil) }
+
+// OwnIdentity implements SendPort.
+func (f *FakeSendPort) OwnIdentity() SendIdentity {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.identity
+}
+
+// LookupPhone implements SendPort.
+func (f *FakeSendPort) LookupPhone(ctx context.Context, phone string) (Registration, error) {
+	if err := ctx.Err(); err != nil {
+		return Registration{}, err
+	}
+	if err := f.run(ctx, FakeLookup, func() { f.calls.Lookups = append(f.calls.Lookups, phone) }); err != nil {
+		return Registration{}, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.registrations[phone], nil
+}
+
+// UploadFile implements SendPort. It reads the whole plaintext and writes a stand-in for the ciphertext.
+func (f *FakeSendPort) UploadFile(ctx context.Context, plaintext io.Reader, scratch io.ReadWriteSeeker, kind whatsmeow.MediaType) (whatsmeow.UploadResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return whatsmeow.UploadResponse{}, err
+	}
+	data, err := io.ReadAll(plaintext)
+	if err != nil {
+		return whatsmeow.UploadResponse{}, err
+	}
+	if _, err := scratch.Write(data); err != nil {
+		return whatsmeow.UploadResponse{}, err
+	}
+	if err := f.run(ctx, FakeUpload, func() { f.calls.Uploads = append(f.calls.Uploads, FakeSendUpload{Data: data, Kind: kind}) }); err != nil {
+		return whatsmeow.UploadResponse{}, err
+	}
+	plain, enc := sha256.Sum256(data), sha256.Sum256(append([]byte("enc"), data...))
+	out := whatsmeow.UploadResponse{URL: "https://media.invalid/file", DirectPath: "/v/fake", MediaKey: make([]byte, 32),
+		FileSHA256: plain[:], FileEncSHA256: enc[:], FileLength: uint64(len(data))}
+	if kind == whatsmeow.MediaVideo {
+		out.StreamingSidecar = []byte("sidecar")
+	}
+	return out, nil
+}
+
+// Deliver implements SendPort.
+func (f *FakeSendPort) Deliver(ctx context.Context, to types.JID, message *waE2E.Message, handOver func()) (Delivery, error) {
+	if err := ctx.Err(); err != nil {
+		return Delivery{}, err
+	}
+	if handOver != nil {
+		handOver()
+	}
+	detached, cancel := detachedWithDeadline(ctx)
+	defer cancel()
+	err := f.run(detached, FakeDeliver, func() {
+		f.calls.Deliveries = append(f.calls.Deliveries, FakeSendCall{To: to, Message: cloneMessage(message)})
+	})
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.delivered++
+	return Delivery{ID: "3EB0FAKE" + strconv.Itoa(f.delivered), Time: f.deliveryTime}, err
+}
+
+// Record implements SendPort.
+func (f *FakeSendPort) Record(ctx context.Context, sent SentMessage) error {
+	detached, cancel := detachedWithDeadline(ctx)
+	defer cancel()
+	sent.Message = cloneMessage(sent.Message)
+	return f.run(detached, FakeRecord, func() { f.calls.Records = append(f.calls.Records, sent) })
+}
+
+// detachedWithDeadline keeps a context's deadline and drops its cancellation.
+func detachedWithDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	detached := context.WithoutCancel(ctx)
+	if deadline, ok := ctx.Deadline(); ok {
+		return context.WithDeadline(detached, deadline)
+	}
+	return context.WithCancel(detached)
 }

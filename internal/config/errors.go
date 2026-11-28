@@ -15,8 +15,14 @@ type SettingError struct {
 	Origin  Origin
 	Value   string
 	Secret  bool
-	Reason  string
+	// Redacted leaves the value out of the message.
+	Redacted bool
+	Reason   string
+	cause    error
 }
+
+// Unwrap returns the error behind the reason, when there is one.
+func (e *SettingError) Unwrap() error { return e.cause }
 
 func newSettingError(s Setting, o Origin, value string, err error) *SettingError {
 	reason := err.Error()
@@ -24,19 +30,25 @@ func newSettingError(s Setting, o Origin, value string, err error) *SettingError
 		// A reason should not repeat the value, but a secret must not leak if one does.
 		reason = strings.ReplaceAll(reason, value, secretText)
 	}
-	return &SettingError{Setting: s.Name, Origin: o, Value: value, Secret: s.Secret, Reason: reason}
+	return &SettingError{Setting: s.Name, Origin: o, Value: value, Secret: s.Secret, Redacted: s.Redacted, Reason: reason}
 }
 
 func (e *SettingError) Error() string {
 	value := strconv.Quote(e.Value)
-	if e.Secret {
+	switch {
+	case e.Secret:
 		value = secretText
+	case e.Redacted:
+		value = redactedText
 	}
 	return fmt.Sprintf("%s: %s from %s %s", e.Setting, value, e.Origin.Detail, e.Reason)
 }
 
 // secretText stands for a secret value wherever one would be shown.
 const secretText = "(secret)"
+
+// redactedText stands for a private value in an error message.
+const redactedText = "(redacted)"
 
 // ErrFileTooLarge identifies a config.toml that exceeds MaxFileSize.
 var ErrFileTooLarge = errors.New("is larger than 1 MiB")

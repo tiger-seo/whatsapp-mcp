@@ -164,6 +164,10 @@ type genState struct {
 	handover bool // guarded by connectionOwner.mu
 	// repairDone is non-nil once this generation's repair pass was started; it closes when the pass ends.
 	repairDone chan struct{} // guarded by connectionOwner.mu
+	// sends counts the admitted send calls; sendsRunning is the same count, readable under connectionOwner.mu. No
+	// call is admitted once the generation is retiring.
+	sends        sync.WaitGroup
+	sendsRunning int // guarded by connectionOwner.mu
 }
 
 // NewOwner creates the owner; call Start once to load the device and begin the lifecycle.
@@ -727,8 +731,8 @@ func (o *connectionOwner) retireCurrent() {
 
 // retireGeneration retires one generation in the contract order: mark it retiring and set the session's retire
 // bit, end the pairing window, abort an unreturned Connect and cancel the work context, wait for the repair
-// pass, then let the session disconnect, close its network fence and drain the store barrier, and only then
-// cancel the library context. It is idempotent and never closes the shared store.
+// pass and for the admitted send calls, then let the session disconnect, close its network fence and drain the
+// store barrier, and only then cancel the library context. It is idempotent and never closes the shared store.
 func (o *connectionOwner) retireGeneration(gen *genState, deadline time.Duration) {
 	gen.retireOnce.Do(func() {
 		o.mu.Lock()
@@ -742,6 +746,7 @@ func (o *connectionOwner) retireGeneration(gen *genState, deadline time.Duration
 		o.mu.Lock()
 		o.abortAttemptLocked(gen)
 		repairDone := gen.repairDone
+		sendsRunning := gen.sendsRunning > 0
 		o.mu.Unlock()
 		gen.workCancel()
 		o.traceStep("work_cancelled")
@@ -767,8 +772,30 @@ func (o *connectionOwner) retireGeneration(gen *genState, deadline time.Duration
 		// not finish inside its bound is the forced path: the library context is released so those calls fail,
 		// and the stop is unsafe.
 		drainCtx, drainCancel := context.WithTimeout(context.Background(), o.drainBound())
+		// An admitted send call ends with the work context. It is waited for while its storage and network are
+		// still open, within the same bound as the barrier's drain.
+		// With none running, none can start: the generation is retiring.
+		sendsDone := make(chan struct{})
+		sendsStuck := false
+		if sendsRunning {
+			go func() {
+				gen.sends.Wait()
+				close(sendsDone)
+			}()
+			select {
+			case <-sendsDone:
+				o.traceStep("sends_waited")
+			case <-drainCtx.Done():
+				sendsStuck = true
+			}
+		} else {
+			close(sendsDone)
+		}
 		err := gen.handle.Retire(drainCtx)
 		drainCancel()
+		if sendsStuck && err == nil {
+			err = context.DeadlineExceeded
+		}
 		if err != nil {
 			o.log.Warn("generation drain did not quiesce", "event", "owner_drain_failed")
 			o.mu.Lock()
@@ -780,6 +807,8 @@ func (o *connectionOwner) retireGeneration(gen *genState, deadline time.Duration
 			if errors.Is(err, context.DeadlineExceeded) {
 				_ = gen.handle.Retire(context.Background())
 			}
+			// The generation is not released while a call may still be using it.
+			<-sendsDone
 		} else {
 			// Storage is blocked now, so a handler released by this cancel can only be refused and counted.
 			gen.libCancel()

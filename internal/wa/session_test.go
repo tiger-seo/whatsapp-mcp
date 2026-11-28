@@ -237,13 +237,15 @@ func TestSessionMediaClientConnectsDirectlyThroughTheFence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	if s.mediaClient.Timeout != 10*time.Second {
-		t.Errorf("timeout = %v", s.mediaClient.Timeout)
+	// The total bound depends on the request, so the client itself has none.
+	if s.mediaClient.Timeout != 0 {
+		t.Errorf("client timeout = %v", s.mediaClient.Timeout)
 	}
-	bounded, ok := s.mediaClient.Transport.(*boundedTransport)
-	if !ok || bounded.limit != 16<<20 {
+	media, ok := s.mediaClient.Transport.(*mediaTransport)
+	if !ok || media.bounded.limit != 16<<20 {
 		t.Fatalf("media transport = %T", s.mediaClient.Transport)
 	}
+	bounded := media.bounded
 	gate, ok := bounded.base.(*gateTransport)
 	if !ok || gate.f != s.fence {
 		t.Fatalf("media base transport = %T, want this generation's fence", bounded.base)
@@ -303,8 +305,8 @@ func TestSessionOpensGuardedDeviceWithReviewedOptions(t *testing.T) {
 	if c.EmitAppStateEventsOnFullSync {
 		t.Error("full-sync event emission enabled")
 	}
-	if s.mediaClient == nil || s.mediaClient.Timeout != 10*time.Second {
-		t.Errorf("app-state HTTP client timeout = %v", s.mediaClient.Timeout)
+	if _, ok := s.mediaClient.Transport.(*mediaTransport); !ok || mediaRequestLimit != 10*time.Second {
+		t.Errorf("app-state HTTP client = %T bounded at %v", s.mediaClient.Transport, mediaRequestLimit)
 	}
 	if _, ok := c.Log.(waLog.Logger); !ok {
 		t.Errorf("log bridge type = %T", c.Log)

@@ -1,6 +1,7 @@
 package private
 
 import (
+	"crypto/rand"
 	"errors"
 	"io/fs"
 	"os"
@@ -51,6 +52,26 @@ func MkdirAll(dir string) error {
 		return unwrapPath(err)
 	}
 	return checkDir(dir)
+}
+
+// MkdirTemp creates a unique private directory under an existing parent. The caller removes it.
+func MkdirTemp(parent string) (string, error) {
+	for range 10 {
+		dir := filepath.Join(parent, "tmp-"+rand.Text())
+		err := mkdir(dir)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", unwrapPath(err)
+		}
+		if err := checkDir(dir); err != nil {
+			_ = os.Remove(dir)
+			return "", err
+		}
+		return dir, nil
+	}
+	return "", fs.ErrExist
 }
 
 // OpenFile opens a private file. It never follows a symbolic link or opens a device or FIFO, and checks the
