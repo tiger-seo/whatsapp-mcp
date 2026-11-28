@@ -199,7 +199,7 @@ description: "Implementation tasks for sending text, files and voice notes"
   Return one open handle, used for every later read. Use the `os.Root` handles opened and kept at startup (T003), never one reopened by path.
 - [X] T022 [US2] Implement the message type table and media message construction in `internal/media/types.go`: image, video (with the streaming sidecar from the upload) and document messages, built from the upload response. Upload from the plaintext working copy (T011) through the port, with the ciphertext in a temporary file in the per-send working directory (R3).
 - [X] T023 [US2] Implement `send_file` with its optional `caption` (default `""`) in `internal/mcp/send_tools.go` and the file path in `internal/media/service.go`.
-- [ ] T024 [US2] Run the US2 tests natively on Windows and in WSL2, and in CI on Linux, Windows and macOS (T034). Record the command, date, per-platform counts, skips and exit codes in `specs/008-send-messages/verification.md`. A platform not run is "not verified".
+- [X] T024 [US2] Run the US2 tests natively on Windows and in WSL2, and in CI on Linux, Windows and macOS (T034). Record the command, date, per-platform counts, skips and exit codes in `specs/008-send-messages/verification.md`. A platform not run is "not verified".
 
 ## Phase 5: User Story 3 - Send a Voice Note (Priority: P3)
 

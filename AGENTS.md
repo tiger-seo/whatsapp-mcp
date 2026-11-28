@@ -93,8 +93,9 @@ Feature 008 (branch `008-send-messages`, not merged) adds `send_message`, `send_
 `stdio`: `internal/media` (send service, with the leaf types in `internal/media/sendapi`), the send port on the
 connection owner in `internal/wa`, and the guard's 2 min 15 s deadline in `internal/mcp`. Sending is off until
 `send_allowed_recipients` is set. By the owner's decision of 2026-11-27 a send call may use a 512 KiB input frame;
-every other frame keeps 64 KiB. No real account was used; the real-account run, the owner's code review and the
-re-review of the changed plan and contract are pending. Evidence is in `specs/008-send-messages/verification.md`.
+every other frame keeps 64 KiB. The design re-review and native Windows, Linux and macOS CI passed at `25c6bb8`.
+The local full-suite gate, the owner's code review and real-account acceptance remain open. Evidence is in
+`specs/008-send-messages/verification.md`.
 Since 2026-11-13 `go.mod` replaces whatsmeow with the owner's fork `github.com/tiger-seo/whatsmeow` at `bedcf01`
 (branch `receive-bounds`), which enforces the receive bounds, sends nothing to the user's phone on another account's
 behalf, and carries the lost-515 fix proposed upstream as tulir/whatsmeow#1337; E003-RX-01 is retired.

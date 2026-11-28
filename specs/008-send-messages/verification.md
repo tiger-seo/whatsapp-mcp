@@ -17,6 +17,7 @@
 | design | 2026-11-27 | 2596af3 | BLOCK | |
 | design | 2026-11-27 | 0c9a90f | CONCERNS | |
 | design | 2026-11-27 | 129e4ae | PASS | |
+| design | 2026-11-28 | 25c6bb8 | PASS | |
 
 ## Design review of `3254097` (BLOCK): handling
 
@@ -83,7 +84,7 @@ Windows is Windows 10 amd64 with Go 1.27.4; WSL2 is Ubuntu amd64 under WSL2 with
 data is synthetic; accounts are the fake send port or `internal/wasim`. No real account was used. Exit codes were
 read from the command itself.
 
-### Gates (T036, T035): **not passed** - the full test run failed
+### Initial gates (T036, T035): local full test run failed
 
 | Time | Command | Result |
 | --- | --- | --- |
@@ -118,8 +119,7 @@ Later reruns, on the same code, after the owner asked to try again:
 The passing run of the two tests alone shows that they hold when run by themselves. It does not replace a passing
 full run.
 
-T035 and T036 stay open until a full run passes. Native Linux and macOS runs and the CI run link: **not verified**
-(nothing has been pushed).
+At the time of this run, native Linux and macOS evidence was not yet available. See the committed-revision follow-up below.
 
 ### Foundation and User Story 1 (T018)
 
@@ -154,7 +154,7 @@ directory **cannot be renamed or deleted** while its root is open; on WSL2 it ca
 directory. The case-alias identity check ran on Windows (case-insensitive NTFS) and passed; the macOS run that T003
 asks for is **not verified**.
 
-CI on Linux, Windows and macOS: **not run**. T024 stays open.
+CI had not run at the time of these local checks. See the committed-revision follow-up below for the native results.
 
 ### User Story 3, voice notes (T031)
 
@@ -164,14 +164,14 @@ CI on Linux, Windows and macOS: **not run**. T024 stays open.
 | during development | `go test ./internal/media -run '^$' -fuzz FuzzOggOpusDuration -fuzztime 45s` | exit 0; 188,793 executions |
 | during development | `go test ./internal/media -run '^$' -fuzz FuzzSyntacticPath -fuzztime 30s` | exit 0; 175,661 executions |
 
-WSL2 has no ffmpeg, so the real converter is **not verified** there; the stand-in tests passed. The real ffmpeg on
-native Linux and macOS and the Chocolatey launcher: **not verified** until the new CI job runs.
+WSL2 has no ffmpeg, so the real converter is **not verified** there; the stand-in tests passed. See the follow-up below
+for native Linux, macOS and Chocolatey results.
 
 ### Decisions and deviations for the code review
 
 | Item | What was done |
 | --- | --- |
-| 64 KiB session limit against 65,536-byte text | Found during implementation. Owner decision 2026-11-27: 512 KiB for send calls only. Recorded in `plan.md` and `contracts/tools.md`, which makes the design `PASS` at `129e4ae` **stale** |
+| 64 KiB session limit against 65,536-byte text | Found during implementation. Owner decision 2026-11-27: 512 KiB for send calls only. The change made `129e4ae` stale; `owner-judge` renewed the design `PASS` at `25c6bb8`. |
 | Import cycle (`wa` test imports `mcp`, `mcp` would import `media`, which imports `wa`) | The send types are in a leaf package, `internal/media/sendapi` |
 | Cancel and budget before the hand-over | Codes `cancelled` and `timeout` (the design review left the names to implementation) |
 | Phone forms | The tools contract is followed: digits, optional `+`, spaces and dashes. The read tools also accept dots and parentheses, which FR-002's "as for the read tools" could be read to require |
@@ -180,13 +180,45 @@ native Linux and macOS and the Chocolatey launcher: **not verified** until the n
 | Lookup skip | A phone whose stored chat is under its mapped LID counts as having a stored chat |
 | Late low finding of the `129e4ae` review | For send tools the guard writes a success reply to a cancelled request and ignores a cancel that arrives during the write |
 
+## Committed-Revision Follow-up (2026-11-28 UTC)
+
+Tested revision `25c6bb8` with `CGO_ENABLED=0`. The [CI run](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/46091450701)
+passed. The separate nightly heavy-store job was skipped as expected for a push. No real account was used.
+
+| Where | Command or check | Result |
+| --- | --- | --- |
+| Local Windows/amd64, Go 1.27.4 | `gofmt -l .`; `go vet ./...`; `go mod verify` | Exit 0 each; no formatting changes; all modules verified |
+| Local Windows/amd64 | `go vet ./internal/wa/testdata/cmd/session-check`; `go build -o NUL ./internal/wa/testdata/cmd/session-check`; `go test ./internal/wa/testdata/cmd/session-check` | Exit 0 each |
+| Local Windows/amd64 | `go test -p 1 ./... -count=1 -timeout 30m` | Failed (`FAIL`): 10 packages passed, `internal/store` failed, and one package had no test files. `internal/mcp` passed. |
+| Local Windows/amd64 | `go test -p 1 ./internal/store -run '^(TestToolMessageSearchScale\|TestToolMessageContextRowCap)$' -count=1 -timeout 9m -v` | Exit 0; 4 passed including subtests, 0 failed, 0 skipped. The timed search cases took 2.34 s and 2.35 s; the row-cap test took 1.96 s. |
+| Local Windows/amd64 | `go test ./internal/wa -run '^TestSimulatorStopDuringEachSendStep$' -count=20 -json` | Exit 0; 200 passed including parents, 0 failed, 0 skipped |
+| CI check job | `gofmt`, `go vet`, `go mod verify`, govulncheck v1.9.0, and builds for windows/amd64, linux/amd64, linux/arm64, darwin/amd64 and darwin/arm64 | All steps succeeded |
+| CI Windows/amd64, Linux/amd64, macOS/arm64 | `go test -timeout 30m ./...` | Successful on each runner: 11 packages reported `ok`, one had no test files; no failures. Some packages used cached results on Windows and macOS. |
+
+In the local serial suite, `TestToolMessageSearchScale` hit the 5-second deadline in `sparse_needle` and
+`not-present`, and `TestToolMessageContextRowCap` also returned `context deadline exceeded`. Running packages
+serially did not eliminate the timeouts. The isolated rerun passed; the root cause is still unconfirmed. No query,
+deadline or test was changed to obtain the passing result.
+
+### Native file and converter checks (T024, T031)
+
+Counts include parent tests and subtests. Each CI command completed successfully (exit 0).
+
+| Runner | `go test -timeout 10m -count=1 -v -run 'SendDirs\|SendPath\|SendConvert' ./internal/config ./internal/media` | `WA_FFMPEG_TESTS=1 go test -timeout 10m -count=1 -v -run RealFFmpeg ./internal/media` |
+| --- | --- | --- |
+| Windows/amd64 | 45 passed, 0 failed, 1 skipped (unprivate outbox); symlinks, linked outbox and case alias passed. 8.3 names were not exercised. | 13 passed, 0 failed, 0 skipped; Chocolatey launcher, FFmpeg 9.1 essentials |
+| Linux/amd64 | 42 passed, 0 failed, 2 skipped (case alias on case-sensitive volume; device node needs root) | 12 passed, 0 failed, 1 skipped (AMR); apt FFmpeg 8.0.1-3ubuntu2 |
+| macOS/arm64 | 43 passed, 0 failed, 1 skipped (device node needs root); case alias passed. The socket fixture could not be created and was reported as not verified in the log. | 11 passed, 0 failed, 2 skipped (Vorbis and AMR); Homebrew FFmpeg 9.0.2 |
+
+The renewed design review covered the send-only frame and parameter limits, including worst-case JSON escaping,
+bounded parsing, and retaining one tool credit. It noted that the test trace for the new bound and consolidation
+into the project baseline could be clearer. This is a design verdict, not a code review.
+
 ### Not done
 
 | Task | State |
 | --- | --- |
-| T024 | CI part not run |
-| T035, T036 | full test run failed (above); no CI link |
+| T035, T036 | Native CI passed; local full-suite verification remains open. |
 | T037 | documentation written; the `docs/roadmap.md` "Done" line waits for the merge |
 | T038 | real account: **not verified**; needs the owner's permission for each step, including the client time-limit measurement |
-| T039 | not committed; code review not run |
-
+| T039 | Implementation committed at `c13b250`; evidence follow-up and owner code review still pending. |
