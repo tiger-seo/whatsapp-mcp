@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 )
 
@@ -45,6 +46,38 @@ func TestPhoneForLID(t *testing.T) {
 	}
 	st.Close(context.Background())
 	if _, _, err := st.PhoneForLID(ctx, lidJID("700000000001")); !errors.Is(err, ErrClosed) {
+		t.Errorf("after Close: %v, want ErrClosed", err)
+	}
+}
+
+func TestLIDsForPhone(t *testing.T) {
+	st, _ := openTest(t, newDataDir(t))
+	ctx := t.Context()
+	insertLIDMap(t, st, "700000000001", "491511000001")
+
+	for _, in := range []string{phoneJID("491511000001"), "491511000001:4@s.whatsapp.net"} {
+		got, err := st.LIDsForPhone(ctx, in)
+		if err != nil || !slices.Equal(got, []string{lidJID("700000000001")}) {
+			t.Errorf("LIDsForPhone(%q) = %v, %v", in, got, err)
+		}
+	}
+	if got, err := st.LIDsForPhone(ctx, phoneJID("491511000002")); err != nil || len(got) != 0 {
+		t.Errorf("unmapped = %v, %v; want no mapping", got, err)
+	}
+	for _, bad := range []string{lidJID("700000000001"), groupOne, "", "491511000001", "x@evil.example"} {
+		_, err := st.LIDsForPhone(ctx, bad)
+		var ve *ValidationError
+		if !errors.As(err, &ve) {
+			t.Errorf("LIDsForPhone(%q) error = %v, want a *ValidationError", bad, err)
+		}
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := st.LIDsForPhone(cancelled, phoneJID("491511000001")); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled: %v, want context.Canceled", err)
+	}
+	st.Close(context.Background())
+	if _, err := st.LIDsForPhone(ctx, phoneJID("491511000001")); !errors.Is(err, ErrClosed) {
 		t.Errorf("after Close: %v, want ErrClosed", err)
 	}
 }

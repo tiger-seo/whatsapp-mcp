@@ -15,6 +15,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/tiger-seo/whatsapp-mcp/internal/media/sendapi"
+	"github.com/tiger-seo/whatsapp-mcp/internal/wa"
+	"sync"
 )
 
 func TestGuardInternalIDExhaustion(t *testing.T) {
@@ -1110,4 +1113,281 @@ func TestGuardSDKCancelledHeldHandlerKeepsCredit(t *testing.T) {
 	_ = client.Close()
 	_ = ss.Close()
 	<-done
+}
+
+// manualClock moves only when a test advances it; timers fire during Advance.
+type manualClock struct {
+	mu     sync.Mutex
+	now    time.Time
+	timers []*manualTimer
+}
+
+type manualTimer struct {
+	at   time.Time
+	ch   chan time.Time
+	done bool
+}
+
+func newManualClock() *manualClock {
+	return &manualClock{now: time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)}
+}
+
+func (c *manualClock) Now() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.now }
+
+func (c *manualClock) NewTimer(d time.Duration) (<-chan time.Time, func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	timer := &manualTimer{at: c.now.Add(d), ch: make(chan time.Time, 1)}
+	if d <= 0 {
+		timer.done = true
+		timer.ch <- c.now
+	}
+	c.timers = append(c.timers, timer)
+	return timer.ch, func() { c.mu.Lock(); timer.done = true; c.mu.Unlock() }
+}
+
+func (c *manualClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+	for _, timer := range c.timers {
+		if !timer.done && !timer.at.After(c.now) {
+			timer.done = true
+			timer.ch <- c.now
+		}
+	}
+}
+
+func TestGuardSendAndReadDeadlines(t *testing.T) {
+	for tool, want := range map[string]time.Duration{
+		"send_message": 2*time.Minute + 15*time.Second, "send_file": 2*time.Minute + 15*time.Second,
+		"send_audio_message": 2*time.Minute + 15*time.Second, "list_chats": 10 * time.Second, "get_message_context": 10 * time.Second,
+		"unknown": 10 * time.Second,
+	} {
+		clock := newManualClock()
+		c := &scriptedConnection{input: []jsonrpc.Message{
+			wire(t, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"`+tool+`"}}`),
+		}}
+		g := newGuardedConnection(c)
+		g.clock, g.sends = clock, true
+		if _, ok := g.admission(); ok {
+			t.Fatal("an admission before any call")
+		}
+		if _, err := g.Read(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		admitted, ok := g.admission()
+		if !ok || !admitted.Equal(clock.Now()) {
+			t.Errorf("%s: admission = %v, %v", tool, admitted, ok)
+		}
+		for _, entry := range g.active {
+			if got := entry.deadline.Sub(entry.admitted); got != want {
+				t.Errorf("%s: deadline %v after admission, want %v", tool, got, want)
+			}
+		}
+		_ = g.Close()
+	}
+}
+
+func TestGuardSendHoldsTheOneToolCredit(t *testing.T) {
+	r := newSendRig(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	r.port.SetHook(wa.FakeDeliver, func(context.Context) error { close(entered); <-release; return nil })
+	s := r.stdio()
+	s.call("send", "send_message", sendText(sendPeer, "x"))
+	<-entered
+	s.call("read", "list_chats", map[string]any{})
+	if reply := s.reply("read"); reply.code() != "busy" {
+		t.Fatalf("a read during a send = %+v", reply)
+	}
+	s.call("second", "send_message", sendText(sendPeer, "y"))
+	if reply := s.reply("second"); reply.code() != "busy" {
+		t.Fatalf("a send during a send = %+v", reply)
+	}
+	close(release)
+	if reply := s.reply("send"); reply.isError {
+		t.Fatalf("send = %+v", reply)
+	}
+	s.alive()
+	s.call("after", "list_chats", map[string]any{})
+	if reply := s.reply("after"); reply.isError {
+		t.Fatalf("a read after the send = %+v", reply)
+	}
+	if got := len(r.port.Calls().Deliveries); got != 1 {
+		t.Errorf("sends = %d", got)
+	}
+}
+
+func TestGuardSendAcknowledgedAtTheEndOfItsBudgetStillReplies(t *testing.T) {
+	clock := newManualClock()
+	r := newSendRig(t, func(o *sendOptions) { o.clock = clock })
+	r.port.SetHook(wa.FakeDeliver, func(context.Context) error {
+		clock.Advance(2*time.Minute - 100*time.Millisecond)
+		return nil
+	})
+	var recordErr error
+	r.port.SetHook(wa.FakeRecord, func(ctx context.Context) error {
+		clock.Advance(5 * time.Second)
+		recordErr = ctx.Err()
+		return nil
+	})
+	s := r.stdio()
+	s.call("late", "send_message", sendText(sendPeer, "x"))
+	reply := s.reply("late")
+	if reply.isError || reply.structured["sent"] != true || reply.structured["local_record"] != "stored" || recordErr != nil {
+		t.Fatalf("reply = %+v, record context %v", reply, recordErr)
+	}
+	// Nothing cancelled the request and nothing closed the session.
+	s.alive()
+}
+
+// The guard's deadline runs on the injected clock.
+func TestGuardSendDeadlineFollowsTheClock(t *testing.T) {
+	clock := newManualClock()
+	r := newSendRig(t, func(o *sendOptions) { o.clock = clock })
+	entered, release := make(chan struct{}), make(chan struct{})
+	r.port.SetHook(wa.FakeDeliver, func(context.Context) error { close(entered); <-release; return nil })
+	s := r.stdio()
+	s.call("stuck", "send_message", sendText(sendPeer, "x"))
+	<-entered
+	clock.Advance(2*time.Minute + 14*time.Second)
+	s.write(`{"jsonrpc":"2.0","id":"ping","method":"ping"}`)
+	s.reply("ping")
+	clock.Advance(time.Second)
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	select {
+	case <-s.session.Stopped():
+	case reply := <-s.replies:
+		t.Fatalf("a reply past the guard deadline: %v", reply)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the session stayed open past the guard deadline")
+	}
+}
+
+// guardCancelled reports whether the guard has taken the client's cancellation of the tool call in flight.
+func guardCancelled(s *stdio) bool {
+	s.session.guard.mu.Lock()
+	defer s.session.guard.mu.Unlock()
+	for _, entry := range s.session.guard.active {
+		if entry.tool {
+			return entry.cancelled
+		}
+	}
+	return false
+}
+
+func TestGuardSendCancelledAfterTheAcknowledgement(t *testing.T) {
+	r := newSendRig(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	r.port.SetHook(wa.FakeRecord, func(ctx context.Context) error {
+		close(entered)
+		<-release
+		return ctx.Err()
+	})
+	s := r.stdio()
+	s.call("sent", "send_message", sendText(sendPeer, "delivered"))
+	<-entered
+	s.cancel("sent")
+	awaitDiagnostic(t, func() bool { return guardCancelled(s) })
+	close(release)
+	reply := s.reply("sent")
+	if !reply.isError || reply.code() != "sent_cancelled" || reply.errorField("chat_jid") != sendPeerJID ||
+		reply.errorField("id") == "" || reply.errorField("id") == nil || reply.errorField("timestamp") != "2026-11-27T12:00:00Z" ||
+		reply.errorField("local_record") != "stored" {
+		t.Fatalf("reply = %+v", reply)
+	}
+	s.alive()
+	s.call("history", "list_messages", map[string]any{"chat_jid": sendPeerJID, "include_context": false})
+	history, _ := json.Marshal(s.reply("history").structured)
+	if !strings.Contains(string(history), `"delivered"`) {
+		t.Errorf("the sent message is not stored: %s", history)
+	}
+}
+
+func TestGuardSendCancelledBeforeTheHandOver(t *testing.T) {
+	r := newSendRig(t)
+	entered := make(chan struct{})
+	r.port.SetHook(wa.FakeLookup, func(ctx context.Context) error {
+		close(entered)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	s := r.stdio()
+	s.call("early", "send_message", sendText("491511000002", "x"))
+	<-entered
+	s.cancel("early")
+	if reply := s.reply("early"); reply.code() != "cancelled" {
+		t.Fatalf("reply = %+v", reply)
+	}
+	s.alive()
+	r.wantNothingSent()
+}
+
+// A cancellation that arrives after the send handler returned, or while its reply is being written, does not turn
+// the reply into a closed session.
+func TestGuardSendWritesASuccessReplyToACancelledRequest(t *testing.T) {
+	success := []byte(`{"content":[],"isError":false}`)
+	request := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"send_message"}}`
+	cancel := `{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}`
+	t.Run("after the handler returned", func(t *testing.T) {
+		c := &scriptedConnection{input: []jsonrpc.Message{wire(t, request), wire(t, cancel)}}
+		g := newGuardedConnection(c)
+		g.sends = true
+		m, err := g.Read(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := g.Read(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if err := g.Write(context.Background(), &jsonrpc.Response{ID: m.(*jsonrpc.Request).ID, Result: success}); err != nil {
+			t.Fatal(err)
+		}
+		if g.closed || len(c.output) != 1 || g.tool || len(g.active) != 0 {
+			t.Fatal("the reply was not written and retired")
+		}
+	})
+	t.Run("during the write", func(t *testing.T) {
+		c := &heldConnection{scriptedConnection: &scriptedConnection{input: []jsonrpc.Message{
+			wire(t, request), wire(t, cancel), wire(t, `{"jsonrpc":"2.0","id":2,"method":"ping"}`),
+		}}, started: make(chan struct{}), release: make(chan struct{})}
+		g := newGuardedConnection(c)
+		g.sends = true
+		m, err := g.Read(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		written := make(chan error, 1)
+		go func() {
+			written <- g.Write(context.Background(), &jsonrpc.Response{ID: m.(*jsonrpc.Request).ID, Result: success})
+		}()
+		<-c.started
+		// The cancellation is dropped, and the next request is the one read.
+		next, err := g.Read(context.Background())
+		if err != nil || next.(*jsonrpc.Request).Method != "ping" {
+			t.Fatalf("read = %v, %v", next, err)
+		}
+		close(c.release)
+		if err := <-written; err != nil {
+			t.Fatal(err)
+		}
+		if g.closed {
+			t.Fatal("the session closed")
+		}
+	})
+}
+
+// A handler without guard state refuses the send; it never takes the present as the admission time.
+func TestGuardSendWithoutAdmissionRefuses(t *testing.T) {
+	r := newSendRig(t)
+	handler := r.server.sendHandler(sendapi.ToolMessage, nil)
+	result, err := handler(context.Background(), &sdk.CallToolRequest{Session: &sdk.ServerSession{},
+		Params: &sdk.CallToolParamsRaw{Name: "send_message", Arguments: []byte(`{"recipient":"491511000001","message":"x"}`)}})
+	if err != nil || !result.IsError {
+		t.Fatalf("result = %+v, %v", result, err)
+	}
+	if root, ok := result.StructuredContent.(SendErrorResult); !ok || root.Error.Code != "busy" {
+		t.Errorf("structured = %+v", result.StructuredContent)
+	}
 }

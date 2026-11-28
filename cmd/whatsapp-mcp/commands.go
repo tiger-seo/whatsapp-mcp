@@ -20,6 +20,7 @@ import (
 	"github.com/tiger-seo/whatsapp-mcp/internal/config"
 	"github.com/tiger-seo/whatsapp-mcp/internal/lock"
 	"github.com/tiger-seo/whatsapp-mcp/internal/mcp"
+	"github.com/tiger-seo/whatsapp-mcp/internal/media"
 	"github.com/tiger-seo/whatsapp-mcp/internal/private"
 	"github.com/tiger-seo/whatsapp-mcp/internal/store"
 	"github.com/tiger-seo/whatsapp-mcp/internal/wa"
@@ -507,6 +508,13 @@ func runStdio(cmd *command, args []string, s *streams) int {
 	local.diagnostics = mcp.NewDiagnostics(s.stderr, slog.LevelInfo)
 	s = &local
 	return runShell("stdio", cmd, args, s, func(ctx context.Context, lc *lifecycle, logger *slog.Logger, st *store.Store, s *streams, from *wa.LIDCursor) (*ownerHandle, bool) {
+		// The allowed directories are checked before the owner exists, so a refused one stops the command before any
+		// connection.
+		cfg := s.config
+		dirs, ok := prepareSending(lc, logger, cfg, s)
+		if !ok {
+			return nil, true
+		}
 		oh, failed := attachOwner("stdio", lc, logger, st, s, from)
 		if failed || ctx.Err() != nil {
 			return oh, failed
@@ -524,6 +532,12 @@ func runStdio(cmd *command, args []string, s *streams) int {
 		}
 		server := mcp.NewServer(mcp.NewSDKErrorLatch(), s.diagnostics)
 		server.RegisterReadTools(stdioToolReader(st))
+		sender, err := newSendService(cfg, st, oh.owner, dirs)
+		if err != nil {
+			s.diagnostics.ReportHuman(mcp.HumanStartupFailure, 0)
+			return oh, true
+		}
+		server.RegisterSendTools(sender, sendClock)
 		session, err := server.ConnectStdio(ctx, s.stdin, s.stdout)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -559,6 +573,47 @@ func runStdio(cmd *command, args []string, s *streams) int {
 }
 
 var errMCPProtocol = errors.New("stdio MCP session failed")
+
+// The send state of the process: one clock, and one send slot with its rate limits shared by every session.
+var (
+	sendClock  = media.SystemClock{}
+	sendLimits = sync.OnceValue(func() *media.Limits { return media.NewLimits(sendClock) })
+)
+
+// prepareSending removes working directories an earlier run left behind and, when sending is enabled, checks and
+// opens the allowed directories, creating the default outbox. It runs under the data-directory lock. The opened
+// directories are closed after the owner has stopped.
+func prepareSending(lc *lifecycle, logger *slog.Logger, cfg *config.Config, s *streams) ([]media.AllowedDir, bool) {
+	if err := media.SweepWorkDirs(cfg.DataDir); err != nil {
+		// A leftover that cannot be removed now does not keep the command from running.
+		logger.Warn("leftover send working files could not be removed", "event", "send_sweep_failed")
+	}
+	dirs, err := config.OpenSendDirs(cfg)
+	if err != nil {
+		s.reportStartupError(err)
+		return nil, false
+	}
+	lc.addStop("send directories", func(context.Context) error {
+		config.CloseSendDirs(dirs)
+		return nil
+	})
+	return dirs, true
+}
+
+// newSendService builds the send service on the configuration, the store's reads and the owner's send port. The
+// tools get the service only.
+func newSendService(cfg *config.Config, st *store.Store, owner wa.Owner, dirs []media.AllowedDir) (*media.Service, error) {
+	return media.NewService(media.Options{
+		Port:       wa.SendPortOf(owner),
+		Store:      st,
+		Limits:     sendLimits(),
+		Clock:      sendClock,
+		Recipients: cfg.SendAllowedRecipients,
+		Dirs:       dirs,
+		DataDir:    cfg.DataDir,
+		FFmpeg:     cfg.FFmpeg,
+	})
+}
 
 // runShell takes the data directory, attaches the owner and runs until a stop signal or stop
 // request, then shuts down. The signal handler is installed before anything else, so an early signal
@@ -672,6 +727,7 @@ func runShell(kind string, cmd *command, args []string, s *streams, body func(co
 		// is not started with a cancelled context.
 		return lc.shutdown()
 	}
+	s.config = cfg
 	oh, failed := body(lc.ctx, lc, logger, st, s, from)
 	lc.requestStop("shell finished")
 	<-lc.ctx.Done()
@@ -835,6 +891,8 @@ func (s *streams) reportStartupError(err error) {
 	switch {
 	case errors.As(err, &held):
 		s.diagnostics.ReportHuman(mcp.HumanLockHeld, held.PID)
+	case errors.As(err, &file) && mcp.SendSetting(file.Key):
+		s.diagnostics.ReportSendSetting(file.Key, file.Line)
 	case errors.As(err, &file):
 		switch {
 		case errors.As(file, &perms):
@@ -856,6 +914,8 @@ func (s *streams) reportStartupError(err error) {
 		} else {
 			s.diagnostics.ReportHuman(mcp.HumanLogLevelFailure, 0)
 		}
+	case errors.As(err, &setting) && mcp.SendSetting(setting.Setting):
+		s.diagnostics.ReportSendSetting(setting.Setting, 0)
 	default:
 		s.diagnostics.ReportHuman(mcp.HumanUsageFailure, 0)
 	}

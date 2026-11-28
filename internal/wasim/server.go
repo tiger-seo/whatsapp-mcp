@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -46,6 +47,10 @@ type Server struct {
 
 	accepted chan *Conn
 	media    media
+	// send answers outgoing sends once EnableSend was called.
+	send atomic.Pointer[SendSim]
+	// stopping closes when the server closes, which ends held requests.
+	stopping chan struct{}
 
 	dials      atomic.Int64
 	handshakes atomic.Int64
@@ -61,7 +66,7 @@ type Server struct {
 func Start(t testing.TB) *Server {
 	t.Helper()
 	rootMu.Lock()
-	s := &Server{t: t, accepted: make(chan *Conn, 64), static: keys.NewKeyPair()}
+	s := &Server{t: t, accepted: make(chan *Conn, 64), stopping: make(chan struct{}), static: keys.NewKeyPair()}
 	unlocked := false
 	unlock := func() {
 		if !unlocked {
@@ -146,6 +151,7 @@ func (s *Server) Close() {
 	s.closed = true
 	conns := append([]*Conn(nil), s.conns...)
 	s.mu.Unlock()
+	close(s.stopping)
 	for _, c := range conns {
 		c.Close()
 	}
@@ -164,6 +170,10 @@ func (s *Server) fail(err error) {
 
 func (s *Server) serveWebsocket(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && s.serveMedia(w, r) {
+		return
+	}
+	if sim := s.send.Load(); sim != nil && r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/mms/") {
+		sim.serveUpload(w, r)
 		return
 	}
 	s.dials.Add(1)

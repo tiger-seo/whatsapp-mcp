@@ -51,6 +51,9 @@ See [quickstart.md](quickstart.md).
 - No content in logs above `debug`.
 - stdout protocol-only.
 - Every refusal before the hand-over to WhatsApp has no upload, no send and no store write.
+- The session's 64 KiB input-frame and parameter limit (006) is raised to 512 KiB for a call of a send tool only,
+  so that the 65,536-byte message and caption can arrive; everything else keeps 64 KiB. Owner decision 2026-11-27
+  ([tools contract](contracts/tools.md#input-size)).
 
 **Scale/Scope**:
 

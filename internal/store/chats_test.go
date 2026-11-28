@@ -212,3 +212,39 @@ func TestUpdateChatsExistingOnlyNeverCreatesAChat(t *testing.T) {
 		t.Errorf("an ordinary update no longer creates the chat: %v", err)
 	}
 }
+
+func TestChatExists(t *testing.T) {
+	st, _ := openTest(t, newDataDir(t))
+	ctx := t.Context()
+	check := func(jid string, want bool) {
+		t.Helper()
+		got, err := st.ChatExists(ctx, jid)
+		if err != nil || got != want {
+			t.Errorf("ChatExists(%s) = %v, %v; want %v", jid, got, err, want)
+		}
+	}
+	check(alice, false)
+	// A chat without a name exists, although ChatName reports nothing for it.
+	update(t, st, ChatUpdate{JID: alice, LastActivity: at(1)})
+	if _, _, _, ok, err := st.ChatName(ctx, alice); err != nil || ok {
+		t.Fatalf("ChatName of an unnamed chat = %v, %v", ok, err)
+	}
+	check(alice, true)
+	check(bob, false)
+	update(t, st, ChatUpdate{JID: bob, Name: "Bob", NameQuality: NameReal, NameTime: at(2)})
+	check(bob, true)
+	for _, bad := range []string{"", "status@broadcast", "491511000001", "491511000001:2@s.whatsapp.net"} {
+		if _, err := st.ChatExists(ctx, bad); !errors.Is(err, ErrInvalid) {
+			t.Errorf("ChatExists(%q) = %v, want ErrInvalid", bad, err)
+		}
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := st.ChatExists(cancelled, alice); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled: %v, want context.Canceled", err)
+	}
+	st.Close(context.Background())
+	if _, err := st.ChatExists(ctx, alice); !errors.Is(err, ErrClosed) {
+		t.Errorf("after Close: %v, want ErrClosed", err)
+	}
+}

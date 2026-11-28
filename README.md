@@ -13,7 +13,20 @@ returns partial results. See the
 [verification record](specs/007-mcp-message-tools/verification.md) for completed checks and pending review.
 `serve` does not expose MCP yet.
 
+`stdio` can also send: `send_message` (text), `send_file` (an image, video or document from an allowed directory) and
+`send_audio_message` (a voice note; formats other than Ogg Opus need ffmpeg). **Sending is off until you list the
+recipients** in `config.toml` in the data directory:
+
+```toml
+send_allowed_recipients = ["+49 151 00000000"]
+# send_allowed_dirs = ['C:\Users\me\whatsapp-outbox']   # default: the outbox directory in the data directory
+# ffmpeg = 'C:\tools\ffmpeg\bin\ffmpeg.exe'              # default: ffmpeg on PATH
+```
+
+Sending has been tested offline only, not yet on a real account.
+
 Launch `stdio` only from a trusted local client. It can read all stored chats, contacts and messages without per-read
-confirmation, and the client or its AI provider may retain results. The tools cannot pair, recover or send.
+confirmation, and the client or its AI provider may retain results. It can send, without asking you, to every listed
+recipient. The tools cannot pair or recover.
 
 Running it, including where it keeps your data and how to back it up: [OPERATIONS.md](OPERATIONS.md).

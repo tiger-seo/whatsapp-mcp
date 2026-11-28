@@ -59,9 +59,13 @@ func readFile(dataDir string, settings []Setting) (*file, error) {
 		if errors.As(err, &de) {
 			line, col := de.Position()
 			reason := strings.TrimPrefix(de.Error(), "toml: ")
-			if key := secretKeyBefore(data, line, settings); key != "" {
+			if key, secret := hiddenKeyBefore(data, line, settings); key != "" {
 				// The parser's message may quote the text around the error.
-				reason = fmt.Sprintf("invalid TOML in or after the value of %s, which is secret", key)
+				kind := "private"
+				if secret {
+					kind = "secret"
+				}
+				reason = fmt.Sprintf("invalid TOML in or after the value of %s, which is %s", key, kind)
 			}
 			return nil, &FileError{Path: path, Line: line, Column: col, Reason: reason}
 		}
@@ -70,16 +74,19 @@ func readFile(dataDir string, settings []Setting) (*file, error) {
 	return &file{path: path, values: values, lines: keyLines(data)}, nil
 }
 
-// secretKeyBefore returns the key of a secret setting that starts a line at or before line, if there is one.
-func secretKeyBefore(data []byte, line int, settings []Setting) string {
+// hiddenKeyBefore returns the key of a secret or redacted setting that starts a line at or before line, if there is
+// one, and whether it is secret.
+func hiddenKeyBefore(data []byte, line int, settings []Setting) (string, bool) {
 	var keys []string
+	secret := map[string]bool{}
 	for _, s := range settings {
-		if s.Secret && s.FileKey != "" {
+		if (s.Secret || s.Redacted) && s.FileKey != "" {
 			keys = append(keys, s.FileKey)
+			secret[s.FileKey] = s.Secret
 		}
 	}
 	if len(keys) == 0 {
-		return ""
+		return "", false
 	}
 	for i, text := range strings.Split(string(data), "\n") {
 		if i >= line {
@@ -89,12 +96,12 @@ func secretKeyBefore(data []byte, line int, settings []Setting) string {
 		for _, k := range keys {
 			for _, form := range []string{k, `"` + k + `"`, "'" + k + "'"} {
 				if rest, ok := strings.CutPrefix(text, form); ok && strings.HasPrefix(strings.TrimLeft(rest, " \t"), "=") {
-					return k
+					return k, secret[k]
 				}
 			}
 		}
 	}
-	return ""
+	return "", false
 }
 
 // keyLines maps each top-level key, and each table name, to the line where it first appears.

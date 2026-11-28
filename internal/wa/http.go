@@ -1,6 +1,7 @@
 package wa
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -111,6 +112,57 @@ func newBoundedHTTPClient(timeout time.Duration, limit int64, base http.RoundTri
 		Transport: &boundedTransport{base: base, limit: limit}, Timeout: timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return ErrHTTPPolicy },
 	}
+}
+
+// The bounds of the media client: every request but an upload takes at most mediaRequestLimit in total, and no
+// response is read beyond mediaBodyLimit.
+const (
+	mediaRequestLimit = 10 * time.Second
+	mediaBodyLimit    = 16 << 20
+)
+
+// mediaTransport gives each request of the media client the bound its kind needs. The client library sends an
+// upload as the one POST on this client: it is bounded by the deadline its caller put on it, which it must carry.
+// Every other request keeps a fixed total bound that ends when its response body is closed.
+type mediaTransport struct{ bounded *boundedTransport }
+
+func (t *mediaTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Method == http.MethodPost {
+		if _, ok := req.Context().Deadline(); !ok {
+			if req.Body != nil {
+				_ = req.Body.Close()
+			}
+			return nil, ErrHTTPPolicy
+		}
+		return t.bounded.RoundTrip(req)
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), mediaRequestLimit)
+	resp, err := t.bounded.RoundTrip(req.WithContext(ctx))
+	if err != nil || resp.Body == nil {
+		cancel()
+		return resp, err
+	}
+	resp.Body = &releasingBody{ReadCloser: resp.Body, release: cancel}
+	return resp, nil
+}
+
+// releasingBody releases a request's context when its response body is closed.
+type releasingBody struct {
+	io.ReadCloser
+	release context.CancelFunc
+}
+
+func (b *releasingBody) Close() error {
+	defer b.release()
+	return b.ReadCloser.Close()
+}
+
+// newMediaHTTPClient builds the client of media uploads, media downloads and history downloads on base. A nil base
+// is the direct transport.
+func newMediaHTTPClient(base http.RoundTripper) *http.Client {
+	client := newBoundedHTTPClient(0, mediaBodyLimit, base)
+	client.Transport = &mediaTransport{bounded: client.Transport.(*boundedTransport)}
+	return client
 }
 
 func newAppStateHTTPClient() *http.Client { return newBoundedHTTPClient(10*time.Second, 16<<20, nil) }

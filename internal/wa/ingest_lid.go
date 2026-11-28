@@ -98,6 +98,11 @@ func (in *ingest) normaliseJID(jid string) string {
 // relookup looks up again, under the ingest lock and within one deadline, every LID still in msgs and names, so
 // a mapping committed and merged since the first lookup is used. A LID not resolved in time stays a LID.
 func (in *ingest) relookup(msgs []store.Message, names []store.ChatUpdate) {
+	in.relookupWithin(in.cfg.Lib, msgs, names)
+}
+
+// relookupWithin is relookup bounded by parent as well.
+func (in *ingest) relookupWithin(parent context.Context, msgs []store.Message, names []store.ChatUpdate) {
 	var lids []string
 	seen := map[string]bool{}
 	add := func(j string) {
@@ -113,7 +118,7 @@ func (in *ingest) relookup(msgs []store.Message, names []store.ChatUpdate) {
 	if len(lids) == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(in.cfg.Lib, in.lidLookup)
+	ctx, cancel := context.WithTimeout(parent, in.lidLookup)
 	defer cancel()
 	phones := map[string]string{}
 	for _, lid := range lids {

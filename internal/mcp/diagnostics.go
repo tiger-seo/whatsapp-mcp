@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/tiger-seo/whatsapp-mcp/internal/media/sendapi"
 )
 
 type DiagnosticEvent uint8
@@ -50,7 +52,15 @@ const (
 	DiagnosticListMessages
 	DiagnosticMessageContext
 	DiagnosticLastInteraction
+	DiagnosticSendMessage
+	DiagnosticSendFile
+	DiagnosticSendAudio
 )
+
+// send reports a send tool.
+func (t DiagnosticTool) send() bool { return t >= DiagnosticSendMessage && t <= DiagnosticSendAudio }
+
+var diagnosticToolNames = [...]string{"unknown", "list_chats", "get_chat", "search_contacts", "get_direct_chat_by_contact", "get_contact_chats", "list_messages", "get_message_context", "get_last_interaction", "send_message", "send_file", "send_audio_message"}
 
 const (
 	DiagnosticCategoryUnknown DiagnosticCategory = iota
@@ -88,10 +98,13 @@ const (
 	DiagnosticConnectTimeout
 	DiagnosticRegistrationDecodeFailed
 	DiagnosticRegistrationEncodeFailed
+	DiagnosticSendRecordMissing
+	DiagnosticSendAttempt
+	DiagnosticSendSweepFailed
 	diagnosticEventCount
 )
 
-var diagnosticNames = [...]string{"warning", "history_incomplete", "receive_overload", "denied", "failed", "terminal_fault", "human_failure", "diagnostic_delivery_failed", "ingest_failed", "messages_dropped", "quiet_stop_failed", "owner_drain_failed", "run_guard_recovery_required", "run_guard_clear_failed", "revocation_cleanup_failed", "repair_incomplete", "repair_begin_failed", "repair_clear_rejected", "repair_replay_failed", "lid_merge_failed", "version_refresh_failed", "reconnect_denied", "connect_timeout", "registration_decode_failed", "registration_encode_failed"}
+var diagnosticNames = [...]string{"warning", "history_incomplete", "receive_overload", "denied", "failed", "terminal_fault", "human_failure", "diagnostic_delivery_failed", "ingest_failed", "messages_dropped", "quiet_stop_failed", "owner_drain_failed", "run_guard_recovery_required", "run_guard_clear_failed", "revocation_cleanup_failed", "repair_incomplete", "repair_begin_failed", "repair_clear_rejected", "repair_replay_failed", "lid_merge_failed", "version_refresh_failed", "reconnect_denied", "connect_timeout", "registration_decode_failed", "registration_encode_failed", "send_record_missing", "send_attempt", "send_sweep_failed"}
 
 type diagnosticRecord struct {
 	data     []byte
@@ -203,7 +216,12 @@ func (d *Diagnostics) report(event DiagnosticEvent, metadata string) bool {
 	if event == DiagnosticHistoryIncomplete || event == DiagnosticReceiveOverload || event == DiagnosticMessagesDropped || event == DiagnosticIngestFailed {
 		metadata += " messages_may_be_missing=true"
 	}
-	record := diagnosticRecord{event: event, deadline: now.Add(5 * time.Second), data: []byte(fmt.Sprintf("time=%s event=%s outcome=%s%s\n", now.Format(time.RFC3339Nano), diagnosticNames[event], outcome, metadata))}
+	return d.enqueue(event, now, fmt.Sprintf("time=%s event=%s outcome=%s%s\n", now.Format(time.RFC3339Nano), diagnosticNames[event], outcome, metadata))
+}
+
+// enqueue queues one mandatory record.
+func (d *Diagnostics) enqueue(event DiagnosticEvent, now time.Time, line string) bool {
+	record := diagnosticRecord{event: event, deadline: now.Add(5 * time.Second), data: []byte(line)}
 	d.mu.Lock()
 	cell := &d.cells[event]
 	cell.count++
@@ -225,15 +243,50 @@ func (d *Diagnostics) ReportAudit(event DiagnosticEvent, tool DiagnosticTool, ca
 	if event != DiagnosticDenied && event != DiagnosticFailed {
 		event = DiagnosticFailed
 	}
-	tools := [...]string{"unknown", "list_chats", "get_chat", "search_contacts", "get_direct_chat_by_contact", "get_contact_chats", "list_messages", "get_message_context", "get_last_interaction"}
 	categories := [...]string{"unknown", "invalid_input", "not_found", "busy", "unavailable", "resource_limit", "internal"}
-	if int(tool) >= len(tools) {
+	if int(tool) >= len(diagnosticToolNames) {
 		tool = DiagnosticToolUnknown
 	}
 	if int(category) >= len(categories) {
 		category = DiagnosticCategoryUnknown
 	}
-	return d.report(event, " tool="+tools[tool]+" category="+categories[category])
+	return d.report(event, " tool="+diagnosticToolNames[tool]+" category="+categories[category])
+}
+
+// sendSucceeded is the reason of a send attempt that ended in success.
+const sendSucceeded = "ok"
+
+// ReportSend records one send attempt: the tool, the recipient's address kind, whether the message went out, the
+// result code, the media type and how long the call took. Every value comes from a fixed list; no address, text,
+// caption, path or file content can reach the record.
+func (d *Diagnostics) ReportSend(tool DiagnosticTool, kind sendapi.RecipientKind, reason, mediaType string, took time.Duration) bool {
+	if !tool.send() {
+		tool = DiagnosticToolUnknown
+	}
+	switch kind {
+	case sendapi.KindPhone, sendapi.KindLID, sendapi.KindGroup, sendapi.KindSelf:
+	default:
+		kind = sendapi.KindUnknown
+	}
+	outcome := "not_sent"
+	switch {
+	case reason == sendSucceeded || reason == string(sendapi.CodeSentCancelled):
+		outcome = "sent"
+	case reason == string(sendapi.CodeOutcomeUnknown):
+		outcome = "unknown"
+	case !slices.Contains(sendapi.Codes(), sendapi.Code(reason)):
+		reason, outcome = "unknown", "unknown"
+	}
+	switch mediaType {
+	case "image", "video", "audio", "document":
+	default:
+		mediaType = "none"
+	}
+	now := time.Now().UTC()
+	return d.enqueue(DiagnosticSendAttempt, now, fmt.Sprintf(
+		"time=%s level=INFO event=%s tool=%s recipient_kind=%s outcome=%s reason=%s media_type=%s duration_ms=%d\n",
+		now.Format(time.RFC3339Nano), diagnosticNames[DiagnosticSendAttempt], diagnosticToolNames[tool], kind, outcome,
+		reason, mediaType, max(0, took.Milliseconds())))
 }
 
 // GuardDenied admits only fixed guard categories and never waits for the sink.
@@ -255,6 +308,14 @@ func (d *Diagnostics) GuardDeniedForTool(denial GuardDenial, tool DiagnosticTool
 		event, category = DiagnosticFailed, DiagnosticInternal
 	default:
 		event = DiagnosticFailed
+	}
+	// A send the guard refused is a send attempt too, with its own record.
+	if tool.send() && (denial == GuardBusy || denial == GuardInvalidParams) {
+		reason := sendapi.CodeBusy
+		if denial == GuardInvalidParams {
+			reason = sendapi.CodeInvalidInput
+		}
+		return d.ReportSend(tool, sendapi.KindUnknown, string(reason), "", 0)
 	}
 	return d.ReportAudit(event, tool, category)
 }
@@ -323,6 +384,29 @@ func (d *Diagnostics) ReportNewerSchema(device bool, observed, supported int) bo
 	}
 	hint := fmt.Sprintf("%s %d is newer than this binary supports (%d); use a newer whatsapp-mcp", schema, observed, supported)
 	return d.report(DiagnosticHumanFailure, " reason=schema_too_new hint="+strconv.Quote(hint))
+}
+
+// sendSettingHints are the fixed explanations of a refused send setting. No configured value is ever repeated.
+var sendSettingHints = map[string]string{
+	"send_allowed_dirs":       "send_allowed_dirs entries must be absolute existing local directories, outside the data directory unless in the default outbox, which must be private; junctions are refused",
+	"send_allowed_recipients": `send_allowed_recipients lists phone numbers, phone JIDs, LIDs or group JIDs, or is "*" alone`,
+	"ffmpeg":                  "ffmpeg must be the absolute path of an existing executable file",
+}
+
+// SendSetting reports whether name is a setting that ReportSendSetting can name.
+func SendSetting(name string) bool { _, ok := sendSettingHints[name]; return ok }
+
+// ReportSendSetting names a refused send setting and, when known, its line in config.toml.
+func (d *Diagnostics) ReportSendSetting(name string, line int) bool {
+	hint, ok := sendSettingHints[name]
+	if !ok {
+		return d.ReportHuman(HumanUsageFailure, 0)
+	}
+	meta := " reason=invalid_configuration setting=" + name
+	if line > 0 {
+		meta += " line=" + strconv.Itoa(line)
+	}
+	return d.report(DiagnosticHumanFailure, meta+" hint="+strconv.Quote("invalid configuration: "+hint))
 }
 
 // ReportPrivateDirectory accepts only operator-local path information and a

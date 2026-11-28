@@ -30,6 +30,11 @@ type Setting struct {
 	Usage string
 	// Secret keeps the value out of logs and output.
 	Secret bool
+	// Redacted keeps the value out of error messages and shows only Text's summary in the debug dump.
+	Redacted bool
+	// DefaultFrom, when set, builds the default from the settings resolved before this one, instead of parsing
+	// the text Default returns, which is then only shown in help.
+	DefaultFrom func(*Config) any
 	// ParseText parses and validates a flag, environment or default value.
 	ParseText func(string) (any, error)
 	// ParseTOML checks the TOML type of a config.toml value, then validates it as ParseText does.
@@ -73,6 +78,9 @@ var registry = func() []Setting {
 			Apply:     func(c *Config, v any) { c.LogLevel = v.(slog.Level) },
 			Text:      func(c *Config) string { return strings.ToLower(c.LogLevel.String()) },
 		},
+		sendAllowedDirsSetting(),
+		sendAllowedRecipientsSetting(),
+		ffmpegSetting(),
 	}
 }
 

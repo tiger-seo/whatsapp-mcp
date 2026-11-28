@@ -3,9 +3,12 @@ package mcp
 import (
 	"context"
 	"errors"
+	"sync"
+	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/tiger-seo/whatsapp-mcp/internal/buildinfo"
+	"github.com/tiger-seo/whatsapp-mcp/internal/media/sendapi"
 )
 
 // Server constructs SDK sessions without granting account authority.
@@ -13,6 +16,25 @@ type Server struct {
 	sdk         *sdk.Server
 	diagnostics *Diagnostics
 	latch       *SDKErrorLatch
+	// clock times the guards' tool deadlines. RegisterSendTools replaces it with the send service's.
+	clock sendapi.Clock
+	// sends records that the send tools are registered.
+	sends bool
+
+	// mu is held for writing while a session connects, so a handler finds its guard once it can run at all.
+	mu     sync.RWMutex
+	guards map[*sdk.ServerSession]*guardedConnection
+}
+
+// admission returns when the session's tool call in flight was admitted, from the guard's own state.
+func (s *Server) admission(session *sdk.ServerSession) (time.Time, bool) {
+	s.mu.RLock()
+	guard := s.guards[session]
+	s.mu.RUnlock()
+	if guard == nil {
+		return time.Time{}, false
+	}
+	return guard.admission()
 }
 
 // NewServer constructs the SDK server without registering any tools.
@@ -33,6 +55,9 @@ func NewServer(latch *SDKErrorLatch, diagnostics *Diagnostics) *Server {
 			toolResult, isResult := result.(*sdk.CallToolResult)
 			if method != "tools/call" || err != nil || !isCall || call.Params == nil || !isResult || toolResult == nil || !toolResult.IsError {
 				return result, err // Protocol errors are audited by the connection guard.
+			}
+			if diagnosticToolIdentity(call.Params.Name).send() {
+				return result, nil // A send handler records its attempt itself.
 			}
 			event, category := DiagnosticFailed, DiagnosticInternal
 			if root, ok := toolResult.StructuredContent.(ErrorResult); ok {
@@ -55,7 +80,7 @@ func NewServer(latch *SDKErrorLatch, diagnostics *Diagnostics) *Server {
 			return result, nil
 		}
 	})
-	return &Server{sdk: s, diagnostics: diagnostics, latch: latch}
+	return &Server{sdk: s, diagnostics: diagnostics, latch: latch, clock: sendapi.SystemClock{}, guards: map[*sdk.ServerSession]*guardedConnection{}}
 }
 
 func (s *Server) addReadTool(tool sdk.Tool, handler sdk.ToolHandler) {
@@ -95,6 +120,7 @@ var errDiagnosticDelivery = errors.New("diagnostic delivery failed")
 var errTransportSession = errors.New("MCP transport failed")
 
 type ServerSession struct {
+	server      *Server
 	sdk         *sdk.ServerSession
 	guard       *guardedConnection
 	latch       *SDKErrorLatch
@@ -104,10 +130,15 @@ type ServerSession struct {
 
 func (s *Server) Connect(ctx context.Context, transport sdk.Transport) (*ServerSession, error) {
 	var guard *guardedConnection
+	s.mu.Lock()
 	ss, err := s.sdk.Connect(ctx, guardedTransport{
-		inner: transport, reporter: s.diagnostics,
+		inner: transport, reporter: s.diagnostics, clock: s.clock, sends: s.sends,
 		attach: func(g *guardedConnection) { guard = g },
 	}, nil)
+	if err == nil {
+		s.guards[ss] = guard
+	}
+	s.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +153,7 @@ func (s *Server) Connect(ctx context.Context, transport sdk.Transport) (*ServerS
 		case <-guard.done:
 		}
 	}()
-	return &ServerSession{sdk: ss, guard: guard, latch: s.latch, diagnostics: s.diagnostics, watch: watch}, nil
+	return &ServerSession{server: s, sdk: ss, guard: guard, latch: s.latch, diagnostics: s.diagnostics, watch: watch}, nil
 }
 
 func (s *ServerSession) InitializeParams() *sdk.InitializeParams { return s.sdk.InitializeParams() }
@@ -141,6 +172,9 @@ func (s *ServerSession) Wait() error {
 	// our own stop. The guard owns the stop cause, before that race occurs.
 	_ = s.sdk.Wait()
 	<-s.watch
+	s.server.mu.Lock()
+	delete(s.server.guards, s.sdk)
+	s.server.mu.Unlock()
 	// Only the SDK's completed join makes it safe to forget unwritten credits.
 	s.guard.mu.Lock()
 	clear(s.guard.active)

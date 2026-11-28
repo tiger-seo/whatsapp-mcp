@@ -75,3 +75,118 @@ The review confirmed every round-1 to round-3 fix against the code and the pinne
 | T014 does not repeat R10's conditions | T014 follows R10: resolve, check by identity, open and create only when `send_allowed_recipients` is not empty, after the lock and before `attachOwner`. The sending off/on and `status` cases go in `cmd/whatsapp-mcp/send_wiring_test.go`. |
 | The `sent_cancelled` result shape is not defined | T013 defines it within the contract's error shape (`chat_jid`, `id`, `timestamp`, `local_record`) and names the code for a cancel before the hand-over. |
 | Observations | A missing guard state makes the handler refuse, never fall back to "now" (T012). `OPERATIONS.md` tells operators to check `list_messages` before retrying a cancelled send (T037). |
+
+## Implementation Evidence (2026-11-27 UTC)
+
+All runs are on branch `008-send-messages`, the uncommitted working tree on top of `eed038c`, with `CGO_ENABLED=0`.
+Windows is Windows 10 amd64 with Go 1.27.4; WSL2 is Ubuntu amd64 under WSL2 with Go 1.27.4, not native Linux. All
+data is synthetic; accounts are the fake send port or `internal/wasim`. No real account was used. Exit codes were
+read from the command itself.
+
+### Gates (T036, T035): **not passed** - the full test run failed
+
+| Time | Command | Result |
+| --- | --- | --- |
+| 14:48 | `gofmt -l .` | printed nothing; exit 0 |
+| 14:48 | `go vet ./...` (Windows, and with `GOOS`/`GOARCH` for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64) | exit 0 each |
+| 14:48 | `go mod verify` | "all modules verified"; exit 0 |
+| 14:48 | the five `go build` targets of `AGENTS.md` | exit 0 each |
+| 14:48 | `go vet`, `go build`, `go test` of `./internal/wa/testdata/cmd/session-check` | exit 0 each |
+| 14:48 | `go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...` | "No vulnerabilities found."; exit 0 |
+| 14:48 | `go.mod`, `go.sum` diff; `w/crlf` count in `git ls-files --eol` | no change; 0 |
+| 14:50-14:57 | `go test ./... -count=1 -timeout 30m` (Windows) | **exit 1**. `store` and `mcp` failed; `cmd/whatsapp-mcp`, `buildinfo`, `config`, `lock`, `media`, `private`, `wa`, `walog`, `wasim` passed |
+| 14:57-14:58 | `go test ./internal/wa -run TestSimulatorStopDuringEachSendStep -count=20 -v` | exit 0; 200 passed (9 held steps and their parent, 20 times), 0 failed, 0 skipped |
+
+The failures of the full run are four cases of two feature 007 timed searches over 400,000 messages, each stopped
+by the 5-second store deadline: `TestToolMessageSearchScale/{sparse_needle,not-present}` in `internal/store` and
+`TestMCPMessageAcceptanceScale/{sparse_needle,not-present}` in `internal/mcp`. Observations, not a diagnosis:
+
+- Both tests passed in the 14:31-14:39 run below, whose only failure was another test. The store code did not change
+  between the two runs.
+- This feature changes no search query, schema or index.
+- The cause is **not established**. Load from packages running in parallel is a guess, and no comparison with the
+  base commit was made. A first rerun of the two tests alone, bundled with a machine-load check, was refused by the
+  session's permission check.
+
+Later reruns, on the same code, after the owner asked to try again:
+
+| Time | Command | Result |
+| --- | --- | --- |
+| 15:31-15:32 | `go test -p 1 ./internal/store ./internal/mcp -run '^(TestToolMessageSearchScale\|TestMCPMessageAcceptanceScale)$' -count=1 -timeout 9m -v` | exit 0; both tests passed. `sparse_needle` and `not-present` took 2.18 s and 1.96 s in `store`, 2.82 s and 2.56 s in `mcp`, against the 5 s deadline |
+| 15:32 | `go test ./... -count=1 -timeout 30m` | **not completed**: Claude Code stopped it because the system was critically low on memory. Its partial output holds only `link.exe: exit status 1` build failures (`private`, `media`, `cmd/whatsapp-mcp`, `config`) and no test result; low memory is the likely reason, not confirmed |
+
+The passing run of the two tests alone shows that they hold when run by themselves. It does not replace a passing
+full run.
+
+T035 and T036 stay open until a full run passes. Native Linux and macOS runs and the CI run link: **not verified**
+(nothing has been pushed).
+
+### Foundation and User Story 1 (T018)
+
+| Time | Command | Result |
+| --- | --- | --- |
+| 14:23 | `go test ./internal/media ./internal/mcp ./internal/wa ./internal/config ./internal/store -run 'Send\|Recipient\|Policy\|Limit\|LIDsForPhone' -count=1 -v` (Windows) | exit 0; 269 passed, 0 failed, 4 skipped |
+| 14:31-14:39 | `go test ./internal/media/... ./internal/mcp ./internal/wa ./internal/config ./internal/store ./internal/wasim -count=1 -timeout 30m` | exit 1: `TestAbuseSDKRedactionAndRecovery` (feature 006) failed, because a session without send tools recorded the unknown name `send_message` as a send tool. All other packages passed |
+| ~14:42 | after the fix (send handling only once the send tools are registered): `go test ./internal/mcp -count=1` | exit 0 (177.6 s) |
+
+Repetitions during development, all exit 0 at the last run: `TestSendOwner*` `-count=200`; the MCP send, guard and
+audit tests `-count=100`. Two test races found by repetition were fixed in the tests (an owner event sent before the
+startup attempt; a client call sent before the guard released the tool credit).
+
+The simulator runs cover a lookup, a text, an image upload and send with a caption, a group send, each local record,
+and a stop held at `lookup`, `devices`, `prekeys`, `groupinfo`, `upload` and `ack`, also for a group send. Every
+stop ended the call before `barrier_retired` and passed the quiet-stop check. **No quiet-stop allow-list change was
+needed**, including for the group steps that feasibility did not cover.
+
+### User Story 2, files (T024) - Windows and WSL2 only
+
+| Time | Platform and command | Result |
+| --- | --- | --- |
+| 14:58 | Windows: `go test ./internal/media ./internal/mcp ./internal/config -run '^(TestSendPath\|TestSendFile\|TestSendDirs)' -count=1 -v` | exit 0; 49 passed, 0 failed, 4 skipped (`media` 2, `config` 2, `mcp` 0) |
+| 14:59-15:01 | WSL2: `go test -p 1 ./internal/media/... ./internal/mcp ./internal/wa ./internal/wasim ./internal/config ./cmd/whatsapp-mcp -run 'Send\|Ogg\|SyntacticPath\|Recipient\|Policy\|Limit\|HTTP\|RealFFmpeg' -count=1 -v` | exit 0; 349 passed, 0 failed, 3 skipped (real ffmpeg: not installed; device node: needs root; case alias: case-sensitive volume) |
+| ~14:44 | WSL2 as root: the `internal/media` test binary, `-test.run SendPath` | all path cases passed, including the device node. (The same invocation also selected the converter tests, which failed because `go` is not on root's `PATH` to build the stand-in; they passed in the user run) |
+
+Windows skips: both symbolic-link tests (creating a link needs a privilege this account lacks) and, in `config`, the
+unprivate and linked outbox cases. Symbolic-link controls are therefore **not verified on Windows**; junctions,
+junction swap, alternate data streams, UNC, `\\?\`, `\\.\`, reserved names and hard links passed. 8.3 names are off on
+the volume (not verified). A trailing dot or space opens the same file inside the outbox. On Windows an allowed
+directory **cannot be renamed or deleted** while its root is open; on WSL2 it can, and opens keep using the old
+directory. The case-alias identity check ran on Windows (case-insensitive NTFS) and passed; the macOS run that T003
+asks for is **not verified**.
+
+CI on Linux, Windows and macOS: **not run**. T024 stays open.
+
+### User Story 3, voice notes (T031)
+
+| Time | Command | Result |
+| --- | --- | --- |
+| 14:58 | Windows: `WA_FFMPEG_TESTS=1 go test ./internal/media ./internal/mcp -run '^(TestOgg\|TestSendConvert\|TestSendAudio\|TestRealFFmpeg\|FuzzOggOpusDuration)' -count=1 -v` | exit 0; 64 passed, 0 failed, 0 skipped. ffmpeg 9.1 full build (gyan.dev, scoop, whose shim is a launcher): mp3, wav, m4a, aac, flac, opus, vorbis, amr converted to 12 s within 1 s; disguised HLS and concat files refused |
+| during development | `go test ./internal/media -run '^$' -fuzz FuzzOggOpusDuration -fuzztime 45s` | exit 0; 188,793 executions |
+| during development | `go test ./internal/media -run '^$' -fuzz FuzzSyntacticPath -fuzztime 30s` | exit 0; 175,661 executions |
+
+WSL2 has no ffmpeg, so the real converter is **not verified** there; the stand-in tests passed. The real ffmpeg on
+native Linux and macOS and the Chocolatey launcher: **not verified** until the new CI job runs.
+
+### Decisions and deviations for the code review
+
+| Item | What was done |
+| --- | --- |
+| 64 KiB session limit against 65,536-byte text | Found during implementation. Owner decision 2026-11-27: 512 KiB for send calls only. Recorded in `plan.md` and `contracts/tools.md`, which makes the design `PASS` at `129e4ae` **stale** |
+| Import cycle (`wa` test imports `mcp`, `mcp` would import `media`, which imports `wa`) | The send types are in a leaf package, `internal/media/sendapi` |
+| Cancel and budget before the hand-over | Codes `cancelled` and `timeout` (the design review left the names to implementation) |
+| Phone forms | The tools contract is followed: digits, optional `+`, spaces and dashes. The read tools also accept dots and parentheses, which FR-002's "as for the read tools" could be read to require |
+| Failures the contract has no code for | An unreadable local LID map or chat is `lookup_failed`; a private working file that cannot be written is `upload_failed` |
+| Known failures before the write | Matched by the pinned library's error values and message starts; a pin change must recheck them. A cancellation or deadline inside such a step stays `outcome_unknown` |
+| Lookup skip | A phone whose stored chat is under its mapped LID counts as having a stored chat |
+| Late low finding of the `129e4ae` review | For send tools the guard writes a success reply to a cancelled request and ignores a cancel that arrives during the write |
+
+### Not done
+
+| Task | State |
+| --- | --- |
+| T024 | CI part not run |
+| T035, T036 | full test run failed (above); no CI link |
+| T037 | documentation written; the `docs/roadmap.md` "Done" line waits for the merge |
+| T038 | real account: **not verified**; needs the owner's permission for each step, including the client time-limit measurement |
+| T039 | not committed; code review not run |
+

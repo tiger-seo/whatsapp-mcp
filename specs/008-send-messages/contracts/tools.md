@@ -19,6 +19,13 @@ Annotations: `readOnlyHint: false`, `destructiveHint: false`, `idempotentHint: f
 | `send_file` | `caption` | no (default `""`) | 0–65,536 bytes of valid UTF-8. A non-empty caption on a voice note (`.ogg`) is refused. |
 | `send_audio_message` | `media_path` | yes | As for `send_file`. The extension must be one of `ogg`, `opus`, `mp3`, `wav`, `m4a`, `aac`, `flac`, `amr`. |
 
+## Input size
+
+The 006 session limit of 64 KiB for an input frame and for request parameters would refuse a message or caption near
+65,536 bytes, which JSON escaping can make up to six times longer. By the owner's decision of 2026-11-27 (found
+during implementation), a call of one of the three send tools may use an input frame and parameters of up to
+512 KiB. Every other frame and request keeps 64 KiB. Depth, token and admission limits are unchanged.
+
 ## Message type (`send_file`, case-insensitive extension)
 
 | Extension | Sent as | MIME |

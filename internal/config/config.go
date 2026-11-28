@@ -50,6 +50,13 @@ type Origin struct {
 type Config struct {
 	DataDir  string
 	LogLevel slog.Level
+	// SendAllowedDirs are the directories files may be sent from, as configured; OpenSendDirs resolves them.
+	SendAllowedDirs []string
+	// SendAllowedRecipients are the normalized addresses that may be sent to, or "*" alone. Empty means that
+	// sending is off.
+	SendAllowedRecipients []string
+	// FFmpeg is the configured converter; empty means the one found on PATH when it is needed.
+	FFmpeg string
 
 	origins map[string]Origin
 }
@@ -155,6 +162,11 @@ func resolve(s Setting, in Inputs, env *environment, f *file, cfg *Config) error
 			cfg.origins[s.Name] = f.origin(s.FileKey)
 			return nil
 		}
+	}
+	if s.DefaultFrom != nil {
+		s.Apply(cfg, s.DefaultFrom(cfg))
+		cfg.origins[s.Name] = Origin{Source: Default, Detail: "default"}
+		return nil
 	}
 	def, err := s.Default(in)
 	if err != nil {

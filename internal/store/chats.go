@@ -125,6 +125,22 @@ func touchChat(ctx context.Context, tx *sql.Tx, jid string, t int64) error {
 	return err
 }
 
+// ChatExists reports whether a chat is stored, whether or not it has a name. It only reads.
+func (s *Store) ChatExists(ctx context.Context, jid string) (bool, error) {
+	parsed, err := parseChatJID("chat_jid", jid)
+	if err != nil {
+		return false, s.report(newOpID(), err)
+	}
+	var exists bool
+	err = s.snapshot(ctx, "ChatExists", func(ctx context.Context, q querier) error {
+		return q.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM chats WHERE jid = ?)", parsed.String()).Scan(&exists)
+	})
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
 // ChatName returns a chat's stored name with its quality and observation time, so a caller can tell a better offer
 // from a worse one without writing. ok is false when the chat is missing or has no name. It only reads.
 func (s *Store) ChatName(ctx context.Context, jid string) (name string, quality NameQuality, at time.Time, ok bool, err error) {

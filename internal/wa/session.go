@@ -165,7 +165,7 @@ func OpenSession(cfg SessionConfig) (*Session, error) {
 	if cfg.MediaHTTP != nil {
 		mediaBase = cfg.MediaHTTP.Transport
 	}
-	s.mediaClient = newBoundedHTTPClient(10*time.Second, 16<<20, s.fence.RoundTripper(mediaBase))
+	s.mediaClient = newMediaHTTPClient(s.fence.RoundTripper(mediaBase))
 	client.SetMediaHTTPClient(s.mediaClient)
 	client.SetPreLoginHTTPClient(s.fence.HTTPClient(cfg.PreLoginHTTP))
 	client.SetWebsocketHTTPClient(s.fence.HTTPClient(cfg.WebsocketHTTP))

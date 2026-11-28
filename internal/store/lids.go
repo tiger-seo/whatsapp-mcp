@@ -35,6 +35,40 @@ func (s *Store) PhoneForLID(ctx context.Context, lidJID string) (phoneJID string
 	return pn.String + "@" + serverUser, true, nil
 }
 
+// LIDsForPhone returns the LID JIDs that the LID map holds for phoneJID. A device part of phoneJID is ignored. An
+// empty result means no mapping. It only reads; ctx bounds it.
+func (s *Store) LIDsForPhone(ctx context.Context, phoneJID string) ([]string, error) {
+	pn, err := parseJID("phone_jid", phoneJID, []string{serverUser}, true)
+	if err != nil {
+		return nil, s.report(newOpID(), err)
+	}
+	var out []string
+	err = s.snapshot(ctx, "LIDsForPhone", func(ctx context.Context, q querier) error {
+		rows, err := q.QueryContext(ctx,
+			`SELECT CASE WHEN length(lid) <= ? THEN lid END FROM whatsmeow_lid_map WHERE pn = ? ORDER BY lid LIMIT ?`,
+			maxJIDBytes-len("@"+serverLID), pn.User, maxListSize)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var lid sql.NullString
+			if err := rows.Scan(&lid); err != nil {
+				return err
+			}
+			if !lid.Valid {
+				return limitErr("result bytes")
+			}
+			out = append(out, lid.String+"@"+serverLID)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MappedLIDsWithData returns up to limit (1 to 200) mappings whose LID is greater than afterLID, in key order, and
 // that have a chat or a message sender stored under the LID. afterLID is a LID JID, or "" to start at the
 // beginning; the last LIDJID of one page is the cursor of the next.
