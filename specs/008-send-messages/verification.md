@@ -20,6 +20,7 @@
 | design | 2026-11-28 | 25c6bb8 | PASS | |
 | code | 2026-11-28 | 862034b | CONCERNS | |
 | code | 2026-11-28 | 3c0c122 | CONCERNS | |
+| code | 2026-11-28 | 8d1a168 | CONCERNS | |
 
 ## Design review of `3254097` (BLOCK): handling
 
@@ -300,10 +301,30 @@ Windows/amd64, Go 1.27.4, `CGO_ENABLED=0`; no real account was used.
 
 Native Linux and macOS CI have not run on these changes. The earlier code verdict does not cover this patch.
 
+### Code Re-review of `8d1a168` (2026-11-28 UTC)
+
+The reviewer independently ran checks on Windows/amd64 with `CGO_ENABLED=0`. The reviewer found no defect
+in the follow-up: the outbox alias now requires a private outbox, temporary directories are created private,
+and the revised owner and simulator tests synchronize on events.
+
+| Command or check | Result |
+| --- | --- |
+| `gofmt -l .`, `go vet ./...`, `go mod verify`, and all five CLI cross-builds | Exit 0 each; no formatting issues |
+| `go test ./internal/config ./internal/private ./internal/media -count=1` | Exit 0; three packages passed |
+| Owner and simulator stop tests (`-count=5`) | Exit 0 |
+| `go test ./... -count=1 -timeout 30m -json` | Exit 1; 2,469 passed, 3 failed including the parent test, and 37 skipped; 10 packages passed, `internal/mcp` failed, and one had no tests |
+| `TestMCPMessageAcceptanceScale` run alone | Exit 0; the two search cases took 3.09 s and 2.89 s |
+| `gh run list` | The latest branch run was [46091450701](https://github.com/tiger-seo/whatsapp-mcp/actions/runs/46091450701) at `25c6bb8`; no native CI on the follow-up |
+
+In the full run, `sparse_needle` and `not-present` hit the five-second search deadline (5.002 s and 5.005 s).
+The search implementation was not changed; isolated success does not establish the cause or rule out a
+regression in full-suite behavior. A comparable full-suite run on `main` is still missing. No owner
+decision has been recorded, and native Linux and macOS verification of the follow-up remains open before merge.
+
 ### Not done
 
 | Task | State |
 | --- | --- |
 | T037 | documentation written; the `docs/roadmap.md` "Done" line waits for the merge |
 | T038 | real account: **not verified**; needs the owner's permission for each step, including the client time-limit measurement |
-| T039 | Implementation and evidence committed; code re-review returned `CONCERNS` at `3c0c122`. The PR gate remains uncleared. |
+| T039 | Implementation and evidence committed; code re-review returned `CONCERNS` at `8d1a168`. The PR gate remains uncleared. |
