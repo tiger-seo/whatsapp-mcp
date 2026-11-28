@@ -23,3 +23,11 @@ therefore acknowledged, counted and lost.
 2. Request only for chats or senders the owner has allow-listed.
 
 Either is an account action on another account's trigger, so it needs the owner's send-approval policy first.
+
+## Review 2026-11-27
+
+The send-approval trigger fired: the owner decided F01 for sending (the `send_allowed_recipients` allow-list,
+feature 008). That decision covers messages an MCP client asks to send. It does not cover a request to the phone
+that another account's placeholder triggers, so this stays deferred until the owner decides it. Option 2 now has an
+allow-list it could reuse, if the owner wants the same list to govern it.
+
